@@ -1,0 +1,21 @@
+# Chrome Web Store package
+nimbus-store-package/
+nimbus-extension.zip
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Debug/test files (optional - you can remove these if you want them in repo)
+# DEBUG_STEPS.md
+# FIXES_APPLIED.md
+# QUICK_FIX.md
+# TESTING.md
+
+# Node modules (if you add any)
+node_modules/
+
+# Logs
+*.log
+

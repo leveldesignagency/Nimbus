@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "Nimbus",
+  "short_name": "Nimbus",
+  "description": "Select any word to get a real-world, plain-English explanation with synonyms.",
+  "version": "1.0.0",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["https://api.openai.com/*", "https://api.dictionaryapi.dev/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["contentScript.js"],
+      "css": ["tooltip.css"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "assets/icon16.png",
+      "48": "assets/icon48.png",
+      "128": "assets/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["Nimbus Favicon.png"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
+

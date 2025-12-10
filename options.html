@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Nimbus — Settings</title>
+  <style>
+    body { font-family: Inter, system-ui, -apple-system, Roboto, Arial; padding: 18px; color:#0d1b2a; max-width: 600px; margin: 0 auto; }
+    h2 { color: #1e3a8a; margin-bottom: 20px; }
+    label { display:block; margin-top:12px; font-weight:600; }
+    input[type="text"], textarea, select, input[type="number"] { width:100%; padding:8px; border:1px solid #ddd; border-radius:6px; font-size:14px; box-sizing: border-box; }
+    button { margin-top:12px; padding:8px 12px; border-radius:6px; background:#1e3a8a; color:white; border:none; cursor:pointer; font-size:14px; }
+    button:hover { background:#1e40af; }
+    .hint { font-size:12px; color:#666; margin-top:6px; }
+    #status { margin-top:8px; padding: 8px; background: #f3f4f6; border-radius: 6px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h2>Nimbus — Settings</h2>
+
+  <label>OpenAI API Key (Optional)</label>
+  <input id="apiKey" type="text" placeholder="sk-..." />
+  <div class="hint">We store the key locally in your browser. If not provided, we'll use a free dictionary API.</div>
+  
+  <label style="margin-top: 16px;">
+    <input type="checkbox" id="useFreeAPI" style="width: auto; margin-right: 8px;" />
+    Use free dictionary API (works without OpenAI key)
+  </label>
+
+  <label>Explanation Style</label>
+  <select id="style">
+    <option value="plain">Plain (everyday)</option>
+    <option value="technical">Technical (developer)</option>
+    <option value="kid">Explain like I'm 12</option>
+  </select>
+
+  <div>
+    <button id="save">Save Settings</button>
+  </div>
+  
+  <div id="status" style="margin-top:12px;"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>
+
