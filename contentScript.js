@@ -153,6 +153,13 @@
         return;
       }
 
+      // Limit to maximum 2 words - split and check word count
+      const words = selectedText.split(/\s+/).filter(w => w.trim().length > 0);
+      if (words.length > 2) {
+        // More than 2 words selected - don't show tooltip
+        return;
+      }
+
       // Check if selection is inside an input, textarea, or search field
       try {
         if (selection.rangeCount > 0) {
@@ -248,8 +255,7 @@
         console.warn('CursorIQ: Error getting range/context', e);
       }
 
-      // Extract first word or phrase (up to 3 words)
-      const words = selectedText.split(/\s+/).slice(0, 3);
+      // Extract first word or phrase (up to 2 words max)
       const term = words.join(' ');
 
       console.log('CursorIQ: Selection detected:', term);
