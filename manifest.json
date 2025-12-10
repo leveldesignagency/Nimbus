@@ -37,6 +37,7 @@
       "resources": ["Nimbus Favicon.png"],
       "matches": ["<all_urls>"]
     }
-  ]
+  ],
+  "privacy_policy": "https://leveldesignagency.github.io/Nimbus/"
 }
 
