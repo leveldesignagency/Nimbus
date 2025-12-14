@@ -67,13 +67,62 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return false;
 });
 
+// Smart routing: Determine if term should use AI or dictionary
+function shouldUseAI(term, context, dictionaryResult) {
+  // Use AI if:
+  // 1. Dictionary failed or returned poor result
+  if (!dictionaryResult || dictionaryResult.error || !dictionaryResult.explanation) {
+    return true;
+  }
+  
+  // 2. Term is complex (hyphenated, compound, technical)
+  const isComplex = term.includes('-') || 
+                   term.length > 15 || 
+                   /[A-Z]{2,}/.test(term) || // Acronyms
+                   /^(anti|auto|bio|cardio|derm|endo|gastro|hemo|neuro|osteo|patho|psycho|pulmo|thrombo)/i.test(term) ||
+                   /(itis|osis|emia|oma|pathy|scopy|tomy|ectomy|plasty)$/i.test(term);
+  
+  // 3. Context is complex (multiple meanings possible)
+  const hasComplexContext = context && (
+    context.toLowerCase().includes(term.toLowerCase() + ' ') || // Word appears in context
+    context.split(/\s+/).length > 10 // Long context
+  );
+  
+  // 4. Dictionary result is too generic or short
+  const isGeneric = dictionaryResult.explanation && (
+    dictionaryResult.explanation.length < 50 ||
+    dictionaryResult.explanation.toLowerCase().includes('not found') ||
+    dictionaryResult.explanation.toLowerCase().includes('no definition')
+  );
+  
+  return isComplex || (hasComplexContext && isGeneric);
+}
+
+// Check if term is a common word (should use dictionary first)
+function isCommonWord(term) {
+  const commonWords = [
+    'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i',
+    'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at',
+    'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she',
+    'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there', 'their', 'what',
+    'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me',
+    'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take',
+    'people', 'into', 'year', 'your', 'good', 'some', 'could', 'them', 'see', 'other',
+    'than', 'then', 'now', 'look', 'only', 'come', 'its', 'over', 'think', 'also',
+    'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first', 'well', 'way',
+    'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us'
+  ];
+  
+  return commonWords.includes(term.toLowerCase()) && term.length < 10;
+}
+
 async function handleExplain(term, context, detailed = false) {
   const cfg = await chrome.storage.local.get(['openaiKey','style','model','useFreeAPI','settings']);
+  // API key: Read from storage (set via extension settings or backend in production)
+  // In production, this would come from a secure backend server
   const openaiKey = (cfg.openaiKey || '').trim();
   const style = cfg.style || 'plain';
   const model = cfg.model || 'gpt-4o-mini';
-  // Default to using free API if not explicitly set to false
-  const useFreeAPI = cfg.useFreeAPI !== false;
   // Get dictionary language from settings (default to 'en')
   console.log('CursorIQ Background: Raw settings from storage:', JSON.stringify(cfg.settings));
   const dictionaryLanguage = cfg.settings?.dictionaryLanguage || 'en';
@@ -228,150 +277,127 @@ async function handleExplain(term, context, detailed = false) {
     }
   }
 
-  // Always try free API first if no valid OpenAI key OR if useFreeAPI is true
-  if (!openaiKey || useFreeAPI) {
+  // SMART ROUTING: Try dictionary first for common words, AI for complex terms
+  const isCommon = isCommonWord(term);
+  let dictionaryResult = null;
+  
+  // Try dictionary first (fast, free) for common words or if no AI key
+  if (isCommon || !openaiKey) {
     try {
-      console.log('CursorIQ Background: Using free dictionary API for:', term, 'in language:', dictionaryLanguage);
-      const result = await fetchFreeDictionary(term, dictionaryLanguage);
-      console.log('CursorIQ Background: fetchFreeDictionary returned:', result);
-      console.log('CursorIQ Background: result.synonyms:', result.synonyms);
-      console.log('CursorIQ Background: result.synonyms type:', typeof result.synonyms, 'isArray:', Array.isArray(result.synonyms));
+      console.log('Nimbus: Trying dictionary API first for:', term);
+      dictionaryResult = await fetchFreeDictionary(term, dictionaryLanguage);
       
-      // FORCE synonyms to be an array - ensure it's never undefined or null
-      if (!result.synonyms) {
-        console.warn('CursorIQ Background: result.synonyms is falsy, setting to empty array');
-        result.synonyms = [];
-      } else if (!Array.isArray(result.synonyms)) {
-        console.warn('CursorIQ Background: WARNING - result.synonyms is not an array!', result.synonyms);
-        result.synonyms = [result.synonyms];
+      // Fix synonyms array
+      if (!dictionaryResult.synonyms) {
+        dictionaryResult.synonyms = [];
+      } else if (!Array.isArray(dictionaryResult.synonyms)) {
+        dictionaryResult.synonyms = [dictionaryResult.synonyms];
       }
+      dictionaryResult.synonyms = Array.isArray(dictionaryResult.synonyms) ? dictionaryResult.synonyms : [];
       
-      // Double-check
-      result.synonyms = Array.isArray(result.synonyms) ? result.synonyms : [];
+      // If dictionary succeeded and term is common, return it
+      if (dictionaryResult && !dictionaryResult.error && dictionaryResult.explanation && isCommon) {
+        console.log('Nimbus: Dictionary result good for common word, returning');
+        return dictionaryResult;
+      }
+    } catch (err) {
+      console.log('Nimbus: Dictionary lookup failed:', err.message);
+      dictionaryResult = { error: err.message };
+    }
+  }
+  
+  // Check if we should use AI (complex term, dictionary failed, or needs enhancement)
+  const useAI = openaiKey && shouldUseAI(term, context, dictionaryResult);
+  
+  if (useAI) {
+    console.log('Nimbus: Using AI for complex term or failed dictionary');
+    try {
+      const prompt = buildPrompt(term, context, style);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
       
-      console.log('CursorIQ Background: After fix - result.synonyms:', result.synonyms);
-      console.log('CursorIQ Background: After fix - result.synonyms length:', result.synonyms.length);
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openaiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 280,
+          temperature: 0.2
+        }),
+        signal: controller.signal
+      });
       
-      // If detailed, enhance with examples ONLY if we don't already have good examples from the API
-      if (detailed && result.explanation) {
-        // Only generate examples if we don't have any, or if the existing ones are just meta-text
-        if (!result.examples || result.examples.length === 0 || 
-            result.examples.some(ex => ex.toLowerCase().includes(`the word "${term}"`) || 
-                                   ex.toLowerCase().includes('commonly used'))) {
+      clearTimeout(timeoutId);
+      
+      if (resp.ok) {
+        const json = await resp.json();
+        const text = json.choices?.[0]?.message?.content?.trim();
+        const synonyms = await extractSynonyms(term, openaiKey, model);
+        
+        const aiResult = {
+          explanation: text || 'No explanation returned.',
+          synonyms: synonyms || [],
+          pronunciation: dictionaryResult?.pronunciation || null,
+          examples: detailed ? await generateExamples(term, openaiKey, model) : []
+        };
+        
+        console.log('Nimbus: AI result successful');
+        return aiResult;
+      } else {
+        console.log('Nimbus: AI request failed, falling back to dictionary');
+      }
+    } catch (err) {
+      console.log('Nimbus: AI request error:', err.message);
+      // Fall through to dictionary result
+    }
+  }
+  
+  // Return dictionary result (or enhanced with AI if available)
+  if (dictionaryResult && !dictionaryResult.error) {
+    // Enhance dictionary result with AI examples if available and detailed
+    if (detailed && openaiKey && dictionaryResult.explanation) {
+      if (!dictionaryResult.examples || dictionaryResult.examples.length === 0) {
+        try {
           const generatedExamples = await generateExamples(term, openaiKey, model);
-          // Only use generated examples if they're better than what we have
           if (generatedExamples && generatedExamples.length > 0) {
-            // Filter out meta-text from generated examples
-            const realExamples = generatedExamples.filter(ex => 
+            dictionaryResult.examples = generatedExamples.filter(ex => 
               !ex.toLowerCase().includes(`the word "${term}"`) &&
               !ex.toLowerCase().includes('commonly used') &&
-              !ex.toLowerCase().includes('is an example') &&
-              ex.toLowerCase().includes(term.toLowerCase()) // Must actually contain the word
+              ex.toLowerCase().includes(term.toLowerCase())
             );
-            if (realExamples.length > 0) {
-              result.examples = realExamples;
-            } else if (!result.examples || result.examples.length === 0) {
-              // Fallback: use generated even if filtered, but prefer API examples
-              result.examples = generatedExamples;
-            }
           }
-        }
-        
-        // Translate examples to target language if not English
-        if (dictionaryLanguage !== 'en' && result.examples && result.examples.length > 0) {
-          console.log(`Nimbus: Translating ${result.examples.length} examples to ${dictionaryLanguage}...`);
-          const translatedExamples = [];
-          for (const example of result.examples) {
-            const translated = await translateText(example, dictionaryLanguage);
-            translatedExamples.push(translated);
-          }
-          result.examples = translatedExamples;
+        } catch (err) {
+          console.log('Nimbus: Failed to generate examples:', err.message);
         }
       }
-      console.log('CursorIQ Background: Returning result with synonyms:', result.synonyms);
-      return result;
-    } catch (err) {
-      console.error('Free dictionary error', err);
-      // Only fall back to OpenAI if we have a key
-      if (openaiKey && !useFreeAPI) {
-        // Fall through to OpenAI below
-      } else {
-        return { 
-          error: 'Free dictionary API failed. Open extension options to set OpenAI API key for better results.',
-          synonyms: []
-        };
-      }
     }
+    
+    // Translate examples if needed
+    if (dictionaryLanguage !== 'en' && dictionaryResult.examples && dictionaryResult.examples.length > 0) {
+      const translatedExamples = [];
+      for (const example of dictionaryResult.examples) {
+        const translated = await translateText(example, dictionaryLanguage);
+        translatedExamples.push(translated);
+      }
+      dictionaryResult.examples = translatedExamples;
+    }
+    
+    console.log('Nimbus: Returning dictionary result');
+    return dictionaryResult;
   }
+  
+  // Last resort: return error
+  return {
+    error: openaiKey 
+      ? 'Unable to find definition. Please try again.' 
+      : 'Free dictionary API failed. AI enhancement requires API key.',
+    synonyms: []
+  };
 
-  // Use OpenAI if key is available
-  const prompt = buildPrompt(term, context, style);
-  try {
-    // Add timeout to prevent hanging requests
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-    
-    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${openaiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 280,
-        temperature: 0.2
-      }),
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeoutId);
-
-    if (!resp.ok) {
-      const txt = await resp.text();
-      console.error('OpenAI error', resp.status, txt);
-      // Fallback to free API on OpenAI error
-      try {
-        return await fetchFreeDictionary(term, dictionaryLanguage);
-      } catch (e) {
-        return { error: 'OpenAI API error. Try free dictionary API in options.', synonyms: [] };
-      }
-    }
-    const json = await resp.json();
-    const text = json.choices?.[0]?.message?.content?.trim();
-    
-    // Extract synonyms from the response or generate them
-    const synonyms = await extractSynonyms(term, openaiKey, model);
-    console.log('CursorIQ Background: OpenAI synonyms extracted:', synonyms);
-    
-    const result = { explanation: text || 'No explanation returned.', synonyms: synonyms || [] };
-    console.log('CursorIQ Background: OpenAI result with synonyms:', result.synonyms);
-    
-    // If detailed, add examples
-    if (detailed) {
-      result.examples = await generateExamples(term, openaiKey, model);
-    }
-    
-    return result;
-  } catch (err) {
-    console.error('Network error', err);
-    // Check if it's a timeout
-    if (err.name === 'AbortError') {
-      // Fallback to free API on timeout
-      try {
-        return await fetchFreeDictionary(term, dictionaryLanguage);
-      } catch (e) {
-        return { error: 'Request timed out. Please try again.', synonyms: [] };
-      }
-    }
-    // Fallback to free API on other errors
-    try {
-      return await fetchFreeDictionary(term, dictionaryLanguage);
-    } catch (e) {
-      return { error: 'Network error. Please check your connection and try again.', synonyms: [] };
-    }
-  }
 }
 
 async function fetchFreeDictionary(term, language = 'en') {
@@ -1178,6 +1204,29 @@ async function parseWikipediaPersonData(data, originalName) {
   
   console.log('Nimbus: Parsing Wikipedia data for:', title, 'type:', type);
   
+  // STRICT MEDICAL TERM EXCLUSION - reject if it looks medical/anatomical
+  const medicalKeywords = [
+    'organ', 'tissue', 'cell', 'molecule', 'protein', 'enzyme', 'hormone', 'vitamin', 'mineral',
+    'bile', 'intestine', 'stomach', 'liver', 'kidney', 'bladder', 'gallbladder', 'spleen',
+    'anatomical', 'biological structure', 'medical term', 'anatomy', 'physiology',
+    'stored', 'concentrated', 'released', 'secreted', 'produces', 'contains'
+  ];
+  
+  const contentLower = content.toLowerCase();
+  const hasMedicalKeywords = medicalKeywords.some(keyword => contentLower.includes(keyword));
+  const looksMedical = hasMedicalKeywords && (
+    contentLower.includes('organ') || 
+    contentLower.includes('anatomical') ||
+    contentLower.includes('biological structure') ||
+    (contentLower.includes('stored') && contentLower.includes('bile')) ||
+    (contentLower.includes('tissue') && contentLower.includes('cell'))
+  );
+  
+  if (looksMedical) {
+    console.log('Nimbus: Rejecting - looks like medical/anatomical term, not a person');
+    return null;
+  }
+  
   // More comprehensive person detection
   const personIndicators = [
     content.toLowerCase().includes('born'),
@@ -1214,9 +1263,9 @@ async function parseWikipediaPersonData(data, originalName) {
   // If we have strong person indicators, treat it as a person even if type is not 'standard'
   // Only exclude if it's explicitly a disambiguation page
   const isDisambiguation = type === 'disambiguation';
-  const isPerson = hasPersonIndicator && !isDisambiguation;
+  const isPerson = hasPersonIndicator && !isDisambiguation && !looksMedical;
   
-  console.log('Nimbus: Person detection - hasPersonIndicator:', hasPersonIndicator, 'type:', type, 'isDisambiguation:', isDisambiguation, 'isPerson:', isPerson);
+  console.log('Nimbus: Person detection - hasPersonIndicator:', hasPersonIndicator, 'type:', type, 'isDisambiguation:', isDisambiguation, 'looksMedical:', looksMedical, 'isPerson:', isPerson);
   
   if (!isPerson) {
     console.log('Nimbus: Not detected as person, returning null. Indicators matched:', personIndicators.filter(i => i === true).length);

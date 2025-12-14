@@ -29,14 +29,57 @@
     }, 3000);
   }
   
-  function showConfirmDialog(message, onConfirm, onCancel) {
-    const confirmed = confirm(message);
-    if (confirmed && onConfirm) {
-      onConfirm();
-    } else if (!confirmed && onCancel) {
-      onCancel();
-    }
-    return confirmed;
+  function showConfirmDialog(message, title = 'Confirm Action', onConfirm, onCancel) {
+    return new Promise((resolve) => {
+      const dialog = document.getElementById('confirmDialog');
+      const titleEl = document.getElementById('confirmDialogTitle');
+      const messageEl = document.getElementById('confirmDialogMessage');
+      const confirmBtn = document.getElementById('confirmDialogConfirm');
+      const cancelBtn = document.getElementById('confirmDialogCancel');
+      
+      if (!dialog || !titleEl || !messageEl || !confirmBtn || !cancelBtn) {
+        // Fallback to native confirm if dialog elements don't exist
+        const confirmed = confirm(message);
+        if (confirmed && onConfirm) {
+          onConfirm();
+        } else if (!confirmed && onCancel) {
+          onCancel();
+        }
+        resolve(confirmed);
+        return;
+      }
+      
+      titleEl.textContent = title;
+      messageEl.textContent = message;
+      dialog.style.display = 'flex';
+      
+      const cleanup = () => {
+        dialog.style.display = 'none';
+        confirmBtn.onclick = null;
+        cancelBtn.onclick = null;
+      };
+      
+      confirmBtn.onclick = () => {
+        cleanup();
+        if (onConfirm) onConfirm();
+        resolve(true);
+      };
+      
+      cancelBtn.onclick = () => {
+        cleanup();
+        if (onCancel) onCancel();
+        resolve(false);
+      };
+      
+      // Close on overlay click
+      dialog.onclick = (e) => {
+        if (e.target === dialog) {
+          cleanup();
+          if (onCancel) onCancel();
+          resolve(false);
+        }
+      };
+    });
   }
 
   // Set favicon dynamically (Chrome extension popups need this)
@@ -290,6 +333,9 @@
       loadMore: 'Load More',
       showLess: 'Show Less',
       clearAll: 'Clear All',
+      clearAllRecent: 'Clear All Recent Searches',
+      clearAllRecentConfirm: 'Are you sure you want to clear all recent searches? This cannot be undone.',
+      recentSearchesCleared: 'All recent searches cleared!',
       allRecentSearches: 'All Recent Searches',
       back: 'Back',
       search: 'Search',
@@ -2141,12 +2187,7 @@
         document.getElementById('modalDraggable').checked = settings.modalDraggable !== false;
       }
       
-      // API settings tab
-      if (document.getElementById('openaiKeyInput')) {
-        chrome.storage.local.get(['openaiKey'], (r) => {
-          document.getElementById('openaiKeyInput').value = r.openaiKey || '';
-        });
-      }
+      // API settings tab - API key is now managed server-side
       // Explanation style - update custom dropdown
       const explanationStyleInput = document.getElementById('explanationStyle');
       const explanationStyleDropdown = document.getElementById('explanationStyleDropdown');
@@ -2221,17 +2262,7 @@
     });
   }
   
-  // Save API settings
-  const saveApiSettingsBtn = document.getElementById('saveApiSettingsBtn');
-  if (saveApiSettingsBtn) {
-    saveApiSettingsBtn.addEventListener('click', () => {
-      const openaiKey = document.getElementById('openaiKeyInput').value.trim();
-      chrome.storage.local.set({ openaiKey }, () => {
-        saveSettings();
-        alert('API settings saved!');
-      });
-    });
-  }
+  // Save API settings - API key is now managed server-side, no user input needed
   
   // Auto-save settings on change
   document.addEventListener('change', (e) => {
@@ -2500,6 +2531,8 @@
   function displayPersonResult(searchTerm, personData) {
     console.log('Nimbus: displayPersonResult called with image:', personData?.image);
     currentView = 'person';
+    // Add hub-search-mode class when showing search results
+    document.body.classList.add('hub-search-mode');
     
     // Hide other sections
     document.querySelectorAll('.section').forEach(section => {
@@ -2620,6 +2653,8 @@
   function displayOrganizationResult(searchTerm, orgData) {
     console.log('Nimbus: displayOrganizationResult called');
     currentView = 'organization';
+    // Add hub-search-mode class when showing search results
+    document.body.classList.add('hub-search-mode');
     
     // Hide other sections
     document.querySelectorAll('.section').forEach(section => {
@@ -2742,6 +2777,8 @@
   function displayPlaceResult(searchTerm, placeData) {
     console.log('Nimbus: displayPlaceResult called');
     currentView = 'place';
+    // Add hub-search-mode class when showing search results
+    document.body.classList.add('hub-search-mode');
     
     // Hide other sections
     document.querySelectorAll('.section').forEach(section => {
@@ -2880,6 +2917,8 @@
   }
 
   function showHubView() {
+    // Remove hub-search-mode class to show blue background
+    document.body.classList.remove('hub-search-mode');
     // Show all sections
     document.querySelectorAll('.section').forEach(section => {
       section.style.display = 'block';
@@ -3227,6 +3266,8 @@
 
   async function displayWordDetails(word, data) {
     currentView = 'word';
+    // Add hub-search-mode class when showing search results (after highlighting)
+    document.body.classList.add('hub-search-mode');
     
     // Hide other sections
     document.querySelectorAll('.section').forEach(section => {
@@ -3610,12 +3651,18 @@
       });
       
       document.getElementById('clearAllRecent').addEventListener('click', async () => {
-        if (confirm('Clear all recent searches?')) {
+        const lang = window.currentUILanguage || 'en';
+        const t = translations[lang] || translations.en;
+        const confirmed = await showConfirmDialog(
+          t.clearAllRecentConfirm || 'Are you sure you want to clear all recent searches? This cannot be undone.',
+          t.clearAllRecent || 'Clear All Recent Searches'
+        );
+        if (confirmed) {
           await setStorage({ recentSearches: [] });
           allRecentSearches = [];
           recentExpanded = false;
           await loadRecent();
-          showNotification('All recent searches cleared!', 'success');
+          showNotification(t.recentSearchesCleared || 'All recent searches cleared!', 'success');
         }
       });
       

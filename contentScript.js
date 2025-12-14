@@ -787,6 +787,10 @@
     copyBtn.setAttribute('title', 'Copy word');
     copyBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
+      e.preventDefault();
+      // Only handle if this is our button
+      if (!e.target.closest('.cursoriq-tooltip')) return;
+      
       const wordToCopy = currentWord || wordInfo.word;
       
       // Add click animation
@@ -801,6 +805,7 @@
         textArea.value = wordToCopy;
         textArea.style.position = 'fixed';
         textArea.style.opacity = '0';
+        textArea.style.pointerEvents = 'none';
         document.body.appendChild(textArea);
         textArea.select();
         try {
@@ -862,6 +867,8 @@
       copyExplanationBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       e.preventDefault();
+      // Only handle if this is our button from our modal
+      if (!tooltipEl || !tooltipEl.contains(e.target)) return;
       
       copyExplanationBtn.classList.add('copied');
       copyExplanationBtn.style.color = '#10b981';
@@ -882,6 +889,7 @@
         textArea.value = currentText;
         textArea.style.position = 'fixed';
         textArea.style.opacity = '0';
+        textArea.style.pointerEvents = 'none';
         document.body.appendChild(textArea);
         textArea.select();
         try {
@@ -1046,6 +1054,10 @@
     copyBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       e.preventDefault();
+      // Only handle if this is our button from our modal
+      const emailModalEl = document.querySelector('.cursoriq-email-modal');
+      if (!emailModalEl || !emailModalEl.contains(e.target)) return;
+      
       try {
         await navigator.clipboard.writeText(email);
         copyBtn.classList.add('copied');
@@ -1056,6 +1068,7 @@
         textArea.value = email;
         textArea.style.position = 'fixed';
         textArea.style.opacity = '0';
+        textArea.style.pointerEvents = 'none';
         document.body.appendChild(textArea);
         textArea.select();
         try {
@@ -1875,6 +1888,11 @@
     copyBtn.style.cssText = 'width: 28px; height: 28px; padding: 0; background: rgba(241, 245, 249, 0.8); border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 6px; color: #64748b; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.7; transition: all 0.2s ease;';
     copyBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
+      e.preventDefault();
+      // Only handle if this is our button from our modal
+      const personTooltipEl = document.querySelector('.cursoriq-person-tooltip');
+      if (!personTooltipEl || !personTooltipEl.contains(e.target)) return;
+      
       copyBtn.classList.add('copied');
       try {
         await navigator.clipboard.writeText(personData.name);
