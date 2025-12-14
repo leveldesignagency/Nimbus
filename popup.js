@@ -2483,6 +2483,9 @@
         } else if (response && response.isOrganization && response.organizationData) {
           displayOrganizationResult(query, response.organizationData);
           return;
+        } else if (response && response.isPlace && response.placeData) {
+          displayPlaceResult(query, response.placeData);
+          return;
         }
       } catch (err) {
         console.log('Nimbus: Entity search failed, falling back to word search:', err);
@@ -2540,11 +2543,13 @@
           <div class="word-card-explanation person-bio">
             ${personData.bio || personData.summary || 'No biography available.'}
           </div>
-          ${personData.birthDate || personData.occupation || personData.nationality ? `
+          ${personData.birthDate || personData.age || personData.occupation || personData.nationality || personData.relationships || personData.notableWorks ? `
           <div class="person-metadata">
-            ${personData.birthDate ? `<div class="person-meta-item"><strong>Born:</strong> ${personData.birthDate}</div>` : ''}
+            ${personData.birthDate ? `<div class="person-meta-item"><strong>Born:</strong> ${personData.birthDate}${personData.age ? ` (Age: ${personData.age})` : ''}</div>` : personData.age ? `<div class="person-meta-item"><strong>Age:</strong> ${personData.age}</div>` : ''}
             ${personData.occupation ? `<div class="person-meta-item"><strong>Occupation:</strong> ${personData.occupation}</div>` : ''}
             ${personData.nationality ? `<div class="person-meta-item"><strong>Nationality:</strong> ${personData.nationality}</div>` : ''}
+            ${personData.relationships && personData.relationships.length > 0 ? `<div class="person-meta-item"><strong>Relationships:</strong> ${Array.isArray(personData.relationships) ? personData.relationships.join(', ') : personData.relationships}</div>` : ''}
+            ${personData.notableWorks && personData.notableWorks.length > 0 ? `<div class="person-meta-item"><strong>Notable Works:</strong> ${Array.isArray(personData.notableWorks) ? personData.notableWorks.join(', ') : personData.notableWorks}</div>` : ''}
           </div>
           ` : ''}
           ${personData.newsArticles && personData.newsArticles.length > 0 ? `
@@ -2603,6 +2608,249 @@
         item.addEventListener('click', (e) => {
           e.stopPropagation();
           const article = personData.newsArticles[index];
+          if (article && article.link) {
+            window.open(article.link, '_blank', 'noopener,noreferrer');
+          }
+        });
+      });
+    }
+  }
+
+  // Display organization result in hub
+  function displayOrganizationResult(searchTerm, orgData) {
+    console.log('Nimbus: displayOrganizationResult called');
+    currentView = 'organization';
+    
+    // Hide other sections
+    document.querySelectorAll('.section').forEach(section => {
+      if (section.querySelector('#wordOfDay') === null) {
+        section.style.display = 'none';
+      }
+    });
+    
+    // Save to recent
+    saveToRecent(searchTerm);
+    loadRecent();
+    
+    // Build organization card HTML
+    const hasBack = navigationHistory.length > 1;
+    wordOfDayDiv.innerHTML = `
+      <div class="word-card-modal person-card">
+        <div class="word-card-header">
+          <div class="word-card-header-top">
+            ${hasBack ? `<button class="word-card-back-btn" id="wordCardBackBtn" title="Back">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 12H5M12 19l-7-7 7-7"/>
+              </svg>
+            </button>` : ''}
+            <div class="word-card-word-container">
+              <div class="word-card-word-wrapper">
+                <span class="word-card-word">${orgData.name || searchTerm}</span>
+              </div>
+              <button class="word-card-copy-btn" id="wordCardCopyBtn" title="Copy name">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="word-card-content person-content">
+          ${orgData.image ? `<div class="person-image-container">
+            <img src="${orgData.image}" alt="${orgData.name}" class="person-image" onerror="this.parentElement.style.display='none';">
+          </div>` : ''}
+          <div class="word-card-explanation person-bio">
+            ${orgData.bio || orgData.summary || 'No information available.'}
+          </div>
+          ${orgData.founded || orgData.headquarters || orgData.industry || orgData.revenue || orgData.employees || orgData.keyPeople || orgData.relatedCompanies ? `
+          <div class="person-metadata">
+            ${orgData.founded ? `<div class="person-meta-item"><strong>Founded:</strong> ${orgData.founded}</div>` : ''}
+            ${orgData.headquarters ? `<div class="person-meta-item"><strong>Headquarters:</strong> ${orgData.headquarters}</div>` : ''}
+            ${orgData.industry ? `<div class="person-meta-item"><strong>Industry:</strong> ${orgData.industry}</div>` : ''}
+            ${orgData.revenue ? `<div class="person-meta-item"><strong>Revenue:</strong> ${orgData.revenue}</div>` : ''}
+            ${orgData.employees ? `<div class="person-meta-item"><strong>Employees:</strong> ${orgData.employees}</div>` : ''}
+            ${orgData.keyPeople && orgData.keyPeople.length > 0 ? `<div class="person-meta-item"><strong>Key People:</strong> ${Array.isArray(orgData.keyPeople) ? orgData.keyPeople.join(', ') : orgData.keyPeople}</div>` : ''}
+            ${orgData.relatedCompanies && orgData.relatedCompanies.length > 0 ? `<div class="person-meta-item"><strong>Related Companies:</strong> ${Array.isArray(orgData.relatedCompanies) ? orgData.relatedCompanies.join(', ') : orgData.relatedCompanies}</div>` : ''}
+          </div>
+          ` : ''}
+          ${orgData.newsArticles && orgData.newsArticles.length > 0 ? `
+          <div class="person-news-section">
+            <div class="person-news-title">${translations[window.currentUILanguage || 'en']?.recentNews || 'Recent News'}</div>
+            <div class="person-news-list">
+              ${orgData.newsArticles.map((article, index) => `
+                <div class="person-news-item" data-news-index="${index}">
+                  <div class="person-news-title-text">${article.title}</div>
+                  ${article.date ? `<div class="person-news-date">${new Date(article.date).toLocaleDateString()}</div>` : ''}
+                </div>
+              `).join('')}
+            </div>
+          </div>
+          ` : ''}
+          ${orgData.wikipediaUrl ? `
+          <div class="person-wiki-link">
+            <a href="${orgData.wikipediaUrl}" target="_blank" rel="noopener noreferrer">Read more on Wikipedia</a>
+          </div>
+          ` : ''}
+        </div>
+      </div>
+    `;
+    
+    // Add event listeners (similar to person)
+    if (hasBack) {
+      const backBtn = document.getElementById('wordCardBackBtn');
+      if (backBtn) {
+        backBtn.addEventListener('click', () => {
+          navigationHistory.pop();
+          if (navigationHistory.length > 0) {
+            showWordDetails(navigationHistory[navigationHistory.length - 1], false);
+          } else {
+            returnToHub();
+          }
+        });
+      }
+    }
+    
+    const copyBtn = document.getElementById('wordCardCopyBtn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(orgData.name || searchTerm);
+          copyBtn.classList.add('copied');
+          setTimeout(() => copyBtn.classList.remove('copied'), 300);
+        } catch (err) {
+          console.error('Failed to copy', err);
+        }
+      });
+    }
+    
+    // Add click handlers for news items
+    if (orgData.newsArticles && orgData.newsArticles.length > 0) {
+      wordOfDayDiv.querySelectorAll('.person-news-item').forEach((item, index) => {
+        item.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const article = orgData.newsArticles[index];
+          if (article && article.link) {
+            window.open(article.link, '_blank', 'noopener,noreferrer');
+          }
+        });
+      });
+    }
+  }
+
+  // Display place result in hub
+  function displayPlaceResult(searchTerm, placeData) {
+    console.log('Nimbus: displayPlaceResult called');
+    currentView = 'place';
+    
+    // Hide other sections
+    document.querySelectorAll('.section').forEach(section => {
+      if (section.querySelector('#wordOfDay') === null) {
+        section.style.display = 'none';
+      }
+    });
+    
+    // Save to recent
+    saveToRecent(searchTerm);
+    loadRecent();
+    
+    // Build place card HTML
+    const hasBack = navigationHistory.length > 1;
+    wordOfDayDiv.innerHTML = `
+      <div class="word-card-modal person-card">
+        <div class="word-card-header">
+          <div class="word-card-header-top">
+            ${hasBack ? `<button class="word-card-back-btn" id="wordCardBackBtn" title="Back">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 12H5M12 19l-7-7 7-7"/>
+              </svg>
+            </button>` : ''}
+            <div class="word-card-word-container">
+              <div class="word-card-word-wrapper">
+                <span class="word-card-word">${placeData.name || searchTerm}</span>
+              </div>
+              <button class="word-card-copy-btn" id="wordCardCopyBtn" title="Copy name">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="word-card-content person-content">
+          ${placeData.image ? `<div class="person-image-container">
+            <img src="${placeData.image}" alt="${placeData.name}" class="person-image" onerror="this.parentElement.style.display='none';">
+          </div>` : ''}
+          <div class="word-card-explanation person-bio">
+            ${placeData.bio || placeData.summary || 'No information available.'}
+          </div>
+          ${placeData.population || placeData.country || placeData.area || placeData.coordinates || placeData.elevation || placeData.timeZone ? `
+          <div class="person-metadata">
+            ${placeData.population ? `<div class="person-meta-item"><strong>Population:</strong> ${parseInt(placeData.population).toLocaleString()}</div>` : ''}
+            ${placeData.country ? `<div class="person-meta-item"><strong>Country:</strong> ${placeData.country}</div>` : ''}
+            ${placeData.area ? `<div class="person-meta-item"><strong>Area:</strong> ${placeData.area}</div>` : ''}
+            ${placeData.coordinates ? `<div class="person-meta-item"><strong>Coordinates:</strong> ${placeData.coordinates}</div>` : ''}
+            ${placeData.elevation ? `<div class="person-meta-item"><strong>Elevation:</strong> ${placeData.elevation}</div>` : ''}
+            ${placeData.timeZone ? `<div class="person-meta-item"><strong>Time Zone:</strong> ${placeData.timeZone}</div>` : ''}
+          </div>
+          ` : ''}
+          ${placeData.newsArticles && placeData.newsArticles.length > 0 ? `
+          <div class="person-news-section">
+            <div class="person-news-title">${translations[window.currentUILanguage || 'en']?.recentNews || 'Recent News'}</div>
+            <div class="person-news-list">
+              ${placeData.newsArticles.map((article, index) => `
+                <div class="person-news-item" data-news-index="${index}">
+                  <div class="person-news-title-text">${article.title}</div>
+                  ${article.date ? `<div class="person-news-date">${new Date(article.date).toLocaleDateString()}</div>` : ''}
+                </div>
+              `).join('')}
+            </div>
+          </div>
+          ` : ''}
+          ${placeData.wikipediaUrl ? `
+          <div class="person-wiki-link">
+            <a href="${placeData.wikipediaUrl}" target="_blank" rel="noopener noreferrer">Read more on Wikipedia</a>
+          </div>
+          ` : ''}
+        </div>
+      </div>
+    `;
+    
+    // Add event listeners (similar to person)
+    if (hasBack) {
+      const backBtn = document.getElementById('wordCardBackBtn');
+      if (backBtn) {
+        backBtn.addEventListener('click', () => {
+          navigationHistory.pop();
+          if (navigationHistory.length > 0) {
+            showWordDetails(navigationHistory[navigationHistory.length - 1], false);
+          } else {
+            returnToHub();
+          }
+        });
+      }
+    }
+    
+    const copyBtn = document.getElementById('wordCardCopyBtn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(placeData.name || searchTerm);
+          copyBtn.classList.add('copied');
+          setTimeout(() => copyBtn.classList.remove('copied'), 300);
+        } catch (err) {
+          console.error('Failed to copy', err);
+        }
+      });
+    }
+    
+    // Add click handlers for news items
+    if (placeData.newsArticles && placeData.newsArticles.length > 0) {
+      wordOfDayDiv.querySelectorAll('.person-news-item').forEach((item, index) => {
+        item.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const article = placeData.newsArticles[index];
           if (article && article.link) {
             window.open(article.link, '_blank', 'noopener,noreferrer');
           }

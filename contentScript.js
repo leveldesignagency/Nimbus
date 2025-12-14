@@ -463,10 +463,16 @@
         console.log('CursorIQ: About to call showTooltip with synonyms:', synonyms);
         console.log('CursorIQ: =======================================');
         
-        // Check if this is person data
+        // Check if this is person, organization, or place data
         if (resp.isPerson && resp.personData) {
           // Open hub and pass person data
           openHubWithPersonData(resp.personData, wordInfo.word);
+        } else if (resp.isOrganization && resp.organizationData) {
+          // Open hub and pass organization data
+          openHubWithPersonData(resp.organizationData, wordInfo.word);
+        } else if (resp.isPlace && resp.placeData) {
+          // Open hub and pass place data
+          openHubWithPersonData(resp.placeData, wordInfo.word);
         } else {
           showTooltip(wordInfo, resp.explanation || "No explanation returned.", false, synonyms, resp.pronunciation, resp.examples || []);
         }
@@ -688,23 +694,31 @@
     
     wordContainer.appendChild(wordWrapper);
     
+    // Button container for TTS and Copy buttons - stack them together
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.display = 'flex';
+    buttonContainer.style.alignItems = 'center';
+    buttonContainer.style.gap = '6px';
+    buttonContainer.style.flexShrink = '0';
+    buttonContainer.style.marginLeft = 'auto';
+    
     // Text-to-speech button
     const ttsBtn = document.createElement('button');
     ttsBtn.className = 'cursoriq-tts-btn';
     ttsBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"></path></svg>';
     ttsBtn.setAttribute('aria-label', 'Pronounce word');
     ttsBtn.setAttribute('title', 'Pronounce word');
-    ttsBtn.style.cssText = 'position: absolute; top: 50%; right: 50px; transform: translateY(-50%); width: 28px; height: 28px; padding: 0; background: rgba(241, 245, 249, 0.8); border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 6px; color: #64748b; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.7; transition: all 0.2s ease; z-index: 10;';
+    ttsBtn.style.cssText = 'width: 28px; height: 28px; padding: 0; background: transparent; border: none; color: #64748b; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.7; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); flex-shrink: 0;';
     ttsBtn.addEventListener('mouseenter', () => {
       ttsBtn.style.opacity = '1';
-      ttsBtn.style.background = 'rgba(241, 245, 249, 1)';
-      ttsBtn.style.borderColor = '#cbd5e1';
+      ttsBtn.style.color = '#475569';
+      ttsBtn.style.transform = 'scale(1.1)';
     });
     ttsBtn.addEventListener('mouseleave', () => {
       if (!ttsBtn.classList.contains('playing')) {
         ttsBtn.style.opacity = '0.7';
-        ttsBtn.style.background = 'rgba(241, 245, 249, 0.8)';
-        ttsBtn.style.borderColor = 'rgba(226, 232, 240, 0.8)';
+        ttsBtn.style.color = '#64748b';
+        ttsBtn.style.transform = 'scale(1)';
       }
     });
     ttsBtn.addEventListener('click', async (e) => {
@@ -717,12 +731,14 @@
         }
         ttsBtn.classList.remove('playing');
         ttsBtn.style.color = '#64748b';
+        ttsBtn.style.transform = 'scale(1)';
         return;
       }
       
       ttsBtn.classList.add('playing');
       ttsBtn.style.color = '#1e3a8a';
       ttsBtn.style.opacity = '1';
+      ttsBtn.style.transform = 'scale(1.15)';
       
       const wordToSpeak = currentWord || wordInfo.word;
       
@@ -742,12 +758,14 @@
             ttsBtn.classList.remove('playing');
             ttsBtn.style.color = '#64748b';
             ttsBtn.style.opacity = '0.7';
+            ttsBtn.style.transform = 'scale(1)';
           };
           
           utterance.onerror = () => {
             ttsBtn.classList.remove('playing');
             ttsBtn.style.color = '#64748b';
             ttsBtn.style.opacity = '0.7';
+            ttsBtn.style.transform = 'scale(1)';
           };
           
           window.speechSynthesis.speak(utterance);
@@ -756,9 +774,10 @@
         console.warn('CursorIQ: Text-to-speech not supported');
         ttsBtn.classList.remove('playing');
         ttsBtn.style.color = '#64748b';
+        ttsBtn.style.transform = 'scale(1)';
       }
     });
-    wordContainer.appendChild(ttsBtn);
+    buttonContainer.appendChild(ttsBtn);
     
     // Copy button
     const copyBtn = document.createElement('button');
@@ -797,7 +816,9 @@
         copyBtn.classList.remove('copied');
       }, 300);
     });
-    wordContainer.appendChild(copyBtn);
+    buttonContainer.appendChild(copyBtn);
+    
+    wordContainer.appendChild(buttonContainer);
     
     header.appendChild(wordContainer);
     tooltipEl.appendChild(header);

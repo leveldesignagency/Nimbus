@@ -79,23 +79,59 @@ async function handleExplain(term, context, detailed = false) {
   const dictionaryLanguage = cfg.settings?.dictionaryLanguage || 'en';
   console.log('CursorIQ Background: Using dictionary language:', dictionaryLanguage);
 
-  // Check if this might be a person, organization, or notable entity
+  // Check if this might be a person, organization, place, or notable entity
   // Look for capitalized words (proper nouns) - more flexible pattern
   const trimmedTerm = term.trim();
+  const termLower = trimmedTerm.toLowerCase();
   
-  // More flexible pattern: allows hyphens, apostrophes, multiple capitals (e.g., McDonald, O'Brien, Mary-Jane)
-  // Also allows common organization suffixes
-  const isLikelyEntity = /^[A-Z][A-Za-z'\-]+(\s+[A-Z][A-Za-z'\-]+)*(\s+(Inc|LLC|Ltd|Corp|Company|Corporation|Foundation|Institute|University|College|Group|Organization|Org))?$/i.test(trimmedTerm) && 
-                        trimmedTerm.split(/\s+/).length >= 1 && 
-                        trimmedTerm.split(/\s+/).length <= 6 && // Increased to 6 for organizations
-                        trimmedTerm.length >= 2 &&
-                        trimmedTerm.length <= 80; // Increased for organization names
+  // EXCLUDE medical/anatomical terms - these should use dictionary/modal, not hub
+  const medicalExclusions = [
+    // Common medical/anatomical terms
+    'gallbladder', 'liver', 'kidney', 'stomach', 'intestine', 'bladder', 'spleen', 'pancreas',
+    'heart', 'lung', 'brain', 'muscle', 'bone', 'nerve', 'vein', 'artery', 'cell', 'tissue',
+    'organ', 'organelle', 'molecule', 'protein', 'enzyme', 'hormone', 'vitamin', 'mineral',
+    'bile', 'blood', 'plasma', 'serum', 'urine', 'saliva', 'mucus', 'phlegm',
+    'cartilage', 'ligament', 'tendon', 'joint', 'spine', 'skull', 'rib', 'pelvis',
+    'esophagus', 'trachea', 'bronchus', 'alveolus', 'diaphragm', 'pleura',
+    'duodenum', 'jejunum', 'ileum', 'colon', 'rectum', 'anus',
+    'nephron', 'glomerulus', 'ureter', 'urethra',
+    'neuron', 'synapse', 'dendrite', 'axon', 'myelin',
+    'chromosome', 'gene', 'dna', 'rna', 'nucleotide',
+    // Medical conditions
+    'diabetes', 'cancer', 'flu', 'cold', 'fever', 'headache', 'pain', 'disease', 'syndrome',
+    // Medical term patterns
+    /^(anti|auto|bio|cardio|derm|endo|gastro|hemo|neuro|osteo|patho|psycho|pulmo|thrombo)/i,
+    /(itis|osis|emia|oma|pathy|scopy|tomy|ectomy|plasty|algia|cele|cyte|genesis|gram|graph|lysis|megaly|phage|philia|phobia|plasia|plegia|pnea|rrhea|scope|stasis|trophy|uria)$/i
+  ];
   
-  if (isLikelyEntity) {
-    console.log('Nimbus: Term looks like a person/organization, checking Wikipedia...', trimmedTerm);
+  // Check if term matches medical exclusions
+  const isMedicalTerm = medicalExclusions.some(exclusion => {
+    if (typeof exclusion === 'string') {
+      return termLower === exclusion || termLower.includes(exclusion);
+    } else if (exclusion instanceof RegExp) {
+      return exclusion.test(trimmedTerm);
+    }
+    return false;
+  });
+  
+  if (isMedicalTerm) {
+    console.log('Nimbus: Term is medical/anatomical, skipping entity detection, using dictionary:', trimmedTerm);
+    // Skip entity detection, fall through to dictionary lookup (modal)
+  } else {
+    // More flexible pattern: allows hyphens, apostrophes, multiple capitals (e.g., McDonald, O'Brien, Mary-Jane)
+    // Also allows common organization suffixes
+    const isLikelyEntity = /^[A-Z][A-Za-z'\-]+(\s+[A-Z][A-Za-z'\-]+)*(\s+(Inc|LLC|Ltd|Corp|Company|Corporation|Foundation|Institute|University|College|Group|Organization|Org))?$/i.test(trimmedTerm) && 
+                          trimmedTerm.split(/\s+/).length >= 1 && 
+                          trimmedTerm.split(/\s+/).length <= 6 && // Increased to 6 for organizations
+                          trimmedTerm.length >= 2 &&
+                          trimmedTerm.length <= 80; // Increased for organization names
+    
+    if (isLikelyEntity) {
+    console.log('Nimbus: Term looks like an entity, checking Wikipedia and Wikidata...', trimmedTerm);
     try {
+      // First try to fetch from Wikipedia
       const entityData = await fetchEntityFromWikipedia(term);
-      console.log('Nimbus: Wikipedia response:', entityData ? 'Found data' : 'No data', entityData?.isPerson ? 'IS PERSON' : entityData?.isOrganization ? 'IS ORGANIZATION' : 'NOT ENTITY');
+      console.log('Nimbus: Wikipedia response:', entityData ? 'Found data' : 'No data', entityData?.isPerson ? 'IS PERSON' : entityData?.isOrganization ? 'IS ORGANIZATION' : entityData?.isPlace ? 'IS PLACE' : 'NOT ENTITY');
       
       if (entityData) {
         if (entityData.isPerson) {
@@ -116,8 +152,11 @@ async function handleExplain(term, context, detailed = false) {
               name: entityData.name,
               image: entityData.image,
               birthDate: entityData.birthDate,
+              age: entityData.age,
               occupation: entityData.occupation,
               nationality: entityData.nationality,
+              relationships: entityData.relationships,
+              notableWorks: entityData.notableWorks,
               summary: entityData.summary,
               wikipediaUrl: entityData.wikipediaUrl,
               newsArticles: newsArticles || []
@@ -142,6 +181,37 @@ async function handleExplain(term, context, detailed = false) {
               founded: entityData.founded,
               headquarters: entityData.headquarters,
               industry: entityData.industry,
+              relatedCompanies: entityData.relatedCompanies,
+              keyPeople: entityData.keyPeople,
+              revenue: entityData.revenue,
+              employees: entityData.employees,
+              summary: entityData.summary,
+              wikipediaUrl: entityData.wikipediaUrl,
+              newsArticles: newsArticles || []
+            }
+          };
+        } else if (entityData.isPlace) {
+          console.log('Nimbus: Found place data from Wikipedia:', entityData.name);
+          
+          // Fetch recent news about the place
+          const newsArticles = await fetchPersonNews(term);
+          console.log('Nimbus: Fetched', newsArticles?.length || 0, 'news articles');
+          
+          return {
+            explanation: entityData.bio,
+            synonyms: [],
+            pronunciation: null,
+            examples: [],
+            isPlace: true,
+            placeData: {
+              name: entityData.name,
+              image: entityData.image,
+              population: entityData.population,
+              country: entityData.country,
+              coordinates: entityData.coordinates,
+              area: entityData.area,
+              elevation: entityData.elevation,
+              timeZone: entityData.timeZone,
               summary: entityData.summary,
               wikipediaUrl: entityData.wikipediaUrl,
               newsArticles: newsArticles || []
@@ -154,6 +224,7 @@ async function handleExplain(term, context, detailed = false) {
     } catch (err) {
       console.log('Nimbus: Wikipedia lookup failed, falling back to dictionary:', err.message);
       // Continue to dictionary lookup
+    }
     }
   }
 
@@ -328,6 +399,19 @@ async function fetchFreeDictionary(term, language = 'en') {
     }
     attempts.push({ term: termLower, desc: 'lowercase' });
     
+    // For hyphenated words, also try without hyphen and with different hyphen positions
+    if (termOriginal.includes('-')) {
+      const withoutHyphen = termOriginal.replace(/-/g, '');
+      const withoutHyphenLower = withoutHyphen.toLowerCase();
+      attempts.push({ term: withoutHyphen, desc: 'without hyphen' });
+      attempts.push({ term: withoutHyphenLower, desc: 'without hyphen lowercase' });
+      
+      // For medical compound terms, try with space instead of hyphen
+      const withSpace = termOriginal.replace(/-/g, ' ');
+      attempts.push({ term: withSpace, desc: 'with space instead of hyphen' });
+      attempts.push({ term: withSpace.toLowerCase(), desc: 'with space lowercase' });
+    }
+    
     let resp = null;
     let lastError = null;
     
@@ -383,13 +467,45 @@ async function fetchFreeDictionary(term, language = 'en') {
         
         // Try medical dictionaries as fallback ONLY for terms that look medical
         // Skip medical dictionary for common words (short, common terms like "christmas", "hello", etc.)
-        const isLikelyMedical = term.length > 8 || /[A-Z]{2,}/.test(term) || term.includes('-') || term.includes('itis') || term.includes('osis') || term.includes('emia');
+        const isLikelyMedical = term.length > 8 || /[A-Z]{2,}/.test(term) || term.includes('-') || term.includes('itis') || term.includes('osis') || term.includes('emia') || 
+                                /^(oesophago|gastro|cardio|neuro|derm|endo|hemo|osteo|patho|psycho|pulmo|thrombo)/i.test(term) ||
+                                /(gastric|oesophageal|esophageal|intestinal|hepatic|renal|cardiac|pulmonary|neural|dermal)/i.test(term);
         if (isLikelyMedical) {
           console.log('Nimbus: Term looks medical, trying medical dictionaries...');
           const medicalResult = await tryMedicalDictionaries(term);
           if (medicalResult) {
             console.log('Nimbus: Found in medical dictionary');
             return medicalResult;
+          }
+          
+          // For hyphenated medical terms, try splitting and explaining the parts
+          if (term.includes('-')) {
+            console.log('Nimbus: Trying to explain hyphenated medical term by parts...');
+            const parts = term.split('-').filter(p => p.length > 0);
+            if (parts.length >= 2) {
+              // Try to get definitions for each part
+              const partDefinitions = [];
+              for (const part of parts) {
+                try {
+                  const partResult = await fetchFreeDictionary(part, language);
+                  if (partResult && partResult.explanation && !partResult.error) {
+                    partDefinitions.push(`${part}: ${partResult.explanation.substring(0, 100)}`);
+                  }
+                } catch (err) {
+                  // Skip if part lookup fails
+                }
+              }
+              
+              if (partDefinitions.length > 0) {
+                const combinedExplanation = `"${term}" is a medical compound term combining: ${partDefinitions.join('; ')}. This typically refers to anatomical structures or medical conditions involving both components.`;
+                return {
+                  explanation: combinedExplanation,
+                  synonyms: [],
+                  pronunciation: null,
+                  examples: []
+                };
+              }
+            }
           }
         } else {
           console.log('Nimbus: Skipping medical dictionary for common term:', term);
@@ -966,18 +1082,40 @@ async function tryMedicalDictionaries(term) {
     }
   }
   
+  // For hyphenated medical terms, try Wiktionary as fallback
+  if (term.includes('-')) {
+    console.log('Nimbus: Trying Wiktionary for hyphenated medical term...');
+    const wiktionaryResult = await tryWiktionary(term, 'en');
+    if (wiktionaryResult) {
+      return wiktionaryResult;
+    }
+    
+    // Try without hyphen
+    const withoutHyphen = term.replace(/-/g, '');
+    const wiktionaryResult2 = await tryWiktionary(withoutHyphen, 'en');
+    if (wiktionaryResult2) {
+      return wiktionaryResult2;
+    }
+  }
+  
   return null; // No medical dictionary found the term
 }
 
-// Fetch entity (person or organization) information from Wikipedia
+// Fetch entity (person, organization, or place) information from Wikipedia
 async function fetchEntityFromWikipedia(name) {
-  // First try as person, then as organization
+  // First try as place (cities, countries, locations) - most specific
+  const placeData = await fetchPlaceFromWikipedia(name);
+  if (placeData && placeData.isPlace) {
+    return placeData;
+  }
+  
+  // Then try as person
   const personData = await fetchPersonFromWikipedia(name);
   if (personData && personData.isPerson) {
     return personData;
   }
   
-  // Try as organization
+  // Finally try as organization
   const orgData = await fetchOrganizationFromWikipedia(name);
   if (orgData && orgData.isOrganization) {
     return orgData;
@@ -1157,6 +1295,54 @@ async function parseWikipediaPersonData(data, originalName) {
     }
   }
   
+  // Calculate age if birth date is available
+  let age = null;
+  if (birthDate) {
+    const yearMatch = birthDate.match(/\d{4}/);
+    if (yearMatch) {
+      const birthYear = parseInt(yearMatch[0]);
+      const currentYear = new Date().getFullYear();
+      age = currentYear - birthYear;
+    }
+  }
+  
+  // Extract relationships (spouse, children, etc.)
+  let relationships = [];
+  const relationshipPatterns = [
+    /married\s+to\s+([^,\.\n]+)/i,
+    /spouse[:\s]+([^,\.\n]+)/i,
+    /partner[:\s]+([^,\.\n]+)/i,
+    /children[:\s]+([^,\.\n]+)/i
+  ];
+  
+  for (const pattern of relationshipPatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      relationships.push(match[1].trim());
+    }
+  }
+  
+  // Extract notable works (films, books, albums, etc.)
+  let notableWorks = [];
+  const worksPatterns = [
+    /known\s+for\s+([^,\.\n]+)/i,
+    /notable\s+works[:\s]+([^,\.\n]+)/i,
+    /films[:\s]+([^,\.\n]+)/i,
+    /albums[:\s]+([^,\.\n]+)/i,
+    /books[:\s]+([^,\.\n]+)/i
+  ];
+  
+  for (const pattern of worksPatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      const works = match[1].split(/[,&]/).map(w => w.trim()).filter(w => w.length > 0);
+      notableWorks.push(...works);
+    }
+  }
+  
+  // Limit notable works to top 5
+  notableWorks = notableWorks.slice(0, 5);
+  
   // Get summary - first paragraph, up to 400 characters
   const summary = content.split('\n')[0] || content.substring(0, 400);
   const cleanSummary = summary.replace(/\s+/g, ' ').trim();
@@ -1167,8 +1353,11 @@ async function parseWikipediaPersonData(data, originalName) {
     bio: cleanSummary,
     image: imageUrl,
     birthDate: birthDate,
+    age: age,
     occupation: occupation,
     nationality: nationality,
+    relationships: relationships.length > 0 ? relationships : null,
+    notableWorks: notableWorks.length > 0 ? notableWorks : null,
     summary: cleanSummary,
     wikipediaUrl: data.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/\s+/g, '_'))}`
   };
@@ -1453,6 +1642,69 @@ function parseWikipediaOrganizationData(data, originalName) {
     }
   }
   
+  // Extract related companies/organizations
+  let relatedCompanies = [];
+  const relatedPatterns = [
+    /subsidiary\s+of\s+([^,\.\n]+)/i,
+    /parent\s+company[:\s]+([^,\.\n]+)/i,
+    /merged\s+with\s+([^,\.\n]+)/i,
+    /acquired\s+([^,\.\n]+)/i
+  ];
+  
+  for (const pattern of relatedPatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      relatedCompanies.push(match[1].trim());
+    }
+  }
+  
+  // Extract key people (CEO, founder, etc.)
+  let keyPeople = [];
+  const peoplePatterns = [
+    /ceo[:\s]+([^,\.\n]+)/i,
+    /founder[:\s]+([^,\.\n]+)/i,
+    /president[:\s]+([^,\.\n]+)/i,
+    /chairman[:\s]+([^,\.\n]+)/i
+  ];
+  
+  for (const pattern of peoplePatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      keyPeople.push(match[1].trim());
+    }
+  }
+  
+  // Extract revenue
+  let revenue = null;
+  const revenuePatterns = [
+    /revenue[:\s]+([\d,\.]+\s*(?:billion|million|USD|\$))/i,
+    /annual\s+revenue[:\s]+([\d,\.]+\s*(?:billion|million|USD|\$))/i
+  ];
+  
+  for (const pattern of revenuePatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      revenue = match[1].trim();
+      break;
+    }
+  }
+  
+  // Extract employee count
+  let employees = null;
+  const employeePatterns = [
+    /employees[:\s]+([\d,]+)/i,
+    /workforce[:\s]+([\d,]+)/i,
+    /([\d,]+)\s+employees/i
+  ];
+  
+  for (const pattern of employeePatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      employees = match[1].trim();
+      break;
+    }
+  }
+  
   // Get summary
   const summary = content.split('\n')[0] || content.substring(0, 400);
   const cleanSummary = summary.replace(/\s+/g, ' ').trim();
@@ -1465,6 +1717,214 @@ function parseWikipediaOrganizationData(data, originalName) {
     founded: founded,
     headquarters: headquarters,
     industry: industry,
+    relatedCompanies: relatedCompanies.length > 0 ? relatedCompanies : null,
+    keyPeople: keyPeople.length > 0 ? keyPeople : null,
+    revenue: revenue,
+    employees: employees,
+    summary: cleanSummary,
+    wikipediaUrl: data.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/\s+/g, '_'))}`
+  };
+}
+
+// Fetch place information from Wikipedia
+async function fetchPlaceFromWikipedia(name) {
+  try {
+    const searchName = name.trim().replace(/\s+/g, '_');
+    const searchUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(searchName)}`;
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    
+    try {
+      const response = await fetch(searchUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        return null;
+      }
+      
+      const data = await response.json();
+      return parseWikipediaPlaceData(data, name);
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') {
+        console.log('Nimbus: Wikipedia request timed out');
+      }
+      return null;
+    }
+  } catch (err) {
+    console.error('Nimbus: Error fetching place from Wikipedia:', err);
+    return null;
+  }
+}
+
+// Parse Wikipedia API response to extract place information
+function parseWikipediaPlaceData(data, originalName) {
+  const content = data.extract || '';
+  const title = data.title || '';
+  const type = data.type || '';
+  
+  console.log('Nimbus: Parsing Wikipedia place data for:', title, 'type:', type);
+  
+  // Place indicators - cities, countries, locations
+  const placeIndicators = [
+    content.toLowerCase().includes('city'),
+    content.toLowerCase().includes('town'),
+    content.toLowerCase().includes('country'),
+    content.toLowerCase().includes('capital'),
+    content.toLowerCase().includes('population'),
+    content.toLowerCase().includes('located'),
+    content.toLowerCase().includes('situated'),
+    content.toLowerCase().includes('coordinates'),
+    content.toLowerCase().includes('area'),
+    content.toLowerCase().includes('km²'),
+    content.toLowerCase().includes('square'),
+    title.includes('(city)'),
+    title.includes('(town)'),
+    title.includes('(country)'),
+    title.includes('(state)'),
+    title.includes('(province)'),
+    title.includes('(region)'),
+    /population\s+of\s+[\d,]+/i.test(content),
+    /located\s+in/i.test(content),
+    /situated\s+in/i.test(content)
+  ];
+  
+  // Exclude if it's clearly a person or organization
+  const personExclude = content.toLowerCase().includes('born') && content.toLowerCase().includes('died');
+  const orgExclude = content.toLowerCase().includes('founded') && content.toLowerCase().includes('company');
+  
+  const hasPlaceIndicator = placeIndicators.some(indicator => indicator === true);
+  const isDisambiguation = type === 'disambiguation';
+  const isPlace = hasPlaceIndicator && !isDisambiguation && !personExclude && !orgExclude;
+  
+  console.log('Nimbus: Place detection - hasPlaceIndicator:', hasPlaceIndicator, 'type:', type, 'isPlace:', isPlace);
+  
+  if (!isPlace) {
+    return null;
+  }
+  
+  // Extract image
+  let imageUrl = null;
+  if (data.original && data.original.source) {
+    imageUrl = data.original.source;
+  } else if (data.thumbnail && data.thumbnail.source) {
+    imageUrl = data.thumbnail.source.replace(/\/\d+px-/, '/800px-');
+  }
+  
+  // Extract population
+  let population = null;
+  const popPatterns = [
+    /population[:\s]+([\d,]+(?:\s*[\d,]+)*)/i,
+    /population\s+of\s+([\d,]+(?:\s*[\d,]+)*)/i,
+    /([\d,]+)\s+inhabitants/i,
+    /([\d,]+)\s+people/i
+  ];
+  
+  for (const pattern of popPatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      population = match[1].trim().replace(/,/g, '');
+      break;
+    }
+  }
+  
+  // Extract country
+  let country = null;
+  const countryPatterns = [
+    /located\s+in\s+([^,\.\n]+)/i,
+    /situated\s+in\s+([^,\.\n]+)/i,
+    /country[:\s]+([^,\.\n]+)/i,
+    /in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+country/i
+  ];
+  
+  for (const pattern of countryPatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      const candidate = match[1].trim();
+      // Filter out common non-country words
+      if (!candidate.match(/^(the|a|an|and|or|but|in|on|at|to|for|of|with|from|is|was)$/i) && candidate.length > 2) {
+        country = candidate;
+        break;
+      }
+    }
+  }
+  
+  // Extract area
+  let area = null;
+  const areaPatterns = [
+    /area[:\s]+([\d,\.]+\s*(?:km²|km2|square\s+kilometers|sq\s+mi))/i,
+    /([\d,\.]+\s*(?:km²|km2|square\s+kilometers|sq\s+mi))\s+in\s+area/i
+  ];
+  
+  for (const pattern of areaPatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      area = match[1].trim();
+      break;
+    }
+  }
+  
+  // Extract coordinates (latitude, longitude)
+  let coordinates = null;
+  const coordPatterns = [
+    /coordinates[:\s]+([\d\.]+[°\s]*[NS]?[,\s]+[\d\.]+[°\s]*[EW]?)/i,
+    /([\d\.]+[°\s]*[NS]?[,\s]+[\d\.]+[°\s]*[EW]?)/i
+  ];
+  
+  for (const pattern of coordPatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      coordinates = match[1].trim();
+      break;
+    }
+  }
+  
+  // Extract elevation
+  let elevation = null;
+  const elevPatterns = [
+    /elevation[:\s]+([\d,\.]+\s*(?:m|meters|ft|feet))/i,
+    /([\d,\.]+\s*(?:m|meters|ft|feet))\s+above\s+sea\s+level/i
+  ];
+  
+  for (const pattern of elevPatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      elevation = match[1].trim();
+      break;
+    }
+  }
+  
+  // Extract time zone
+  let timeZone = null;
+  const tzPatterns = [
+    /time\s+zone[:\s]+([^,\.\n]+)/i,
+    /([A-Z]{3,4})\s+time\s+zone/i
+  ];
+  
+  for (const pattern of tzPatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      timeZone = match[1].trim();
+      break;
+    }
+  }
+  
+  // Get summary
+  const summary = content.split('\n')[0] || content.substring(0, 400);
+  const cleanSummary = summary.replace(/\s+/g, ' ').trim();
+  
+  return {
+    isPlace: true,
+    name: title,
+    bio: cleanSummary,
+    image: imageUrl,
+    population: population,
+    country: country,
+    area: area,
+    coordinates: coordinates,
+    elevation: elevation,
+    timeZone: timeZone,
     summary: cleanSummary,
     wikipediaUrl: data.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/\s+/g, '_'))}`
   };
@@ -1608,16 +2068,39 @@ async function fetchMedicalTermsAPI(term) {
   try {
     // Check if term looks medical (common medical suffixes/prefixes)
     const medicalPatterns = [
-      /^(anti|auto|bio|cardio|derm|endo|gastro|hemo|neuro|osteo|patho|psycho|pulmo|thrombo)/i,
-      /(itis|osis|emia|oma|pathy|scopy|tomy|ectomy|plasty)$/i,
+      /^(anti|auto|bio|cardio|derm|endo|gastro|hemo|neuro|osteo|patho|psycho|pulmo|thrombo|oesophago|esophago)/i,
+      /(itis|osis|emia|oma|pathy|scopy|tomy|ectomy|plasty|algia|cele|cyte|genesis|gram|graph|logy|lysis|megaly|phage|philia|phobia|plasia|plegia|pnea|rrhea|scope|stasis|trophy|uria)$/i,
       /^(hyper|hypo|poly|mono|di|tri)/i,
-      /(algia|cele|cyte|genesis|gram|graph|itis|logy|lysis|megaly|oma|osis|pathy|phage|philia|phobia|plasia|plegia|pnea|rrhea|scope|scopy|stasis|tomy|trophy|uria)$/i
+      /(algia|cele|cyte|genesis|gram|graph|itis|logy|lysis|megaly|oma|osis|pathy|phage|philia|phobia|plasia|plegia|pnea|rrhea|scope|scopy|stasis|tomy|trophy|uria)$/i,
+      // Medical anatomical terms
+      /(gastric|oesophageal|esophageal|intestinal|hepatic|renal|cardiac|pulmonary|neural|dermal|vascular|muscular|skeletal|nervous|digestive|respiratory|circulatory|endocrine|reproductive|urinary|lymphatic)/i
     ];
     
     const looksMedical = medicalPatterns.some(pattern => pattern.test(term));
     if (looksMedical) {
+      // For compound terms, provide more specific explanation
+      let explanation = `"${term}" is a medical term`;
+      
+      if (term.includes('-')) {
+        const parts = term.split('-');
+        explanation += ` combining ${parts.join(' and ')}`;
+      }
+      
+      // Add context based on patterns
+      if (/gastric|oesophageal|esophageal|intestinal/i.test(term)) {
+        explanation += '. This typically relates to the digestive system or gastrointestinal tract.';
+      } else if (/cardiac|pulmonary|vascular/i.test(term)) {
+        explanation += '. This typically relates to the cardiovascular or respiratory system.';
+      } else if (/neural|nervous/i.test(term)) {
+        explanation += '. This typically relates to the nervous system.';
+      } else if (/renal|urinary/i.test(term)) {
+        explanation += '. This typically relates to the urinary system or kidneys.';
+      } else {
+        explanation += '. This may refer to a medical condition, procedure, anatomical structure, or diagnostic term.';
+      }
+      
       return {
-        explanation: `"${term}" appears to be a medical term. This may refer to a medical condition, procedure, anatomical structure, or diagnostic term.`,
+        explanation: explanation,
         synonyms: [],
         pronunciation: null,
         examples: []
