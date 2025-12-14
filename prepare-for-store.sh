@@ -40,3 +40,4 @@ echo "   2. Create store listing assets (screenshots, promotional images)"
 echo "   3. Create privacy policy"
 echo "   4. Upload to Chrome Web Store"
 
+

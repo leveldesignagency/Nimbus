@@ -11,10 +11,22 @@
   let currentSynonyms = [];
   let lastSelection = '';
   let manuallyClosed = false; // Track if user manually closed the tooltip
+  let modalSettings = {
+    placement: 'intuitive',
+    draggable: true,
+    showPhonetic: true,
+    showExamples: true
+  };
+  let isDragging = false;
 
-  // Initialize usage/pro status from storage
-  let proUnlocked = true; // Always unlocked - free extension
-  let usage = { used: 0, date: new Date().toISOString().slice(0,10), limit: 999999 }; // No limit
+  // Initialize subscription status
+  let subscriptionActive = false;
+  const SUBSCRIPTION_ID = 'nimbus_yearly_subscription';
+  let usage = { used: 0, date: new Date().toISOString().slice(0,10), limit: 999999 };
+  
+  // Check if extension is running in development mode (unpacked)
+  // In development, bypass subscription check for testing
+  const isDevelopmentMode = chrome.runtime.getManifest().update_url === undefined;
   
   function safeStorageGet(keys, callback) {
     try {
@@ -34,40 +46,82 @@
     }
   }
   
-  safeStorageGet(['pro','usage','limit'], (res) => {
-    if (chrome.runtime.lastError) return;
-    // Always unlocked - this is a free extension
-    proUnlocked = true;
-    if (res.usage) {
-      usage = res.usage;
-      // Ensure limit is always high
-      usage.limit = 999999;
-    } else {
-      usage.limit = 999999;
+  // Check subscription status
+  async function checkSubscription() {
+    // Bypass subscription check in development mode (unpacked extension)
+    const isDevelopmentMode = !chrome.runtime.getManifest().update_url;
+    if (isDevelopmentMode) {
+      console.log('Nimbus: Development mode detected - bypassing subscription check');
+      subscriptionActive = true;
+      return true;
     }
-    // Override any stored limit
-    usage.limit = 999999;
+    
+    try {
+      // If payments API not available (dev mode or not published), allow access
+      if (!chrome || !chrome.payments || !chrome.payments.getPurchases) {
+        console.warn('Nimbus: Payments API not available - allowing access (dev mode)');
+        subscriptionActive = true;
+        return true;
+      }
+      
+      return new Promise((resolve) => {
+        chrome.payments.getPurchases((purchases) => {
+          if (chrome.runtime.lastError) {
+            console.warn('Nimbus: Error checking purchases:', chrome.runtime.lastError);
+            resolve(false);
+            return;
+          }
+          
+          const hasActiveSubscription = purchases && purchases.some(
+            p => p.productId === SUBSCRIPTION_ID && p.purchaseState === 'PURCHASED'
+          );
+          
+          subscriptionActive = hasActiveSubscription || false;
+          console.log('Nimbus: Subscription status:', subscriptionActive);
+          resolve(subscriptionActive);
+        });
+      });
+    } catch (e) {
+      console.error('Nimbus: Error checking subscription:', e);
+      return false;
+    }
+  }
+
+  // Initialize subscription check on load
+  checkSubscription().then(() => {
+    safeStorageGet(['usage'], (res) => {
+      if (chrome.runtime.lastError) return;
+      if (res.usage) {
+        usage = res.usage;
+      }
+    });
   });
 
-      // Listen for storage changes
-      try {
-        if (chrome && chrome.storage && chrome.storage.onChanged) {
-          chrome.storage.onChanged.addListener((changes) => {
-            // Always unlocked - this is a free extension
-            proUnlocked = true;
-            if (changes.usage) {
-              usage = changes.usage.newValue || usage;
-              usage.limit = 999999; // Always override limit
-            }
-            // Always override any limit changes
-            usage.limit = 999999;
-          });
+  // Listen for storage changes
+  try {
+    if (chrome && chrome.storage && chrome.storage.onChanged) {
+      chrome.storage.onChanged.addListener((changes) => {
+        if (changes.usage) {
+          usage = changes.usage.newValue || usage;
         }
-      } catch (e) {
-        console.warn('CursorIQ: Could not set up storage listener', e);
-      }
+      });
+    }
+  } catch (e) {
+    console.warn('Nimbus: Could not set up storage listener', e);
+  }
 
-  console.log('CursorIQ: Content script loaded on', window.location.href);
+  // Listen for purchase updates
+  try {
+    if (chrome && chrome.payments && chrome.payments.onPurchasesUpdated) {
+      chrome.payments.onPurchasesUpdated.addListener((purchases) => {
+        checkSubscription();
+      });
+    }
+  } catch (e) {
+    console.warn('Nimbus: Purchase listener setup failed', e);
+  }
+
+  console.log('Nimbus: Content script loaded on', window.location.href);
 
   // Listen for text selection
   document.addEventListener('mouseup', handleSelection);
@@ -150,6 +204,14 @@
 
       const selectedText = selection.toString().trim();
       if (!selectedText || selectedText.length < MIN_WORD_LEN) {
+        return;
+      }
+
+      // Check if selection is an email address
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (emailRegex.test(selectedText)) {
+        // It's an email - show email modal instead
+        showEmailModal(selectedText, range);
         return;
       }
 
@@ -311,30 +373,33 @@
       return;
     }
 
-    // reset daily usage if date changed
-    const today = new Date().toISOString().slice(0,10);
-    if (usage.date !== today) { usage.used = 0; usage.date = today; }
+    // Check subscription before allowing word lookup
+    checkSubscription().then((isActive) => {
+      if (!isActive) {
+        // Show upgrade prompt
+        showUpgradePrompt(wordInfo);
+        return;
+      }
 
-    // No limits - this is a free extension
-    // Ensure limit is always high (override any stored value)
-    usage.limit = 999999;
-    proUnlocked = true;
+      // reset daily usage if date changed
+      const today = new Date().toISOString().slice(0,10);
+      if (usage.date !== today) { usage.used = 0; usage.date = today; }
 
-    // Track usage but don't block
-    usage.used += 1;
-    safeStorageSet({ usage });
+      // Track usage
+      usage.used += 1;
+      safeStorageSet({ usage });
 
-    currentWord = wordInfo.word;
-    showTooltip(wordInfo, "Thinking...", false, []); // Show loading state with empty synonyms
+      currentWord = wordInfo.word;
+      showTooltip(wordInfo, "Thinking...", false, []); // Show loading state with empty synonyms
 
-    console.log('CursorIQ: Sending message to background for:', wordInfo.word);
-    
-    try {
-      console.log('CursorIQ: About to call chrome.runtime.sendMessage');
-      console.log('CursorIQ: chrome.runtime exists:', !!chrome.runtime);
-      console.log('CursorIQ: chrome.runtime.id:', chrome.runtime?.id);
+      console.log('Nimbus: Sending message to background for:', wordInfo.word);
       
-      chrome.runtime.sendMessage({ type: 'explain', word: wordInfo.word, context: wordInfo.context }, (resp) => {
+      try {
+        console.log('Nimbus: About to call chrome.runtime.sendMessage');
+        console.log('Nimbus: chrome.runtime exists:', !!chrome.runtime);
+        console.log('Nimbus: chrome.runtime.id:', chrome.runtime?.id);
+        
+        chrome.runtime.sendMessage({ type: 'explain', word: wordInfo.word, context: wordInfo.context }, (resp) => {
         console.log('CursorIQ: ========== CALLBACK FIRED ==========');
         console.log('CursorIQ: Callback executed!');
         console.log('CursorIQ: Response received:', resp);
@@ -366,6 +431,7 @@
         }
         console.log('CursorIQ: ========== RECEIVED RESPONSE ==========');
         console.log('CursorIQ: Got explanation', resp.explanation?.substring(0, 50));
+        console.log('CursorIQ: isPerson:', resp.isPerson, 'personData:', resp.personData ? 'present' : 'missing');
         console.log('CursorIQ: Full response object:', resp);
         console.log('CursorIQ: Response keys:', Object.keys(resp || {}));
         console.log('CursorIQ: Got synonyms from response:', resp.synonyms);
@@ -397,21 +463,77 @@
         console.log('CursorIQ: About to call showTooltip with synonyms:', synonyms);
         console.log('CursorIQ: =======================================');
         
-        showTooltip(wordInfo, resp.explanation || "No explanation returned.", false, synonyms, resp.pronunciation, resp.examples || []);
-      });
-      
-      // Add a timeout to detect if callback never fires
-      setTimeout(() => {
-        console.warn('CursorIQ: WARNING - Callback may not have fired after 5 seconds');
-      }, 5000);
-    } catch (err) {
-      console.error('CursorIQ: Error sending message', err);
-      if (err.message && err.message.includes('Extension context invalidated')) {
-        showTooltip(wordInfo, "⚠️ Extension reloaded. Please refresh the page (F5).", true);
-      } else {
-        showTooltip(wordInfo, "Error: " + err.message, true);
+        // Check if this is person data
+        if (resp.isPerson && resp.personData) {
+          // Open hub and pass person data
+          openHubWithPersonData(resp.personData, wordInfo.word);
+        } else {
+          showTooltip(wordInfo, resp.explanation || "No explanation returned.", false, synonyms, resp.pronunciation, resp.examples || []);
+        }
+        });
+        
+        // Add a timeout to detect if callback never fires
+        setTimeout(() => {
+          console.warn('Nimbus: WARNING - Callback may not have fired after 5 seconds');
+        }, 5000);
+      } catch (err) {
+        console.error('Nimbus: Error sending message', err);
+        if (err.message && err.message.includes('Extension context invalidated')) {
+          showTooltip(wordInfo, "⚠️ Extension reloaded. Please refresh the page (F5).", true);
+        } else {
+          showTooltip(wordInfo, "Error: " + err.message, true);
+        }
       }
-    }
+    });
+  }
+
+  // Show upgrade prompt when subscription is not active
+  function showUpgradePrompt(wordInfo) {
+    const upgradeHtml = `
+      <div style="text-align: center; padding: 20px;">
+        <h3 style="margin: 0 0 10px 0; color: #1e3a8a;">Subscribe to Nimbus</h3>
+        <p style="margin: 0 0 15px 0; color: #666;">Unlock unlimited word definitions for just £4.99/year</p>
+        <button id="nimbus-upgrade-btn" style="background: #1e3a8a; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 14px; font-weight: 600;">
+          Subscribe Now - £4.99/year
+        </button>
+      </div>
+    `;
+    
+    showTooltip(wordInfo, upgradeHtml, false, []);
+    
+    // Add click handler for upgrade button
+    setTimeout(() => {
+      const upgradeBtn = document.getElementById('nimbus-upgrade-btn');
+      if (upgradeBtn) {
+        upgradeBtn.addEventListener('click', () => {
+          // Launch Chrome payment flow
+          if (chrome && chrome.payments && chrome.payments.purchase) {
+            chrome.payments.purchase({
+              sku: SUBSCRIPTION_ID
+            }, (response) => {
+              if (chrome.runtime.lastError) {
+                console.error('Nimbus: Purchase error:', chrome.runtime.lastError);
+                showTooltip(wordInfo, "Purchase failed. Please try again.", true);
+                return;
+              }
+              
+              if (response && response.responseCode === 0) {
+                // Purchase successful, check subscription again
+                checkSubscription().then(() => {
+                  // Retry the word lookup
+                  triggerExplain(wordInfo);
+                });
+              } else {
+                showTooltip(wordInfo, "Purchase cancelled or failed.", true);
+              }
+            });
+          } else {
+            // Fallback: open extension popup or options page
+            chrome.runtime.sendMessage({ action: 'openUpgrade' });
+          }
+        });
+      }
+    }, 100);
   }
 
   function showTooltip(wordInfo, text, isWarning=false, synonyms=[], pronunciation=null, examples=[]) {
@@ -419,10 +541,98 @@
     manuallyClosed = false;
     removeTooltip();
     currentSynonyms = synonyms;
+    
+    // Load settings (refresh in case they changed)
+    loadModalSettings();
 
     tooltipEl = document.createElement('div');
     tooltipEl.className = 'cursoriq-tooltip';
     if (isWarning) tooltipEl.classList.add('warning');
+    
+    // Make entire modal draggable if enabled
+    if (modalSettings.draggable || modalSettings.placement === 'custom') {
+      tooltipEl.style.cursor = 'move';
+      
+      let startX, startY, initialX, initialY;
+      
+      // Make modal draggable by clicking anywhere on it (but not on interactive elements)
+      tooltipEl.addEventListener('mousedown', (e) => {
+        // Don't start drag if clicking on buttons, links, or interactive elements
+        if (e.target.tagName === 'BUTTON' || 
+            e.target.tagName === 'A' || 
+            e.target.closest('button') || 
+            e.target.closest('a') ||
+            e.target.closest('.cursoriq-synonym-tag') ||
+            e.target.closest('.cursoriq-explanation') ||
+            e.target.closest('.cursoriq-example-item') ||
+            e.target.closest('.cursoriq-examples-container')) {
+          return;
+        }
+        
+        // Don't start drag if user is selecting text
+        const selection = window.getSelection();
+        if (selection && selection.toString().length > 0) {
+          return;
+        }
+        
+        e.preventDefault();
+        e.stopPropagation();
+        isDragging = true;
+        tooltipEl.style.cursor = 'grabbing';
+        
+        const rect = tooltipEl.getBoundingClientRect();
+        startX = e.clientX;
+        startY = e.clientY;
+        initialX = rect.left;
+        initialY = rect.top;
+        
+        document.addEventListener('mousemove', handleDrag);
+        document.addEventListener('mouseup', stopDrag);
+      });
+      
+      function handleDrag(e) {
+        if (!isDragging) return;
+        e.preventDefault();
+        
+        const deltaX = e.clientX - startX;
+        const deltaY = e.clientY - startY;
+        
+        const newX = initialX + deltaX;
+        const newY = initialY + deltaY;
+        
+        // Keep modal within viewport
+        const maxX = window.innerWidth - tooltipEl.offsetWidth;
+        const maxY = window.innerHeight - tooltipEl.offsetHeight;
+        
+        const finalX = Math.max(0, Math.min(newX, maxX));
+        const finalY = Math.max(0, Math.min(newY, maxY));
+        
+        tooltipEl.style.left = finalX + 'px';
+        tooltipEl.style.top = finalY + 'px';
+        tooltipEl.style.position = 'fixed';
+        tooltipEl.style.transform = 'none';
+        tooltipEl.style.margin = '0';
+      }
+      
+      function stopDrag() {
+        isDragging = false;
+        tooltipEl.style.cursor = 'move';
+        document.removeEventListener('mousemove', handleDrag);
+        document.removeEventListener('mouseup', stopDrag);
+        
+        // Save position only if placement is set to 'custom'
+        // This way, dragging only affects position when user explicitly wants custom placement
+        if (tooltipEl && tooltipEl.style.position === 'fixed' && modalSettings.placement === 'custom') {
+          const savedPos = {
+            x: parseInt(tooltipEl.style.left) || 0,
+            y: parseInt(tooltipEl.style.top) || 0
+          };
+          chrome.storage.local.set({ 
+            modalPosition: savedPos
+          });
+        }
+      }
+    }
 
     // Close button - positioned in top right corner, halfway out
     const closeBtn = document.createElement('button');
@@ -468,13 +678,87 @@
     wordSpan.textContent = currentWord || wordInfo.word;
     wordWrapper.appendChild(wordSpan);
     
-    // Phonetic breakdown (pronunciation)
-    const phoneticSpan = document.createElement('span');
-    phoneticSpan.className = 'cursoriq-phonetic';
-    phoneticSpan.textContent = pronunciation || ''; // Set from parameter or response
-    wordWrapper.appendChild(phoneticSpan);
+    // Phonetic breakdown (pronunciation) - only show if setting enabled
+    if (modalSettings.showPhonetic && pronunciation) {
+      const phoneticSpan = document.createElement('span');
+      phoneticSpan.className = 'cursoriq-phonetic';
+      phoneticSpan.textContent = pronunciation;
+      wordWrapper.appendChild(phoneticSpan);
+    }
     
     wordContainer.appendChild(wordWrapper);
+    
+    // Text-to-speech button
+    const ttsBtn = document.createElement('button');
+    ttsBtn.className = 'cursoriq-tts-btn';
+    ttsBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"></path></svg>';
+    ttsBtn.setAttribute('aria-label', 'Pronounce word');
+    ttsBtn.setAttribute('title', 'Pronounce word');
+    ttsBtn.style.cssText = 'position: absolute; top: 50%; right: 50px; transform: translateY(-50%); width: 28px; height: 28px; padding: 0; background: rgba(241, 245, 249, 0.8); border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 6px; color: #64748b; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.7; transition: all 0.2s ease; z-index: 10;';
+    ttsBtn.addEventListener('mouseenter', () => {
+      ttsBtn.style.opacity = '1';
+      ttsBtn.style.background = 'rgba(241, 245, 249, 1)';
+      ttsBtn.style.borderColor = '#cbd5e1';
+    });
+    ttsBtn.addEventListener('mouseleave', () => {
+      if (!ttsBtn.classList.contains('playing')) {
+        ttsBtn.style.opacity = '0.7';
+        ttsBtn.style.background = 'rgba(241, 245, 249, 0.8)';
+        ttsBtn.style.borderColor = 'rgba(226, 232, 240, 0.8)';
+      }
+    });
+    ttsBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      
+      if (ttsBtn.classList.contains('playing')) {
+        if (window.speechSynthesis) {
+          window.speechSynthesis.cancel();
+        }
+        ttsBtn.classList.remove('playing');
+        ttsBtn.style.color = '#64748b';
+        return;
+      }
+      
+      ttsBtn.classList.add('playing');
+      ttsBtn.style.color = '#1e3a8a';
+      ttsBtn.style.opacity = '1';
+      
+      const wordToSpeak = currentWord || wordInfo.word;
+      
+      if ('speechSynthesis' in window) {
+        const utterance = new SpeechSynthesisUtterance(wordToSpeak);
+        
+        chrome.storage.local.get(['settings'], (result) => {
+          const lang = result.settings?.dictionaryLanguage || 'en';
+          const langMap = {
+            'en': 'en-US', 'es': 'es-ES', 'fr': 'fr-FR', 'de': 'de-DE', 'it': 'it-IT',
+            'pt': 'pt-PT', 'ru': 'ru-RU', 'ja': 'ja-JP', 'zh': 'zh-CN', 'ko': 'ko-KR',
+            'ar': 'ar-SA', 'hi': 'hi-IN', 'nl': 'nl-NL', 'sv': 'sv-SE', 'pl': 'pl-PL'
+          };
+          utterance.lang = langMap[lang] || 'en-US';
+          
+          utterance.onend = () => {
+            ttsBtn.classList.remove('playing');
+            ttsBtn.style.color = '#64748b';
+            ttsBtn.style.opacity = '0.7';
+          };
+          
+          utterance.onerror = () => {
+            ttsBtn.classList.remove('playing');
+            ttsBtn.style.color = '#64748b';
+            ttsBtn.style.opacity = '0.7';
+          };
+          
+          window.speechSynthesis.speak(utterance);
+        });
+      } else {
+        console.warn('CursorIQ: Text-to-speech not supported');
+        ttsBtn.classList.remove('playing');
+        ttsBtn.style.color = '#64748b';
+      }
+    });
+    wordContainer.appendChild(ttsBtn);
     
     // Copy button
     const copyBtn = document.createElement('button');
@@ -518,14 +802,86 @@
     header.appendChild(wordContainer);
     tooltipEl.appendChild(header);
 
-    // Main explanation text
+    // Main explanation text container
+    const explanationContainer = document.createElement('div');
+    explanationContainer.style.position = 'relative';
+    explanationContainer.style.padding = '0 18px 16px';
+    
     const textDiv = document.createElement('div');
     textDiv.className = 'cursoriq-explanation';
     textDiv.textContent = text;
-    tooltipEl.appendChild(textDiv);
+    textDiv.style.userSelect = 'text';
+    textDiv.style.webkitUserSelect = 'text';
+    textDiv.style.mozUserSelect = 'text';
+    textDiv.style.msUserSelect = 'text';
+    textDiv.style.cursor = 'text';
+    textDiv.style.padding = '0 36px 0 0'; // Add right padding to prevent text from going under copy button
+    textDiv.style.margin = '0';
+    explanationContainer.appendChild(textDiv);
+    
+    // Add copy button for explanation text
+    const copyExplanationBtn = document.createElement('button');
+    copyExplanationBtn.className = 'cursoriq-copy-explanation-btn';
+    copyExplanationBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path></svg>';
+    copyExplanationBtn.setAttribute('aria-label', 'Copy explanation');
+    copyExplanationBtn.setAttribute('title', 'Copy explanation');
+    copyExplanationBtn.style.cssText = 'position: absolute; top: 0; right: 18px; width: 24px; height: 24px; padding: 0; background: rgba(241, 245, 249, 0.8); border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 6px; color: #64748b; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.7; transition: all 0.2s ease; z-index: 10;';
+    copyExplanationBtn.addEventListener('mouseenter', () => {
+      copyExplanationBtn.style.opacity = '1';
+      copyExplanationBtn.style.background = 'rgba(241, 245, 249, 1)';
+      copyExplanationBtn.style.borderColor = '#cbd5e1';
+    });
+    copyExplanationBtn.addEventListener('mouseleave', () => {
+      if (!copyExplanationBtn.classList.contains('copied')) {
+        copyExplanationBtn.style.opacity = '0.7';
+        copyExplanationBtn.style.background = 'rgba(241, 245, 249, 0.8)';
+        copyExplanationBtn.style.borderColor = 'rgba(226, 232, 240, 0.8)';
+      }
+    });
+      copyExplanationBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      
+      copyExplanationBtn.classList.add('copied');
+      copyExplanationBtn.style.color = '#10b981';
+      copyExplanationBtn.style.opacity = '1';
+      
+      // Get current text from the explanation div by querying the DOM
+      const explanationDivCurrent = tooltipEl.querySelector('.cursoriq-explanation');
+      const currentText = explanationDivCurrent ? explanationDivCurrent.textContent.trim() : text;
+      
+      console.log('CursorIQ: Copying explanation text:', currentText.substring(0, 50) + '...');
+      
+      try {
+        await navigator.clipboard.writeText(currentText);
+      } catch (err) {
+        console.error('CursorIQ: Failed to copy explanation', err);
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = currentText;
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+          document.execCommand('copy');
+        } catch (e) {
+          console.error('CursorIQ: Fallback copy failed', e);
+        }
+        document.body.removeChild(textArea);
+      }
+      
+      setTimeout(() => {
+        copyExplanationBtn.classList.remove('copied');
+        copyExplanationBtn.style.color = '#64748b';
+        copyExplanationBtn.style.opacity = '0.7';
+      }, 2000);
+    });
+    explanationContainer.appendChild(copyExplanationBtn);
+    tooltipEl.appendChild(explanationContainer);
 
-    // Examples section (if available)
-    if (examples && Array.isArray(examples) && examples.length > 0) {
+    // Examples section (if available and setting enabled)
+    if (modalSettings.showExamples && examples && Array.isArray(examples) && examples.length > 0) {
       const examplesDiv = document.createElement('div');
       examplesDiv.className = 'cursoriq-examples-container';
       const examplesLabel = document.createElement('div');
@@ -610,31 +966,208 @@
 
     document.body.appendChild(tooltipEl);
 
-    // Position tooltip near selection
-    let rect = null;
-    try { 
-      if (wordInfo && wordInfo.range) {
-        rect = wordInfo.range.getBoundingClientRect();
-      }
-    } catch(e){ 
-      rect = null;
-    }
+    // Position tooltip based on settings
+    positionTooltip(wordInfo);
+  }
+  
+  // Show email modal (simplified version for email addresses)
+  function showEmailModal(email, range) {
+    manuallyClosed = false;
+    removeTooltip();
     
-    if (!rect) {
-      // Fallback to selection
+    // Load settings for positioning
+    loadModalSettings();
+    
+    tooltipEl = document.createElement('div');
+    tooltipEl.className = 'cursoriq-tooltip cursoriq-email-modal';
+    
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'cursoriq-close-btn';
+    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      manuallyClosed = true;
+      if (selectionTimer) {
+        clearTimeout(selectionTimer);
+        selectionTimer = null;
+      }
       const selection = window.getSelection();
-      if (selection && selection.rangeCount > 0) {
-        try {
-          rect = selection.getRangeAt(0).getBoundingClientRect();
-        } catch(e) {}
+      if (selection) {
+        selection.removeAllRanges();
       }
+      removeTooltip();
+    });
+    tooltipEl.appendChild(closeBtn);
+    
+    // Header with email
+    const header = document.createElement('div');
+    header.className = 'cursoriq-header';
+    
+    const emailContainer = document.createElement('div');
+    emailContainer.style.display = 'flex';
+    emailContainer.style.alignItems = 'center';
+    emailContainer.style.gap = '8px';
+    
+    const emailSpan = document.createElement('span');
+    emailSpan.className = 'cursoriq-word';
+    emailSpan.textContent = email;
+    emailContainer.appendChild(emailSpan);
+    
+    // Copy button
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'cursoriq-copy-btn';
+    copyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    copyBtn.setAttribute('aria-label', 'Copy email');
+    copyBtn.setAttribute('title', 'Copy email');
+    copyBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      try {
+        await navigator.clipboard.writeText(email);
+        copyBtn.classList.add('copied');
+        copyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+      } catch (err) {
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = email;
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+          document.execCommand('copy');
+        } catch (e) {
+          console.error('CursorIQ: Fallback copy failed', e);
+        }
+        document.body.removeChild(textArea);
+      }
+      setTimeout(() => {
+        copyBtn.classList.remove('copied');
+        copyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+      }, 300);
+    });
+    emailContainer.appendChild(copyBtn);
+    
+    header.appendChild(emailContainer);
+    tooltipEl.appendChild(header);
+    
+    // Action buttons container - bottom right icons
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'cursoriq-actions';
+    
+    // Search button - icon only
+    const searchBtn = document.createElement('button');
+    searchBtn.className = 'cursoriq-search-btn-icon';
+    searchBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>';
+    searchBtn.setAttribute('aria-label', 'Search email');
+    searchBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(email)}`;
+      window.open(searchUrl, '_blank');
+    });
+    actionsDiv.appendChild(searchBtn);
+    
+    tooltipEl.appendChild(actionsDiv);
+    
+    // Append to body
+    document.body.appendChild(tooltipEl);
+    
+    // Position the email modal
+    positionEmailModal(email, range);
+  }
+  
+  // Position email modal (similar to positionTooltip but simpler)
+  function positionEmailModal(email, range) {
+    if (!tooltipEl || !range) return;
+    
+    const rect = range.getBoundingClientRect();
+    const tooltipRect = tooltipEl.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    
+    let left, top;
+    
+    // Simple positioning - prefer above, then below, then center
+    const spaceAbove = rect.top;
+    const spaceBelow = viewportHeight - rect.bottom;
+    
+    if (spaceAbove > tooltipRect.height + 20) {
+      // Position above
+      top = rect.top - tooltipRect.height - 12;
+      left = rect.left + (rect.width / 2) - (tooltipRect.width / 2);
+    } else if (spaceBelow > tooltipRect.height + 20) {
+      // Position below
+      top = rect.bottom + 12;
+      left = rect.left + (rect.width / 2) - (tooltipRect.width / 2);
+    } else {
+      // Center on screen
+      left = (viewportWidth / 2) - (tooltipRect.width / 2);
+      top = (viewportHeight / 2) - (tooltipRect.height / 2);
     }
     
-    if (!rect) {
-      rect = { left: 100, top: 100, height: 20, width: 40 };
-    }
+    // Keep within viewport
+    left = Math.max(12, Math.min(left, viewportWidth - tooltipRect.width - 12));
+    top = Math.max(12, Math.min(top, viewportHeight - tooltipRect.height - 12));
     
-    // Position tooltip below selection, centered horizontally
+    tooltipEl.style.left = left + 'px';
+    tooltipEl.style.top = top + 'px';
+    tooltipEl.style.position = 'fixed';
+    tooltipEl.style.display = 'block';
+    tooltipEl.style.visibility = 'visible';
+    tooltipEl.style.opacity = '1';
+  }
+  
+  // Position tooltip based on placement setting
+  function positionTooltip(wordInfo) {
+    // Only use saved position if placement is explicitly set to 'custom'
+    // Otherwise, always use placement-based positioning for new word selections
+    chrome.storage.local.get(['modalPosition'], (result) => {
+      // Only use saved position if placement is 'custom'
+      if (modalSettings.placement === 'custom' && result.modalPosition && result.modalPosition.x && result.modalPosition.y) {
+        tooltipEl.style.position = 'fixed';
+        tooltipEl.style.left = result.modalPosition.x + 'px';
+        tooltipEl.style.top = result.modalPosition.y + 'px';
+        tooltipEl.style.transform = 'none';
+        tooltipEl.style.margin = '0';
+        tooltipEl.style.zIndex = '2147483647';
+        tooltipEl.style.display = 'block';
+        tooltipEl.style.visibility = 'visible';
+        tooltipEl.style.opacity = '1';
+        return; // Skip normal positioning if using saved position
+      }
+      
+      // Normal placement-based positioning (always use for non-custom placements)
+      let rect = null;
+      try { 
+        if (wordInfo && wordInfo.range) {
+          rect = wordInfo.range.getBoundingClientRect();
+        }
+      } catch(e){ 
+        rect = null;
+      }
+      
+      if (!rect) {
+        // Fallback to selection
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount > 0) {
+          try {
+            rect = selection.getRangeAt(0).getBoundingClientRect();
+          } catch(e) {}
+        }
+      }
+      
+      if (!rect) {
+        rect = { left: 100, top: 100, height: 20, width: 40 };
+      }
+      
+      performPlacementPositioning(wordInfo, rect);
+    });
+  }
+  
+  function performPlacementPositioning(wordInfo, rect) {
     const padding = 12;
     const tooltipWidth = 420; // max-width from CSS
     const tooltipHeight = 250; // estimated height
@@ -642,9 +1175,52 @@
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
     
-    // Calculate position relative to viewport (not scroll)
-    let left = rect.left + (rect.width / 2) - (tooltipWidth / 2);
-    let top = rect.bottom + padding;
+    let left, top;
+    
+    // Calculate position based on placement setting
+    switch (modalSettings.placement) {
+      case 'top':
+        left = rect.left + (rect.width / 2) - (tooltipWidth / 2);
+        top = rect.top - tooltipHeight - padding;
+        break;
+      case 'bottom':
+        left = rect.left + (rect.width / 2) - (tooltipWidth / 2);
+        top = rect.bottom + padding;
+        break;
+      case 'left':
+        left = rect.left - tooltipWidth - padding;
+        top = rect.top + (rect.height / 2) - (tooltipHeight / 2);
+        break;
+      case 'right':
+        left = rect.right + padding;
+        top = rect.top + (rect.height / 2) - (tooltipHeight / 2);
+        break;
+      case 'center':
+        left = (viewportWidth / 2) - (tooltipWidth / 2);
+        top = (viewportHeight / 2) - (tooltipHeight / 2);
+        break;
+      case 'custom':
+        // For custom, default to center - user can drag to preferred position
+        // Saved position will be loaded in positionTooltip function
+        left = (viewportWidth / 2) - (tooltipWidth / 2);
+        top = (viewportHeight / 2) - (tooltipHeight / 2);
+        break;
+      case 'intuitive':
+      default:
+        // Default behavior: below selection, centered horizontally
+        left = rect.left + (rect.width / 2) - (tooltipWidth / 2);
+        top = rect.bottom + padding;
+        
+        // If no room below, put it above
+        if (top + tooltipHeight > viewportHeight - 10) {
+          top = rect.top - tooltipHeight - padding;
+          if (top < 10) {
+            // Still no room, center vertically
+            top = (viewportHeight / 2) - (tooltipHeight / 2);
+          }
+        }
+        break;
+    }
     
     // Keep tooltip on screen - adjust if off-screen
     // Horizontal positioning - ensure it's visible
@@ -654,19 +1230,12 @@
       left = viewportWidth - tooltipWidth - 10;
     }
     
-    // Vertical positioning - try below first, then above if no room
-    if (top + tooltipHeight > viewportHeight - 10) {
-      // Not enough room below, put it above
-      top = rect.top - tooltipHeight - padding;
-      if (top < 10) {
-        // Still no room, center vertically
-        top = (viewportHeight / 2) - (tooltipHeight / 2);
-      }
+    // Vertical positioning - ensure it's visible
+    if (top < 10) {
+      top = 10;
+    } else if (top + tooltipHeight > viewportHeight - 10) {
+      top = viewportHeight - tooltipHeight - 10;
     }
-    
-    // Ensure minimum distance from edges
-    if (top < 10) top = 10;
-    if (left < 10) left = 10;
     
     // Use fixed positioning (relative to viewport, not document)
     tooltipEl.style.position = 'fixed';
@@ -949,6 +1518,11 @@
     const explanationDiv = tooltipEl.querySelector('.cursoriq-explanation');
     if (explanationDiv) {
       explanationDiv.textContent = 'Loading explanation...';
+      // Update copy button text reference if it exists
+      const copyBtn = tooltipEl.querySelector('.cursoriq-copy-explanation-btn');
+      if (copyBtn) {
+        copyBtn.dataset.textToCopy = 'Loading explanation...';
+      }
     }
 
     // Remove existing synonyms section
@@ -968,6 +1542,10 @@
       if (!chrome || !chrome.runtime || !chrome.runtime.id) {
         if (explanationDiv) {
           explanationDiv.textContent = 'Extension context invalidated. Please refresh the page.';
+          const copyBtn = tooltipEl.querySelector('.cursoriq-copy-explanation-btn');
+          if (copyBtn) {
+            copyBtn.dataset.textToCopy = 'Extension context invalidated. Please refresh the page.';
+          }
         }
         return;
       }
@@ -975,14 +1553,25 @@
         if (chrome.runtime.lastError) {
           console.error('CursorIQ: Error fetching synonym explanation:', chrome.runtime.lastError);
           if (explanationDiv) {
-            explanationDiv.textContent = 'Error: ' + chrome.runtime.lastError.message;
+            const errorText = 'Error: ' + chrome.runtime.lastError.message;
+            explanationDiv.textContent = errorText;
+            const copyBtn = tooltipEl.querySelector('.cursoriq-copy-explanation-btn');
+            if (copyBtn) {
+              copyBtn.dataset.textToCopy = errorText;
+            }
           }
           return;
         }
         console.log('CursorIQ: Got response for synonym:', resp);
         if (resp && !resp.error) {
           if (explanationDiv) {
-            explanationDiv.textContent = resp.explanation || 'No explanation available.';
+            const explanationText = resp.explanation || 'No explanation available.';
+            explanationDiv.textContent = explanationText;
+            // Update copy button text reference
+            const copyBtn = tooltipEl.querySelector('.cursoriq-copy-explanation-btn');
+            if (copyBtn) {
+              copyBtn.dataset.textToCopy = explanationText;
+            }
           }
           // Add synonyms if available
           const newSynonyms = Array.isArray(resp.synonyms) ? resp.synonyms : [];
@@ -994,13 +1583,24 @@
           }
         } else {
           if (explanationDiv) {
-            explanationDiv.textContent = resp?.error || 'Error loading explanation.';
+            const errorText = resp?.error || 'Error loading explanation.';
+            explanationDiv.textContent = errorText;
+            // Update copy button text reference
+            const copyBtn = tooltipEl.querySelector('.cursoriq-copy-explanation-btn');
+            if (copyBtn) {
+              copyBtn.dataset.textToCopy = errorText;
+            }
           }
         }
       });
     } catch (e) {
       if (explanationDiv) {
-        explanationDiv.textContent = 'Error: ' + (e.message || 'Unknown error');
+        const errorText = 'Error: ' + (e.message || 'Unknown error');
+        explanationDiv.textContent = errorText;
+        const copyBtn = tooltipEl.querySelector('.cursoriq-copy-explanation-btn');
+        if (copyBtn) {
+          copyBtn.dataset.textToCopy = errorText;
+        }
       }
     }
   }
@@ -1080,6 +1680,320 @@
     });
   } else {
     console.log('CursorIQ: DOM already ready');
+  }
+  
+  // Load modal settings from storage
+  function loadModalSettings() {
+    chrome.storage.local.get(['settings'], (result) => {
+      if (result.settings) {
+        modalSettings.placement = result.settings.modalPlacement || 'intuitive';
+        modalSettings.draggable = result.settings.modalDraggable !== false;
+        modalSettings.showPhonetic = result.settings.showPhonetic !== false;
+        modalSettings.showExamples = result.settings.showExamples !== false;
+      }
+    });
+  }
+  
+  // Listen for settings updates from popup
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === 'settingsUpdated' && message.settings) {
+      modalSettings.placement = message.settings.modalPlacement || 'intuitive';
+      modalSettings.draggable = message.settings.modalDraggable !== false;
+      modalSettings.showPhonetic = message.settings.showPhonetic !== false;
+      modalSettings.showExamples = message.settings.showExamples !== false;
+      console.log('Nimbus: Settings updated', modalSettings);
+    }
+  });
+  
+  // Load settings on initialization
+  loadModalSettings();
+
+  // Open hub with person data
+  function openHubWithPersonData(personData, searchTerm) {
+    console.log('Nimbus: Opening hub with person data for:', searchTerm);
+    console.log('Nimbus: Person data image:', personData.image ? 'YES - ' + personData.image : 'NO IMAGE');
+    console.log('Nimbus: Full personData:', personData);
+    
+    // Store person data in chrome.storage for popup to retrieve
+    chrome.storage.local.set({
+      pendingSearch: {
+        type: 'person',
+        term: searchTerm,
+        data: personData
+      }
+    }, () => {
+      // Try to open the popup - note: this may not work if popup is already open
+      // The popup will check for pendingSearch on load
+      chrome.runtime.sendMessage({
+        action: 'openPopup'
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.log('Nimbus: Could not open popup automatically, user will need to open manually');
+        }
+      });
+    });
+  }
+
+  // Show person bio tooltip with image and details (kept for backward compatibility)
+  function showPersonTooltip(wordInfo, personData) {
+    // Remove any existing tooltip
+    removeTooltip();
+
+    tooltipEl = document.createElement('div');
+    tooltipEl.className = 'cursoriq-tooltip cursoriq-person-tooltip';
+    tooltipEl.style.cssText = 'max-height: 85vh; display: flex; flex-direction: column; overflow: hidden;';
+    
+    // Make modal draggable if enabled
+    if (modalSettings.draggable || modalSettings.placement === 'custom') {
+      tooltipEl.style.cursor = 'move';
+      let startX, startY, initialX, initialY;
+      
+      tooltipEl.addEventListener('mousedown', (e) => {
+        if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A' || e.target.closest('button') || e.target.closest('a')) {
+          return;
+        }
+        const selection = window.getSelection();
+        if (selection && selection.toString().length > 0) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        isDragging = true;
+        tooltipEl.style.cursor = 'grabbing';
+        const rect = tooltipEl.getBoundingClientRect();
+        startX = e.clientX;
+        startY = e.clientY;
+        initialX = rect.left;
+        initialY = rect.top;
+        document.addEventListener('mousemove', handleDrag);
+        document.addEventListener('mouseup', stopDrag);
+      });
+      
+      function handleDrag(e) {
+        if (!isDragging) return;
+        e.preventDefault();
+        const deltaX = e.clientX - startX;
+        const deltaY = e.clientY - startY;
+        const newX = initialX + deltaX;
+        const newY = initialY + deltaY;
+        const maxX = window.innerWidth - tooltipEl.offsetWidth;
+        const maxY = window.innerHeight - tooltipEl.offsetHeight;
+        const finalX = Math.max(0, Math.min(newX, maxX));
+        const finalY = Math.max(0, Math.min(newY, maxY));
+        tooltipEl.style.left = finalX + 'px';
+        tooltipEl.style.top = finalY + 'px';
+        tooltipEl.style.position = 'fixed';
+        tooltipEl.style.transform = 'none';
+        tooltipEl.style.margin = '0';
+      }
+      
+      function stopDrag() {
+        isDragging = false;
+        tooltipEl.style.cursor = 'move';
+        document.removeEventListener('mousemove', handleDrag);
+        document.removeEventListener('mouseup', stopDrag);
+      }
+    }
+
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'cursoriq-close-btn';
+    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      manuallyClosed = true;
+      if (selectionTimer) {
+        clearTimeout(selectionTimer);
+        selectionTimer = null;
+      }
+      const selection = window.getSelection();
+      if (selection) {
+        selection.removeAllRanges();
+      }
+      removeTooltip();
+    });
+    tooltipEl.appendChild(closeBtn);
+
+    // Person image - fixed at top
+    if (personData.image) {
+      const imageContainer = document.createElement('div');
+      imageContainer.style.cssText = 'width: 100%; max-height: 200px; overflow: hidden; border-radius: 8px 8px 0 0; background: #f1f5f9; display: flex; align-items: center; justify-content: center; flex-shrink: 0;';
+      const img = document.createElement('img');
+      img.src = personData.image;
+      img.alt = personData.name;
+      img.style.cssText = 'width: 100%; height: auto; max-height: 200px; object-fit: cover; display: block;';
+      img.onerror = () => {
+        imageContainer.style.display = 'none';
+      };
+      imageContainer.appendChild(img);
+      tooltipEl.appendChild(imageContainer);
+    }
+
+    // Person header with name - fixed
+    const header = document.createElement('div');
+    header.className = 'cursoriq-header';
+    header.style.cssText = 'padding: 16px 18px; border-bottom: 1px solid rgba(226, 232, 240, 0.8); flex-shrink: 0;';
+    
+    const nameDiv = document.createElement('div');
+    nameDiv.style.cssText = 'display: flex; align-items: center; justify-content: space-between;';
+    
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'cursoriq-word';
+    nameSpan.textContent = personData.name;
+    nameSpan.style.cssText = 'font-size: 20px; font-weight: 700; color: #1e3a8a;';
+    nameDiv.appendChild(nameSpan);
+    
+    // Copy button for name
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'cursoriq-copy-btn';
+    copyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    copyBtn.setAttribute('aria-label', 'Copy name');
+    copyBtn.setAttribute('title', 'Copy name');
+    copyBtn.style.cssText = 'width: 28px; height: 28px; padding: 0; background: rgba(241, 245, 249, 0.8); border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 6px; color: #64748b; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.7; transition: all 0.2s ease;';
+    copyBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      copyBtn.classList.add('copied');
+      try {
+        await navigator.clipboard.writeText(personData.name);
+      } catch (err) {
+        console.error('Failed to copy name', err);
+      }
+      setTimeout(() => copyBtn.classList.remove('copied'), 300);
+    });
+    nameDiv.appendChild(copyBtn);
+    header.appendChild(nameDiv);
+    tooltipEl.appendChild(header);
+
+    // Person details container - scrollable
+    const detailsContainer = document.createElement('div');
+    detailsContainer.style.cssText = 'padding: 16px 18px; overflow-y: auto; overflow-x: hidden; flex: 1; min-height: 0;';
+    
+    // Bio/Summary
+    if (personData.bio || personData.summary) {
+      const bioDiv = document.createElement('div');
+      bioDiv.className = 'cursoriq-explanation';
+      bioDiv.textContent = personData.bio || personData.summary;
+      bioDiv.style.cssText = 'margin-bottom: 16px; line-height: 1.6; color: #334155;';
+      detailsContainer.appendChild(bioDiv);
+    }
+
+    // Person metadata
+    const metadataDiv = document.createElement('div');
+    metadataDiv.style.cssText = 'display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: #64748b; margin-bottom: 16px;';
+    
+    if (personData.birthDate) {
+      const birthDiv = document.createElement('div');
+      birthDiv.innerHTML = `<strong style="color: #1e3a8a;">Born:</strong> ${personData.birthDate}`;
+      metadataDiv.appendChild(birthDiv);
+    }
+    
+    if (personData.occupation) {
+      const occDiv = document.createElement('div');
+      occDiv.innerHTML = `<strong style="color: #1e3a8a;">Occupation:</strong> ${personData.occupation}`;
+      metadataDiv.appendChild(occDiv);
+    }
+    
+    if (personData.nationality) {
+      const natDiv = document.createElement('div');
+      natDiv.innerHTML = `<strong style="color: #1e3a8a;">Nationality:</strong> ${personData.nationality}`;
+      metadataDiv.appendChild(natDiv);
+    }
+    
+    if (metadataDiv.children.length > 0) {
+      detailsContainer.appendChild(metadataDiv);
+    }
+
+    // Wikipedia link
+    if (personData.wikipediaUrl) {
+      const wikiLink = document.createElement('a');
+      wikiLink.href = personData.wikipediaUrl;
+      wikiLink.target = '_blank';
+      wikiLink.rel = 'noopener noreferrer';
+      wikiLink.textContent = 'Read more on Wikipedia';
+      wikiLink.style.cssText = 'display: inline-block; margin-bottom: 16px; color: #1e3a8a; text-decoration: none; font-size: 13px; font-weight: 600; border-bottom: 1px solid #1e3a8a;';
+      wikiLink.addEventListener('click', (e) => {
+        e.stopPropagation();
+      });
+      detailsContainer.appendChild(wikiLink);
+    }
+
+    // Recent News section
+    if (personData.newsArticles && personData.newsArticles.length > 0) {
+      const newsSection = document.createElement('div');
+      newsSection.style.cssText = 'margin-top: 20px; padding-top: 20px; border-top: 1px solid rgba(226, 232, 240, 0.8);';
+      
+      const newsTitle = document.createElement('div');
+      newsTitle.style.cssText = 'font-size: 16px; font-weight: 700; color: #1e3a8a; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;';
+      newsTitle.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"></path><rect x="11" y="7" width="10" height="5" rx="1"></rect><rect x="11" y="14" width="7" height="5" rx="1"></rect></svg> Recent News';
+      newsSection.appendChild(newsTitle);
+      
+      const newsList = document.createElement('div');
+      newsList.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
+      
+      personData.newsArticles.forEach((article, index) => {
+        const newsItem = document.createElement('div');
+        newsItem.style.cssText = 'padding: 12px; background: rgba(241, 245, 249, 0.5); border-radius: 8px; border: 1px solid rgba(226, 232, 240, 0.5); transition: all 0.2s ease; cursor: pointer;';
+        
+        newsItem.addEventListener('mouseenter', () => {
+          newsItem.style.background = 'rgba(241, 245, 249, 0.8)';
+          newsItem.style.borderColor = 'rgba(30, 58, 138, 0.3)';
+          newsItem.style.transform = 'translateY(-1px)';
+        });
+        
+        newsItem.addEventListener('mouseleave', () => {
+          newsItem.style.background = 'rgba(241, 245, 249, 0.5)';
+          newsItem.style.borderColor = 'rgba(226, 232, 240, 0.5)';
+          newsItem.style.transform = 'translateY(0)';
+        });
+        
+        const articleTitle = document.createElement('div');
+        articleTitle.style.cssText = 'font-weight: 600; color: #1e3a8a; font-size: 14px; margin-bottom: 6px; line-height: 1.4;';
+        articleTitle.textContent = article.title;
+        newsItem.appendChild(articleTitle);
+        
+        if (article.description) {
+          const articleDesc = document.createElement('div');
+          articleDesc.style.cssText = 'font-size: 12px; color: #64748b; line-height: 1.5; margin-bottom: 8px;';
+          articleDesc.textContent = article.description;
+          newsItem.appendChild(articleDesc);
+        }
+        
+        if (article.date) {
+          const articleDate = document.createElement('div');
+          articleDate.style.cssText = 'font-size: 11px; color: #94a3b8; margin-top: 6px;';
+          // Format date
+          try {
+            const date = new Date(article.date);
+            articleDate.textContent = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+          } catch (e) {
+            articleDate.textContent = article.date;
+          }
+          newsItem.appendChild(articleDate);
+        }
+        
+        newsItem.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (article.link) {
+            window.open(article.link, '_blank', 'noopener,noreferrer');
+          }
+        });
+        
+        newsList.appendChild(newsItem);
+      });
+      
+      newsSection.appendChild(newsList);
+      detailsContainer.appendChild(newsSection);
+    }
+
+    tooltipEl.appendChild(detailsContainer);
+    document.body.appendChild(tooltipEl);
+    
+    // Position the tooltip
+    positionTooltip(tooltipEl, wordInfo);
+    
+    currentWord = personData.name;
   }
 
 })();

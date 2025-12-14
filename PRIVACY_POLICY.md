@@ -55,3 +55,4 @@ If you have questions about this Privacy Policy, please contact us at [YOUR_EMAI
 
 **Note**: This privacy policy must be hosted online (GitHub Pages, your website, etc.) and the URL must be added to your manifest.json before Chrome Web Store submission.
 
+

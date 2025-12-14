@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Generate CursorIQ Icons</title>
+</head>
+<body>
+  <h2>Generate CursorIQ Extension Icons</h2>
+  <p>Click the buttons below to generate and download icons. Then save them to the assets/ folder.</p>
+  
+  <div style="margin: 20px 0;">
+    <button onclick="generateIcon(16)">Generate 16x16 icon</button>
+    <button onclick="generateIcon(48)">Generate 48x48 icon</button>
+    <button onclick="generateIcon(128)">Generate 128x128 icon</button>
+  </div>
+  
+  <canvas id="canvas" style="border: 1px solid #ccc; margin: 20px 0;"></canvas>
+  
+  <script>
+    function generateIcon(size) {
+      const canvas = document.getElementById('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      
+      // Draw circle background
+      ctx.fillStyle = '#4A90E2';
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Draw question mark or "i"
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = `bold ${size * 0.6}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('?', size / 2, size / 2);
+      
+      // Download
+      canvas.toBlob(function(blob) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `icon${size}.png`;
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+    }
+  </script>
+</body>
+</html>
+
+

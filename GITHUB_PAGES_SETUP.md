@@ -69,3 +69,4 @@ Once you have the URL, we'll add it to `manifest.json`:
 
 Then you're ready for Step 3!
 
+

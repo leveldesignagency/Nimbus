@@ -4,8 +4,8 @@
   "short_name": "Nimbus",
   "description": "Select any word to get a real-world, plain-English explanation with synonyms.",
   "version": "1.0.0",
-  "permissions": ["activeTab", "scripting", "storage"],
-  "host_permissions": ["https://api.openai.com/*", "https://api.dictionaryapi.dev/*"],
+  "permissions": ["activeTab", "scripting", "storage", "identity"],
+  "host_permissions": ["https://api.openai.com/*", "https://api.dictionaryapi.dev/*", "https://api.web3forms.com/*", "https://en.wiktionary.org/*", "https://libretranslate.de/*", "https://api.mymemory.translated.net/*", "https://*.wikipedia.org/*", "https://en.wikipedia.org/*", "https://news.google.com/*", "https://www.google.com/search*"],
   "background": {
     "service_worker": "background.js"
   },
@@ -37,7 +37,6 @@
       "resources": ["Nimbus Favicon.png"],
       "matches": ["<all_urls>"]
     }
-  ],
-  "privacy_policy": "https://leveldesignagency.github.io/Nimbus/"
+  ]
 }
 
