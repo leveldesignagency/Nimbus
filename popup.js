@@ -2,14 +2,10 @@
 
 (() => {
   const searchInput = document.getElementById('searchInput');
-  const suggestions = document.getElementById('suggestions');
   const favoritesDiv = document.getElementById('favorites');
   const recentDiv = document.getElementById('recent');
   const wordOfDayDiv = document.getElementById('wordOfDay');
   const nimbusTitle = document.getElementById('nimbusTitle');
-
-  let searchTimeout = null;
-  let currentSuggestions = [];
   let navigationHistory = []; // Stack for back button
   let currentView = 'hub'; // 'hub' or 'word'
   
@@ -49,34 +45,42 @@
         return;
       }
       
+      // Clean up any existing handlers first
+      confirmBtn.onclick = null;
+      cancelBtn.onclick = null;
+      dialog.onclick = null;
+      
       titleEl.textContent = title;
       messageEl.textContent = message;
       dialog.style.display = 'flex';
+      dialog.style.zIndex = '2147483647'; // Ensure it's on top
       
       const cleanup = () => {
         dialog.style.display = 'none';
         confirmBtn.onclick = null;
         cancelBtn.onclick = null;
+        dialog.onclick = null;
       };
       
-      confirmBtn.onclick = () => {
+      const handleConfirm = () => {
         cleanup();
-        if (onConfirm) onConfirm();
         resolve(true);
+        if (onConfirm) onConfirm();
       };
       
-      cancelBtn.onclick = () => {
+      const handleCancel = () => {
         cleanup();
-        if (onCancel) onCancel();
         resolve(false);
+        if (onCancel) onCancel();
       };
+      
+      confirmBtn.onclick = handleConfirm;
+      cancelBtn.onclick = handleCancel;
       
       // Close on overlay click
       dialog.onclick = (e) => {
         if (e.target === dialog) {
-          cleanup();
-          if (onCancel) onCancel();
-          resolve(false);
+          handleCancel();
         }
       };
     });
@@ -92,17 +96,23 @@
       document.getElementsByTagName('head')[0].appendChild(link);
     }
   } catch (e) {
-    console.log('Could not set favicon:', e);
+    // Favicon setting failed, continue silently
   }
 
   // Load all data on popup open
-  // Load settings and translate UI on initial load
+  // Load settings and translate UI on initial load (after translations object is defined)
+  // Note: translateUI will be called after translations object is defined (see line ~428)
   chrome.storage.local.get(['settings'], (result) => {
     try {
       const settings = result.settings || {};
       const initialLang = settings.dictionaryLanguage || detectBrowserLanguage();
       window.currentUILanguage = initialLang;
-      translateUI(initialLang);
+      // Delay translateUI call to ensure translations object exists
+      setTimeout(() => {
+        if (typeof translations !== 'undefined') {
+          translateUI(initialLang);
+        }
+      }, 0);
     } catch (e) {
       console.error('Nimbus: Error in initial translation:', e);
       // Continue loading even if translation fails
@@ -110,34 +120,111 @@
   });
   
   // Check for pending search (e.g., person data from content script)
-  chrome.storage.local.get(['pendingSearch'], (result) => {
-    if (result.pendingSearch) {
-      const pending = result.pendingSearch;
-      console.log('Nimbus: Found pending search:', pending.type, pending.term);
-      console.log('Nimbus: Pending data image:', pending.data?.image ? 'YES - ' + pending.data.image : 'NO IMAGE');
-      console.log('Nimbus: Full pending data:', pending.data);
-      
-      // Clear pending search
-      chrome.storage.local.remove(['pendingSearch']);
-      
-      // Display the search result
-      if (pending.type === 'person') {
-        console.log('Nimbus: About to display person result, image:', pending.data?.image);
-        displayPersonResult(pending.term, pending.data);
-      } else {
-        showWordDetails(pending.term);
+  // Function to handle pending search
+  function handlePendingSearch() {
+    chrome.storage.local.get(['pendingSearch'], (result) => {
+      if (result.pendingSearch) {
+        const pending = result.pendingSearch;
+        
+        // Handle search type (from icon-only modal)
+        if (pending.type === 'search' && pending.term) {
+          if (searchInput) {
+            searchInput.value = pending.term;
+            executeSearch(pending.term);
+          }
+          chrome.storage.local.remove(['pendingSearch']);
+          return;
+        }
+        // Clear pending search
+        chrome.storage.local.remove(['pendingSearch']);
+        
+        // Display the search result
+        if (pending.type === 'person') {
+          displayPersonResult(pending.term, pending.data);
+        } else if (pending.type === 'organization') {
+          displayOrganizationResult(pending.term, pending.data);
+        } else if (pending.type === 'place') {
+          displayPlaceResult(pending.term, pending.data);
+        } else {
+          showWordDetails(pending.term);
+        }
       }
-    } else {
-      // Load content normally
-      try {
-        loadFavorites();
-        loadRecent();
-        loadWordOfDay();
-      } catch (e) {
-        console.error('Nimbus: Error loading initial content:', e);
-      }
+    });
+  }
+  
+  // Check for pending search on load (with multiple attempts to ensure we catch it)
+  // Function to check pending search
+  function checkPendingSearch() {
+    handlePendingSearch();
+  }
+  
+  // Check immediately
+  checkPendingSearch();
+  
+  // Check after DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      checkPendingSearch();
+    });
+  }
+  
+  // Check after delays (storage might not be ready immediately)
+  setTimeout(checkPendingSearch, 200);
+  setTimeout(checkPendingSearch, 500);
+  setTimeout(checkPendingSearch, 1000);
+  
+  // Also listen for storage changes (in case popup is already open)
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && changes.pendingSearch) {
+      setTimeout(() => {
+        handlePendingSearch();
+      }, 100); // Small delay to ensure storage is updated
     }
   });
+  
+  // Load content normally if no pending search
+  try {
+    // Ensure header is visible by default
+    const headerContent = document.querySelector('.header-content');
+    if (headerContent) {
+      headerContent.style.display = '';
+      headerContent.style.visibility = 'visible';
+    }
+    
+    // Ensure all sections are visible
+    document.querySelectorAll('.section').forEach(section => {
+      section.style.display = 'block';
+    });
+    
+    loadConversations();
+    loadFavorites();
+    loadRecent();
+    loadWordOfDay();
+    
+    // Conversations expand/collapse
+    const conversationsHeader = document.getElementById('conversationsHeader');
+    const conversationsArrow = document.getElementById('conversationsArrow');
+    const conversationsDiv = document.getElementById('conversations');
+    if (conversationsHeader && conversationsDiv) {
+      conversationsHeader.style.cursor = 'pointer';
+      conversationsHeader.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isHidden = conversationsDiv.style.display === 'none' || !conversationsDiv.style.display;
+        conversationsDiv.style.display = isHidden ? 'block' : 'none';
+        if (conversationsArrow) {
+          conversationsArrow.style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+        }
+        // Load conversations when expanded
+        if (isHidden) {
+          loadConversations();
+        }
+      });
+    } else {
+      console.error('Nimbus: Conversations header or div not found!', { conversationsHeader, conversationsDiv });
+    }
+  } catch (e) {
+    console.error('Nimbus: Error loading initial content:', e);
+  }
 
   // Nimbus title click handler - return to hub
   nimbusTitle.addEventListener('click', () => {
@@ -197,9 +284,10 @@
           // Update hidden input
           hiddenInput.value = value;
           
-          // Update display text
+          // Update display text (use flag if available, otherwise text)
           if (textSpan) {
-            textSpan.textContent = option.textContent.trim();
+            const flag = option.dataset.flag || option.textContent.trim();
+            textSpan.textContent = flag;
           }
           
           // Update selected state
@@ -240,7 +328,6 @@
   // Refresh button - reload all hub content
   if (refreshBtn) {
     refreshBtn.addEventListener('click', async () => {
-      console.log('Nimbus: Refresh button clicked');
       // Add rotation animation
       refreshBtn.style.transform = 'rotate(360deg)';
       refreshBtn.style.transition = 'transform 0.5s ease';
@@ -1701,6 +1788,102 @@
       contactEmailPlaceholder: 'your.email@example.com',
       contactMessagePlaceholder: 'Twoja wiadomość...',
       recentNews: 'Najnowsze Wiadomości'
+    },
+    tr: {
+      settings: 'Ayarlar',
+      favorites: 'Favoriler',
+      recentSearches: 'Son Aramalar',
+      wordOfDay: 'Günün Kelimesi',
+      noFavorites: 'Henüz favori yok. Kelime eklemek için ipuçlarındaki kalp simgesine tıklayın!',
+      noRecentSearches: 'Henüz son arama yok. Burada görmek için web sayfalarında kelimeleri seçin!',
+      subscription: 'Abonelik',
+      modalPlacement: 'Modal Konumu',
+      apiSettings: 'API Ayarları',
+      general: 'Genel',
+      contact: 'İletişim',
+      loadMore: 'Daha Fazla Yükle',
+      showLess: 'Daha Az Göster',
+      clearAll: 'Tümünü Temizle',
+      clearAllRecent: 'Tüm Son Aramaları Temizle',
+      clearAllRecentConfirm: 'Tüm son aramaları temizlemek istediğinizden emin misiniz? Bu işlem geri alınamaz.',
+      recentSearchesCleared: 'Tüm son aramalar temizlendi!',
+      allRecentSearches: 'Tüm Son Aramalar',
+      back: 'Geri',
+      search: 'Ara',
+      copy: 'Kopyala',
+      addToFavorites: 'Favorilere ekle',
+      removeFromFavorites: 'Favorilerden kaldır',
+      manageSubscription: 'Aboneliği Yönet',
+      sendMessage: 'Mesaj Gönder',
+      name: 'Ad',
+      email: 'E-posta',
+      subject: 'Konu',
+      message: 'Mesaj',
+      yourMessage: 'Mesajınız...',
+      weWillGetBack: 'En kısa sürede size geri döneceğiz',
+      clearAllData: 'Tüm Verileri Temizle',
+      removeAllData: 'Tüm favorileri, son aramaları ve ayarları kaldır',
+      loadingFavorites: 'Favoriler yükleniyor...',
+      loadingRecent: 'Son aramalar yükleniyor...',
+      loadingWordOfDay: 'Günün kelimesi yükleniyor...',
+      errorLoadingWordOfDay: 'Günün kelimesi yüklenirken hata oluştu.',
+      searchPlaceholder: 'Bir kelime ara...',
+      searchButton: 'Ara',
+      settingsButton: 'Ayarlar',
+      autoRenewDesc: 'Aboneliğiniz süresi dolduğunda otomatik olarak yenileyin',
+      modalPlacementDesc: 'Metin seçtiğinizde kelime açıklama modalının göründüğü yeri seçin. Özel, modalı tercih ettiğiniz konuma sürüklemenize olanak tanır.',
+      modalDraggableDesc: 'Modalı yeniden konumlandırmak için sürüklemeye izin verin (tutma kolu görünecektir)',
+      openaiKeyDesc: 'Gelişmiş açıklamalar için OpenAI API anahtarınızı ekleyin. Ücretsiz sözlük API\'sini kullanmak için boş bırakın.',
+      saveApiSettings: 'API Ayarlarını Kaydet',
+      incognitoDesc: 'Varsayılan olarak, gizli modda aramalar kaydedilmez',
+      removeAllDataDesc: 'Tüm favorileri, son aramaları ve ayarları kaldır',
+      contactNamePlaceholder: 'Adınız',
+      contactEmailPlaceholder: 'sizin.email@ornek.com',
+      contactSubjectPlaceholder: 'Konu',
+      autoRenewLabel: 'Aboneliği otomatik yenile',
+      statusLabel: 'Durum:',
+      expiresLabel: 'Bitiş:',
+      modalPositionLabel: 'Modal Konumu:',
+      enableDragLabel: 'Yeniden konumlandırmak için sürüklemeyi etkinleştir',
+      openaiKeyLabel: 'OpenAI API Anahtarı (İsteğe Bağlı):',
+      explanationStyleLabel: 'Açıklama Stili:',
+      saveInIncognitoLabel: 'Gizli modda aramaları kaydet',
+      showPhoneticLabel: 'Fonetik telaffuz göster',
+      showExamplesLabel: 'Örnek cümleler göster',
+      examplesLabel: 'Örnekler',
+      synonymsLabel: 'Eş Anlamlılar',
+      copyWord: 'Kelimeyi kopyala',
+      addToFavorites: 'Favorilere ekle',
+      removeFromFavorites: 'Favorilerden kaldır',
+      search: 'Ara',
+      refresh: 'Yenile',
+      refreshComplete: 'Hub yenilendi!',
+      active: 'Aktif',
+      inactive: 'Pasif',
+      notAvailable: 'Mevcut Değil',
+      issueTypeLabel: 'Sorun Türü:',
+      more: 'daha fazla',
+      modalIntuitive: 'Sezgisel (Varsayılan)',
+      modalTop: 'Seçimin Üstü',
+      modalBottom: 'Seçimin Altı',
+      modalLeft: 'Seçimin Solu',
+      modalRight: 'Seçimin Sağı',
+      modalCenter: 'Ekranın Ortası',
+      modalCustom: 'Özel (Konumlandırmak için Sürükle)',
+      stylePlain: 'Sade İngilizce',
+      styleTechnical: 'Teknik',
+      styleSimple: 'Basit (ELI12)',
+      issueGeneral: 'Genel Soru',
+      issueModalNotWorking: 'Modal Sayfada Çalışmıyor',
+      issueWordNotFound: 'Kelime Bulunamadı/Yanlış',
+      issueSubscription: 'Abonelik Sorunu',
+      issueBug: 'Hata Raporu',
+      issueFeature: 'Özellik İsteği',
+      issueOther: 'Diğer',
+      contactNamePlaceholder: 'Adınız',
+      contactEmailPlaceholder: 'sizin.email@ornek.com',
+      contactMessagePlaceholder: 'Mesajınız...',
+      recentNews: 'Son Haberler'
     }
   };
   
@@ -1727,6 +1910,11 @@
   // Translate UI text - comprehensive function
   function translateUI(lang = 'en') {
     try {
+      // Safety check: ensure translations object exists
+      if (typeof translations === 'undefined') {
+        console.error('Nimbus: translations object not yet initialized');
+        return;
+      }
       const t = translations[lang] || translations.en;
       if (!t) {
         console.error('Nimbus: No translations found for language:', lang);
@@ -1735,7 +1923,6 @@
       window.currentUILanguage = lang;
       document.documentElement.lang = lang;
       
-      console.log('Nimbus: Translating UI to', lang);
     
     // Translate by data-i18n attributes
     document.querySelectorAll('[data-i18n]').forEach(el => {
@@ -2109,7 +2296,6 @@
       }
     });
     
-      console.log('Nimbus: UI translation complete for', lang);
     } catch (e) {
       console.error('Nimbus: Error in translateUI:', e);
       // Don't throw - allow the app to continue functioning
@@ -2131,7 +2317,9 @@
         const options = languageDropdown.querySelectorAll('.custom-dropdown-option');
         const selectedOption = Array.from(options).find(opt => opt.dataset.value === savedLanguage);
         if (selectedOption && textSpan) {
-          textSpan.textContent = selectedOption.textContent.trim();
+          // Use flag from data-flag attribute, fallback to textContent
+          const flag = selectedOption.dataset.flag || selectedOption.textContent.trim();
+          textSpan.textContent = flag;
           options.forEach(opt => opt.classList.remove('selected'));
           selectedOption.classList.add('selected');
         }
@@ -2229,9 +2417,6 @@
     const dictionaryLanguageEl = document.getElementById('dictionaryLanguage');
     
     const dictionaryLanguageValue = dictionaryLanguageEl?.value || detectBrowserLanguage();
-    console.log('Nimbus: Saving settings - dictionaryLanguage value:', dictionaryLanguageValue);
-    console.log('Nimbus: dictionaryLanguageEl:', dictionaryLanguageEl);
-    console.log('Nimbus: dictionaryLanguageEl.value:', dictionaryLanguageEl?.value);
     
     const settings = {
       autoRenew: document.getElementById('autoRenewToggle')?.checked || false,
@@ -2244,14 +2429,7 @@
       showExamples: document.getElementById('showExamples')?.checked !== false
     };
     
-    console.log('Nimbus: Full settings object being saved:', JSON.stringify(settings, null, 2));
-    
     chrome.storage.local.set({ settings }, () => {
-      console.log('Nimbus: Settings saved to storage');
-      // Verify it was saved
-      chrome.storage.local.get(['settings'], (result) => {
-        console.log('Nimbus: Verified saved settings:', JSON.stringify(result.settings, null, 2));
-      });
       showNotification('Settings saved successfully!', 'success');
       // Notify content scripts of settings change
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -2277,7 +2455,6 @@
       // If dictionary language changed, save immediately and translate UI
       if (e.target.id === 'dictionaryLanguage') {
         const newLang = e.target.value;
-        console.log('Nimbus: Language changed to', newLang);
         window.currentUILanguage = newLang;
         saveSettings();
         // Translate immediately - do it twice to catch everything
@@ -2431,76 +2608,102 @@
     });
   }
 
-  // Search input handler
-  searchInput.addEventListener('input', (e) => {
-    const query = e.target.value.trim();
-    
-    if (searchTimeout) clearTimeout(searchTimeout);
-    
-    if (!query) {
-      suggestions.classList.remove('show');
-      currentSuggestions = [];
-      return;
-    }
-
-    // Show suggestions immediately for short queries
-    if (query.length >= 2) {
-      console.log('Nimbus: Input event - query:', query);
-      searchTimeout = setTimeout(() => {
-        console.log('Nimbus: Calling searchWord with:', query);
-        searchWord(query);
-      }, 200);
-    } else {
-      suggestions.classList.remove('show');
-    }
-  });
-  
-  // Allow Enter key to search
-  searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const query = searchInput.value.trim();
-      if (query.length >= 2) {
-        suggestions.classList.remove('show');
-        executeSearch(query);
-        searchInput.value = ''; // Clear search input
+  // Search input handler - execute search on Enter
+  if (searchInput) {
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const query = searchInput.value.trim();
+        if (query.length >= 2) {
+          executeSearch(query);
+        }
       }
-    }
-  });
+    });
 
-  // Search icon button handler
-  const searchIconBtn = document.getElementById('searchIconBtn');
-  searchIconBtn.addEventListener('click', () => {
-    const query = searchInput.value.trim();
-    if (query.length >= 2) {
-      suggestions.classList.remove('show');
-      executeSearch(query);
-      searchInput.value = ''; // Clear search input
+    // Search icon button handler
+    const searchIconBtn = document.getElementById('searchIconBtn');
+    if (searchIconBtn) {
+      searchIconBtn.addEventListener('click', () => {
+        const query = searchInput.value.trim();
+        if (query.length >= 2) {
+          executeSearch(query);
+        }
+      });
     }
-  });
+  }
+
+  // Show loading placeholder cards
+  function showLoadingPlaceholder(query) {
+    currentView = 'search';
+    // Add hub-search-mode class when showing search results
+    document.body.classList.add('hub-search-mode');
+    
+    // Hide other sections
+    document.querySelectorAll('.section').forEach(section => {
+      if (section.querySelector('#wordOfDay') === null) {
+        section.style.display = 'none';
+      }
+    });
+    
+    // Show loading placeholder with better styling
+    wordOfDayDiv.innerHTML = `
+      <div class="word-card-modal loading-card">
+        <div class="word-card-header">
+          <div class="word-card-header-top">
+            <div class="word-card-word-container">
+              <div class="word-card-word-wrapper">
+                <span class="word-card-word loading-skeleton-text">Searching...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="word-card-content loading-content">
+          <div class="loading-skeleton-line"></div>
+          <div class="loading-skeleton-line"></div>
+          <div class="loading-skeleton-line" style="width: 90%;"></div>
+          <div class="loading-skeleton-line" style="width: 95%;"></div>
+          <div class="loading-skeleton-line" style="width: 85%;"></div>
+        </div>
+      </div>
+    `;
+  }
 
   // Execute search - handles both words and people
   async function executeSearch(query) {
-    console.log('Nimbus: Executing search for:', query);
+    if (!query || typeof query !== 'string' || query.trim().length < 2) {
+      return;
+    }
     
-    // Check if it might be a person, organization, or entity
-    // More flexible pattern: allows hyphens, apostrophes, multiple capitals
-    const isLikelyEntity = /^[A-Z][A-Za-z'\-]+(\s+[A-Z][A-Za-z'\-]+)*(\s+(Inc|LLC|Ltd|Corp|Company|Corporation|Foundation|Institute|University|College|Group|Organization|Org))?$/i.test(query.trim()) && 
-                          query.trim().split(/\s+/).length >= 1 && 
-                          query.trim().split(/\s+/).length <= 6 &&
-                          query.trim().length >= 2 &&
-                          query.trim().length <= 80;
+    const trimmedQuery = query.trim();
     
-    if (isLikelyEntity) {
-      // Try to fetch entity data (person or organization)
-      try {
+    // Show loading placeholder immediately
+    showLoadingPlaceholder(trimmedQuery);
+    
+    // For 3+ word phrases, always use AI (skip entity detection)
+    const words = trimmedQuery.split(/\s+/).filter(w => w.trim().length > 0);
+    const isPhrase = words.length >= 3;
+    
+    // Check if it might be a person, organization, or entity (only for 1-2 words)
+    let isLikelyEntity = false;
+    if (!isPhrase) {
+      isLikelyEntity = /^[A-Z][A-Za-z'\-]+(\s+[A-Z][A-Za-z'\-]+)*(\s+(Inc|LLC|Ltd|Corp|Company|Corporation|Foundation|Institute|University|College|Group|Organization|Org))?$/i.test(trimmedQuery) && 
+                      trimmedQuery.split(/\s+/).length >= 1 && 
+                      trimmedQuery.split(/\s+/).length <= 6 &&
+                      trimmedQuery.length >= 2 &&
+                      trimmedQuery.length <= 80;
+    }
+    
+      if (isLikelyEntity) {
+        // Try to fetch entity data (person or organization)
+        try {
         const response = await new Promise((resolve) => {
           chrome.runtime.sendMessage({
             type: 'explain',
-            word: query,
+            word: trimmedQuery,
             context: ''
           }, (response) => {
             if (chrome.runtime.lastError) {
+              console.error('Nimbus: Runtime error in entity search:', chrome.runtime.lastError);
               resolve({ error: chrome.runtime.lastError.message });
             } else {
               resolve(response);
@@ -2508,28 +2711,56 @@
           });
         });
         
-        if (response && response.isPerson && response.personData) {
-          displayPersonResult(query, response.personData);
-          return;
-        } else if (response && response.isOrganization && response.organizationData) {
-          displayOrganizationResult(query, response.organizationData);
-          return;
-        } else if (response && response.isPlace && response.placeData) {
-          displayPlaceResult(query, response.placeData);
-          return;
+          if (response && response.error) {
+            throw new Error(response.error);
+          }
+          
+          if (response && response.isPerson && response.personData) {
+            displayPersonResult(trimmedQuery, response.personData);
+            return;
+          } else if (response && response.isOrganization && response.organizationData) {
+            displayOrganizationResult(trimmedQuery, response.organizationData);
+            return;
+          } else if (response && response.isPlace && response.placeData) {
+            displayPlaceResult(trimmedQuery, response.placeData);
+            return;
+          }
+        } catch (err) {
+          // Continue to word search below
         }
-      } catch (err) {
-        console.log('Nimbus: Entity search failed, falling back to word search:', err);
       }
+      
+      // For phrases or when entity search fails, use word search (dictionary first, then AI)
+      // This will automatically use AI if dictionary fails
+      try {
+      await showWordDetails(trimmedQuery);
+    } catch (err) {
+      console.error('Nimbus: Error in showWordDetails:', err);
+      // Clear loading placeholder and show error message
+      wordOfDayDiv.innerHTML = `
+        <div class="word-card-modal">
+          <div class="word-card-header">
+            <div class="word-card-header-top">
+              <div class="word-card-word-container">
+                <div class="word-card-word-wrapper">
+                  <span class="word-card-word">${query}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="word-card-content">
+            <div style="padding: 20px; text-align: center; color: var(--text-secondary);">
+              <p style="margin-bottom: 12px; font-weight: 600; color: var(--text-primary);">Unable to find information</p>
+              <p style="font-size: 13px; color: var(--text-muted);">Please try searching again or check your connection.</p>
+            </div>
+          </div>
+        </div>
+      `;
     }
-    
-    // Default to word search
-    showWordDetails(query);
   }
 
   // Display person result in hub
   function displayPersonResult(searchTerm, personData) {
-    console.log('Nimbus: displayPersonResult called with image:', personData?.image);
     currentView = 'person';
     // Add hub-search-mode class when showing search results
     document.body.classList.add('hub-search-mode');
@@ -2571,7 +2802,7 @@
         </div>
         <div class="word-card-content person-content">
           ${personData.image ? `<div class="person-image-container">
-            <img src="${personData.image}" alt="${personData.name}" class="person-image" onerror="console.error('Nimbus: Image failed to load:', this.src); this.parentElement.style.display='none';" onload="console.log('Nimbus: Person image loaded successfully:', this.src);">
+            <img src="${personData.image}" alt="${personData.name}" class="person-image" onerror="this.parentElement.style.display='none';">
           </div>` : ''}
           <div class="word-card-explanation person-bio">
             ${personData.bio || personData.summary || 'No biography available.'}
@@ -2590,10 +2821,17 @@
             <div class="person-news-title">${translations[window.currentUILanguage || 'en']?.recentNews || 'Recent News'}</div>
             <div class="person-news-list">
               ${personData.newsArticles.map((article, index) => `
+                ${article.link ? `
+                <a href="${article.link}" target="_blank" rel="noopener noreferrer" class="person-news-item" data-news-index="${index}" style="text-decoration: none; color: inherit; display: block;">
+                  <div class="person-news-title-text">${article.title}</div>
+                  ${article.date ? `<div class="person-news-date">${new Date(article.date).toLocaleDateString()}</div>` : ''}
+                </a>
+                ` : `
                 <div class="person-news-item" data-news-index="${index}">
                   <div class="person-news-title-text">${article.title}</div>
                   ${article.date ? `<div class="person-news-date">${new Date(article.date).toLocaleDateString()}</div>` : ''}
                 </div>
+                `}
               `).join('')}
             </div>
           </div>
@@ -2651,7 +2889,6 @@
 
   // Display organization result in hub
   function displayOrganizationResult(searchTerm, orgData) {
-    console.log('Nimbus: displayOrganizationResult called');
     currentView = 'organization';
     // Add hub-search-mode class when showing search results
     document.body.classList.add('hub-search-mode');
@@ -2714,10 +2951,17 @@
             <div class="person-news-title">${translations[window.currentUILanguage || 'en']?.recentNews || 'Recent News'}</div>
             <div class="person-news-list">
               ${orgData.newsArticles.map((article, index) => `
+                ${article.link ? `
+                <a href="${article.link}" target="_blank" rel="noopener noreferrer" class="person-news-item" data-news-index="${index}" style="text-decoration: none; color: inherit; display: block;">
+                  <div class="person-news-title-text">${article.title}</div>
+                  ${article.date ? `<div class="person-news-date">${new Date(article.date).toLocaleDateString()}</div>` : ''}
+                </a>
+                ` : `
                 <div class="person-news-item" data-news-index="${index}">
                   <div class="person-news-title-text">${article.title}</div>
                   ${article.date ? `<div class="person-news-date">${new Date(article.date).toLocaleDateString()}</div>` : ''}
                 </div>
+                `}
               `).join('')}
             </div>
           </div>
@@ -2775,7 +3019,6 @@
 
   // Display place result in hub
   function displayPlaceResult(searchTerm, placeData) {
-    console.log('Nimbus: displayPlaceResult called');
     currentView = 'place';
     // Add hub-search-mode class when showing search results
     document.body.classList.add('hub-search-mode');
@@ -2837,10 +3080,17 @@
             <div class="person-news-title">${translations[window.currentUILanguage || 'en']?.recentNews || 'Recent News'}</div>
             <div class="person-news-list">
               ${placeData.newsArticles.map((article, index) => `
+                ${article.link ? `
+                <a href="${article.link}" target="_blank" rel="noopener noreferrer" class="person-news-item" data-news-index="${index}" style="text-decoration: none; color: inherit; display: block;">
+                  <div class="person-news-title-text">${article.title}</div>
+                  ${article.date ? `<div class="person-news-date">${new Date(article.date).toLocaleDateString()}</div>` : ''}
+                </a>
+                ` : `
                 <div class="person-news-item" data-news-index="${index}">
                   <div class="person-news-title-text">${article.title}</div>
                   ${article.date ? `<div class="person-news-date">${new Date(article.date).toLocaleDateString()}</div>` : ''}
                 </div>
+                `}
               `).join('')}
             </div>
           </div>
@@ -2896,18 +3146,6 @@
     }
   }
 
-  searchInput.addEventListener('focus', () => {
-    if (currentSuggestions.length > 0) {
-      suggestions.classList.add('show');
-    }
-  });
-
-  // Close suggestions when clicking outside
-  document.addEventListener('click', (e) => {
-    if (!searchInput.contains(e.target) && !suggestions.contains(e.target)) {
-      suggestions.classList.remove('show');
-    }
-  });
 
   // Navigation functions
   function returnToHub() {
@@ -2917,301 +3155,41 @@
   }
 
   function showHubView() {
+    currentView = 'hub';
     // Remove hub-search-mode class to show blue background
     document.body.classList.remove('hub-search-mode');
+    
+    // Show search bar again when returning to hub - ensure it's visible
+    const searchContainer = document.querySelector('.search-container');
+    if (searchContainer) {
+      searchContainer.style.display = '';
+      searchContainer.style.visibility = 'visible';
+    }
+    
     // Show all sections
     document.querySelectorAll('.section').forEach(section => {
       section.style.display = 'block';
     });
+    
+    // Ensure wordOfDay div is visible
+    if (wordOfDayDiv) {
+      wordOfDayDiv.style.display = 'block';
+    }
+    
     searchInput.value = '';
     loadFavorites();
     loadRecent();
     loadWordOfDay();
   }
 
-  async function searchWord(query) {
-    if (!query || query.length < 2) {
-      console.log('Nimbus: searchWord - query too short, hiding');
-      suggestions.classList.remove('show');
-      return;
-    }
-
-    console.log('Nimbus: searchWord called with:', query);
-    console.log('Nimbus: suggestions element exists:', !!suggestions);
-    
-    try {
-      const queryLower = query.toLowerCase();
-      
-      // Get suggestions from recent and favorites (prioritized)
-      const [favorites, recent] = await Promise.all([
-        getStorage('favorites'),
-        getStorage('recentSearches')
-      ]);
-
-      console.log('Nimbus: Favorites:', favorites, 'Recent:', recent);
-
-      const localWords = [...(favorites || []), ...(recent || [])];
-      const localMatches = localWords
-        .filter(word => {
-          const wordLower = word.toLowerCase();
-          return wordLower.startsWith(queryLower) || wordLower.includes(queryLower);
-        })
-        .slice(0, 3); // Top 3 from local
-
-      console.log('Nimbus: Local matches:', localMatches);
-
-      // Get common word suggestions
-      const commonSuggestions = await getWordSuggestions(query);
-      console.log('Nimbus: Common suggestions:', commonSuggestions);
-      
-      // Combine: local matches first, then common words (avoid duplicates)
-      const allSuggestions = [...localMatches];
-      const seen = new Set(localMatches.map(w => w.toLowerCase()));
-      
-      for (const word of commonSuggestions) {
-        if (!seen.has(word.toLowerCase()) && allSuggestions.length < 8) {
-          allSuggestions.push(word);
-          seen.add(word.toLowerCase());
-        }
-      }
-
-      console.log('Nimbus: All suggestions:', allSuggestions);
-      
-      // Always show at least some suggestions from common words
-      if (allSuggestions.length === 0) {
-        console.log('Nimbus: No suggestions found, getting common words only');
-        const commonOnly = await getWordSuggestions(query);
-        console.log('Nimbus: Common words only:', commonOnly);
-        showSuggestions(commonOnly);
-      } else {
-        showSuggestions(allSuggestions);
-      }
-    } catch (e) {
-      console.error('Nimbus: Error searching', e);
-      // Fallback to local only
-      try {
-        const [favorites, recent] = await Promise.all([
-          getStorage('favorites'),
-          getStorage('recentSearches')
-        ]);
-        const allWords = [...(favorites || []), ...(recent || [])];
-        const filtered = allWords
-          .filter(word => word.toLowerCase().includes(query.toLowerCase()))
-          .slice(0, 5);
-        console.log('Nimbus: Fallback suggestions:', filtered);
-        showSuggestions(filtered);
-      } catch (e2) {
-        console.error('Nimbus: Fallback also failed', e2);
-        showSuggestions([]);
-      }
-    }
-  }
-
-  async function getWordSuggestions(query) {
-    const queryLower = query.toLowerCase();
-    const queryLength = queryLower.length;
-    
-    // Common English words that start with or contain the query
-    // This is a curated list - in production, you might use a word list API
-    const commonWords = [
-      'ability', 'about', 'above', 'accept', 'account', 'achieve', 'across', 'action', 'active', 'activity',
-      'actually', 'address', 'administration', 'admit', 'adult', 'affect', 'after', 'again', 'against', 'age',
-      'agency', 'agent', 'ago', 'agree', 'agreement', 'ahead', 'air', 'all', 'allow', 'almost',
-      'alone', 'along', 'already', 'also', 'although', 'always', 'American', 'among', 'amount', 'analysis',
-      'and', 'animal', 'another', 'answer', 'any', 'anyone', 'anything', 'appear', 'apply', 'approach',
-      'area', 'argue', 'arm', 'around', 'arrive', 'art', 'article', 'artist', 'as', 'ask',
-      'assume', 'at', 'attack', 'attention', 'attorney', 'audience', 'author', 'authority', 'available', 'avoid',
-      'away', 'baby', 'back', 'bad', 'bag', 'ball', 'bank', 'bar', 'base', 'be',
-      'beat', 'beautiful', 'because', 'become', 'bed', 'before', 'begin', 'behavior', 'behind', 'believe',
-      'benefit', 'best', 'better', 'between', 'beyond', 'big', 'bill', 'billion', 'bit', 'black',
-      'blood', 'blue', 'board', 'body', 'book', 'born', 'both', 'box', 'boy', 'break',
-      'bring', 'brother', 'budget', 'build', 'building', 'business', 'but', 'buy', 'by', 'call',
-      'camera', 'campaign', 'can', 'cancer', 'candidate', 'capital', 'car', 'card', 'care', 'career',
-      'carry', 'case', 'catch', 'cause', 'cell', 'center', 'central', 'century', 'certain', 'certainly',
-      'chair', 'challenge', 'chance', 'change', 'character', 'charge', 'check', 'child', 'choice', 'choose',
-      'church', 'citizen', 'city', 'civil', 'claim', 'class', 'clear', 'clearly', 'close', 'coach',
-      'cold', 'collection', 'college', 'color', 'come', 'commercial', 'common', 'community', 'company', 'compare',
-      'computer', 'concern', 'condition', 'conference', 'Congress', 'consider', 'consumer', 'contain', 'continue', 'control',
-      'cost', 'could', 'country', 'couple', 'course', 'court', 'cover', 'create', 'crime', 'cultural',
-      'culture', 'cup', 'current', 'customer', 'cut', 'dark', 'data', 'daughter', 'day', 'dead',
-      'deal', 'death', 'debate', 'decade', 'decide', 'decision', 'deep', 'defense', 'degree', 'Democrat',
-      'democratic', 'describe', 'design', 'despite', 'detail', 'determine', 'develop', 'development', 'die', 'difference',
-      'different', 'difficult', 'dinner', 'direction', 'director', 'discover', 'discuss', 'discussion', 'disease', 'do',
-      'doctor', 'dog', 'door', 'down', 'draw', 'dream', 'drive', 'drop', 'drug', 'during',
-      'each', 'early', 'east', 'easy', 'eat', 'economic', 'economy', 'edge', 'education', 'effect',
-      'effort', 'eight', 'either', 'election', 'else', 'employee', 'end', 'energy', 'enjoy', 'enough',
-      'enter', 'entire', 'environment', 'environmental', 'especially', 'establish', 'even', 'evening', 'event', 'ever',
-      'every', 'everybody', 'everyone', 'everything', 'evidence', 'exactly', 'example', 'executive', 'exist', 'expect',
-      'experience', 'expert', 'explain', 'eye', 'face', 'fact', 'factor', 'fail', 'fall', 'family',
-      'far', 'fast', 'father', 'fear', 'federal', 'feel', 'feeling', 'few', 'field', 'fight',
-      'figure', 'fill', 'film', 'final', 'finally', 'find', 'fine', 'finger', 'finish', 'fire',
-      'firm', 'first', 'fish', 'five', 'floor', 'fly', 'focus', 'follow', 'food', 'foot',
-      'for', 'force', 'foreign', 'forget', 'form', 'former', 'forward', 'four', 'free', 'friend',
-      'from', 'front', 'full', 'fund', 'future', 'game', 'garden', 'gas', 'general', 'generation',
-      'get', 'girl', 'give', 'glass', 'go', 'goal', 'good', 'government', 'great', 'green',
-      'ground', 'group', 'grow', 'growth', 'guess', 'gun', 'guy', 'hair', 'half', 'hand',
-      'hang', 'happen', 'happy', 'hard', 'have', 'he', 'head', 'health', 'hear', 'heart',
-      'heat', 'heavy', 'help', 'her', 'here', 'herself', 'high', 'him', 'himself', 'his',
-      'history', 'hit', 'hold', 'home', 'hope', 'hospital', 'hot', 'hotel', 'hour', 'house',
-      'how', 'however', 'huge', 'human', 'hundred', 'husband', 'I', 'idea', 'identify', 'if',
-      'image', 'imagine', 'impact', 'important', 'improve', 'include', 'including', 'increase', 'indeed', 'indicate',
-      'individual', 'industry', 'information', 'inside', 'instead', 'institution', 'interest', 'interesting', 'international', 'interview',
-      'into', 'investment', 'involve', 'issue', 'it', 'item', 'its', 'itself', 'job', 'join',
-      'just', 'keep', 'key', 'kid', 'kill', 'kind', 'kitchen', 'know', 'knowledge', 'land',
-      'language', 'large', 'last', 'late', 'later', 'laugh', 'law', 'lawyer', 'lay', 'lead',
-      'leader', 'learn', 'least', 'leave', 'left', 'leg', 'legal', 'less', 'let', 'letter',
-      'level', 'lie', 'life', 'light', 'like', 'likely', 'line', 'list', 'listen', 'little',
-      'live', 'local', 'long', 'look', 'lose', 'loss', 'lot', 'love', 'low', 'machine',
-      'magazine', 'main', 'maintain', 'major', 'majority', 'make', 'man', 'manage', 'management', 'manager',
-      'many', 'market', 'marriage', 'material', 'matter', 'may', 'maybe', 'me', 'mean', 'measure',
-      'media', 'medical', 'meet', 'meeting', 'member', 'memory', 'mention', 'message', 'method', 'middle',
-      'might', 'military', 'million', 'mind', 'minute', 'miss', 'mission', 'model', 'modern', 'moment',
-      'money', 'month', 'more', 'morning', 'most', 'mother', 'mouth', 'move', 'movement', 'movie',
-      'Mr', 'Mrs', 'much', 'music', 'must', 'my', 'myself', 'name', 'nation', 'national',
-      'natural', 'nature', 'near', 'nearly', 'necessary', 'need', 'network', 'never', 'new', 'news',
-      'newspaper', 'next', 'nice', 'night', 'no', 'none', 'nor', 'north', 'not', 'note',
-      'nothing', 'notice', 'now', "n't", 'number', 'occur', 'of', 'off', 'offer', 'office',
-      'officer', 'official', 'often', 'oh', 'oil', 'ok', 'old', 'on', 'once', 'one',
-      'only', 'onto', 'open', 'operation', 'opportunity', 'option', 'or', 'order', 'organization', 'other',
-      'others', 'our', 'out', 'outside', 'over', 'own', 'owner', 'page', 'pain', 'painting',
-      'paper', 'parent', 'part', 'participant', 'particular', 'particularly', 'partner', 'party', 'pass', 'past',
-      'patient', 'pattern', 'pay', 'peace', 'people', 'per', 'perform', 'performance', 'perhaps', 'period',
-      'person', 'personal', 'phone', 'physical', 'pick', 'picture', 'piece', 'place', 'plan', 'plant',
-      'play', 'player', 'PM', 'point', 'police', 'policy', 'political', 'politics', 'poor', 'popular',
-      'population', 'position', 'positive', 'possible', 'power', 'practice', 'prepare', 'present', 'president', 'pressure',
-      'pretty', 'prevent', 'price', 'private', 'probably', 'problem', 'process', 'produce', 'product', 'production',
-      'professor', 'program', 'project', 'property', 'protect', 'prove', 'provide', 'public', 'pull', 'purpose',
-      'push', 'put', 'quality', 'question', 'quickly', 'quite', 'race', 'radio', 'raise', 'range',
-      'rate', 'rather', 'reach', 'read', 'ready', 'real', 'reality', 'realize', 'really', 'reason',
-      'receive', 'recent', 'recently', 'recognize', 'record', 'red', 'reduce', 'reflect', 'region', 'relate',
-      'relationship', 'religious', 'remain', 'remember', 'remove', 'report', 'represent', 'Republican', 'require', 'research',
-      'resource', 'respond', 'response', 'responsibility', 'rest', 'result', 'return', 'reveal', 'rich', 'right',
-      'rise', 'risk', 'road', 'rock', 'role', 'room', 'rule', 'run', 'safe', 'same',
-      'save', 'say', 'scene', 'school', 'science', 'scientist', 'score', 'sea', 'season', 'seat',
-      'second', 'section', 'security', 'see', 'seek', 'seem', 'sell', 'send', 'senior', 'sense',
-      'series', 'serious', 'serve', 'service', 'set', 'seven', 'several', 'sex', 'sexual', 'shake',
-      'shall', 'shape', 'share', 'she', 'shoot', 'short', 'shot', 'should', 'shoulder', 'show',
-      'side', 'sign', 'significant', 'similar', 'simple', 'simply', 'since', 'sing', 'single', 'sister',
-      'sit', 'site', 'situation', 'six', 'size', 'skill', 'skin', 'small', 'smile', 'so',
-      'social', 'society', 'soldier', 'some', 'somebody', 'someone', 'something', 'sometimes', 'son', 'song',
-      'soon', 'sort', 'sound', 'source', 'south', 'southern', 'space', 'speak', 'special', 'specific',
-      'speech', 'spend', 'sport', 'spring', 'staff', 'stage', 'stand', 'standard', 'star', 'start',
-      'state', 'statement', 'station', 'stay', 'step', 'still', 'stock', 'stop', 'store', 'story',
-      'strategy', 'street', 'strong', 'structure', 'student', 'study', 'stuff', 'style', 'subject', 'success',
-      'successful', 'such', 'suddenly', 'suffer', 'suggest', 'summer', 'support', 'sure', 'surface', 'system',
-      'table', 'take', 'talk', 'task', 'tax', 'teach', 'teacher', 'team', 'technology', 'television',
-      'tell', 'ten', 'tend', 'term', 'test', 'than', 'thank', 'that', 'the', 'their',
-      'them', 'themselves', 'then', 'theory', 'there', 'these', 'they', 'thing', 'think', 'third',
-      'this', 'those', 'though', 'thought', 'thousand', 'threat', 'three', 'through', 'throughout', 'throw',
-      'thus', 'time', 'to', 'today', 'together', 'tonight', 'too', 'top', 'total', 'tough',
-      'toward', 'town', 'trade', 'traditional', 'training', 'travel', 'treat', 'treatment', 'tree', 'trial',
-      'trip', 'trouble', 'true', 'truth', 'try', 'turn', 'TV', 'two', 'type', 'under',
-      'understand', 'unit', 'until', 'up', 'upon', 'us', 'use', 'usually', 'value', 'various',
-      'very', 'victim', 'view', 'violence', 'visit', 'voice', 'vote', 'wait', 'walk', 'wall',
-      'want', 'war', 'watch', 'water', 'way', 'we', 'weapon', 'wear', 'week', 'weight',
-      'well', 'west', 'western', 'what', 'whatever', 'when', 'where', 'whether', 'which', 'while',
-      'white', 'who', 'whole', 'whom', 'whose', 'why', 'wide', 'wife', 'will', 'win',
-      'wind', 'window', 'wish', 'with', 'within', 'without', 'woman', 'wonder', 'word', 'work',
-      'worker', 'world', 'worry', 'would', 'write', 'writer', 'wrong', 'yard', 'yeah', 'year',
-      'yes', 'yet', 'you', 'young', 'your', 'yourself'
-    ];
-
-    // Filter words that start with the query (prioritize) or contain it
-    const startsWith = commonWords
-      .filter(word => word.toLowerCase().startsWith(queryLower))
-      .slice(0, 5);
-    
-    // If we have enough "starts with" matches, return those
-    if (startsWith.length >= 3) {
-      return startsWith;
-    }
-    
-    // Otherwise, add words that contain the query
-    const contains = commonWords
-      .filter(word => {
-        const wordLower = word.toLowerCase();
-        return !wordLower.startsWith(queryLower) && wordLower.includes(queryLower);
-      })
-      .slice(0, 5 - startsWith.length);
-    
-    return [...startsWith, ...contains];
-  }
-
-  function showSuggestions(words) {
-    console.log('Nimbus: showSuggestions called with', words);
-    console.log('Nimbus: suggestions element:', suggestions);
-    
-    if (!suggestions) {
-      console.error('Nimbus: suggestions element not found!');
-      return;
-    }
-    
-    currentSuggestions = words;
-    suggestions.innerHTML = '';
-
-    if (words.length === 0) {
-      suggestions.innerHTML = '<div class="suggestion-item" style="color: #94a3b8; font-style: italic;">No suggestions found</div>';
-      suggestions.classList.add('show');
-      console.log('Nimbus: Showing "no suggestions" message');
-      return;
-    }
-    
-    words.forEach((word, index) => {
-      const item = document.createElement('div');
-      item.className = 'suggestion-item';
-      
-      // Highlight matching part of the word
-      const wordLower = word.toLowerCase();
-      const queryLower = searchInput.value.trim().toLowerCase();
-      const matchIndex = wordLower.indexOf(queryLower);
-      
-      if (matchIndex !== -1) {
-        const before = word.substring(0, matchIndex);
-        const match = word.substring(matchIndex, matchIndex + queryLower.length);
-        const after = word.substring(matchIndex + queryLower.length);
-        
-        item.innerHTML = `${before}<strong>${match}</strong>${after}`;
-      } else {
-        item.textContent = word;
-      }
-      
-      // Add visual indicator for favorites/recent (first few items)
-      if (index < 3) {
-        item.style.borderLeft = '3px solid #1e3a8a';
-        item.style.paddingLeft = '13px';
-      }
-      
-      item.addEventListener('click', () => {
-        searchInput.value = word;
-        suggestions.classList.remove('show');
-        showWordDetails(word);
-      });
-      suggestions.appendChild(item);
-    });
-
-    suggestions.classList.add('show');
-    console.log('Nimbus: Showing suggestions dropdown with', words.length, 'items');
-    console.log('Nimbus: suggestions.classList:', suggestions.classList.toString());
-    console.log('Nimbus: suggestions.style.display:', window.getComputedStyle(suggestions).display);
-    console.log('Nimbus: suggestions.offsetHeight:', suggestions.offsetHeight);
-    console.log('Nimbus: suggestions.offsetWidth:', suggestions.offsetWidth);
-    
-    // Force a reflow to ensure display change takes effect
-    void suggestions.offsetHeight;
-    
-    // Double-check it's visible
-    setTimeout(() => {
-      const computed = window.getComputedStyle(suggestions);
-      console.log('Nimbus: After timeout - display:', computed.display, 'visibility:', computed.visibility);
-      if (computed.display === 'none') {
-        console.error('Nimbus: Dropdown still hidden! Forcing display...');
-        suggestions.style.display = 'block';
-        suggestions.style.visibility = 'visible';
-      }
-    }, 10);
-  }
-
   async function showWordDetails(word, pushToHistory = true) {
+    // Show loading immediately
+    showLoadingPlaceholder(word);
+    
+    // Check if this is a statement (3+ words) - should always use AI, never show "did you mean"
+    const words = word.trim().split(/\s+/).filter(w => w.trim().length > 0);
+    const isStatement = words.length >= 3;
+    
     // Add to navigation history if not already there
     if (pushToHistory && (navigationHistory.length === 0 || navigationHistory[navigationHistory.length - 1] !== word)) {
       navigationHistory.push(word);
@@ -3223,51 +3201,181 @@
 
     // Get explanation
     try {
+      // Add timeout to prevent hanging
       const resp = await new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          resolve({ error: 'Request timed out. Please try again.' });
+        }, 20000);
+        
         chrome.runtime.sendMessage({ 
           type: 'explain', 
           word: word, 
           context: '',
           detailed: true
         }, (response) => {
+          clearTimeout(timeout);
+          
           if (chrome.runtime.lastError) {
+            console.error('Nimbus: Runtime error:', chrome.runtime.lastError.message);
             resolve({ error: chrome.runtime.lastError.message });
+          } else if (!response) {
+            resolve({ error: 'No response from background script' });
           } else {
             resolve(response);
           }
         });
       });
 
-      if (resp && !resp.error) {
-        // Check if word was not found
-        if (resp.explanation && (
-          resp.explanation.includes('not found') || 
-          resp.explanation.includes('No definition found') ||
-          resp.explanation.toLowerCase().includes('might be a proper noun')
-        )) {
-          // Show "did you mean" suggestions
-          const suggestions = await getDidYouMeanSuggestions(word);
-          showDidYouMean(word, suggestions);
+      // Display the response - FIXED LOGIC
+      if (resp && resp.error) {
+        // Show error
+        wordOfDayDiv.innerHTML = `
+          <div class="word-card-modal">
+            <div class="word-card-header">
+              <div class="word-card-header-top">
+                <div class="word-card-word-container">
+                  <div class="word-card-word-wrapper">
+                    <span class="word-card-word">${word}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="word-card-content">
+              <div style="padding: 20px; text-align: center; color: var(--text-secondary);">
+                <p style="margin-bottom: 12px; font-weight: 600; color: var(--text-primary);">Error: ${resp.error}</p>
+                <p style="font-size: 13px; color: var(--text-muted);">Please try again.</p>
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (resp && resp.explanation) {
+        // Has explanation - display it
+        const explanationStr = String(resp.explanation).trim();
+        
+        // For statements (3+ words), ALWAYS display the AI response, even if it says "not found"
+        // For single words, check if it's a valid explanation
+        if (isStatement || (explanationStr.length > 0 && 
+            !explanationStr.includes('not found') && 
+            !explanationStr.includes('No definition found'))) {
+          // Ensure all required fields exist
+          if (!resp.synonyms) resp.synonyms = [];
+          if (!resp.examples) resp.examples = [];
+          resp.explanation = explanationStr;
+          await displayWordDetails(word, resp, true); // true = isNewSearch
         } else {
-          displayWordDetails(word, resp);
+          // Only show "did you mean" for single words, not statements
+          if (!isStatement) {
+            const suggestions = await getDidYouMeanSuggestions(word);
+            showDidYouMean(word, suggestions);
+          } else {
+            // For statements, show the explanation even if it's not perfect
+            if (!resp.synonyms) resp.synonyms = [];
+            if (!resp.examples) resp.examples = [];
+            resp.explanation = explanationStr;
+            await displayWordDetails(word, resp, true); // true = isNewSearch
+          }
         }
-      } else if (resp && resp.error) {
-        // Show "did you mean" for errors too
+      } else {
+        console.error('🔴 POPUP: No response or invalid response');
+        console.error('🔴 POPUP: Response object:', resp);
+        console.error('🔴 POPUP: Response keys:', resp ? Object.keys(resp) : 'NULL');
+        // For statements, show a helpful message instead of "did you mean"
+        if (isStatement) {
+          wordOfDayDiv.innerHTML = `
+            <div class="word-card-modal">
+              <div class="word-card-header">
+                <div class="word-card-header-top">
+                  <div class="word-card-word-container">
+                    <div class="word-card-word-wrapper">
+                      <span class="word-card-word">${word}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="word-card-content">
+                <div style="padding: 20px; text-align: center; color: var(--text-secondary);">
+                  <p style="margin-bottom: 12px; font-weight: 600; color: var(--text-primary);">Processing your statement...</p>
+                  <p style="font-size: 13px; color: var(--text-muted);">Please wait while we analyze this.</p>
+                </div>
+              </div>
+            </div>
+          `;
+        } else {
+          wordOfDayDiv.innerHTML = `
+            <div class="word-card-modal">
+              <div class="word-card-header">
+                <div class="word-card-header-top">
+                  <div class="word-card-word-container">
+                    <div class="word-card-word-wrapper">
+                      <span class="word-card-word">${word}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="word-card-content">
+                <div style="padding: 20px; text-align: center; color: var(--text-secondary);">
+                  <p style="margin-bottom: 12px; font-weight: 600; color: var(--text-primary);">No response received</p>
+                  <p style="font-size: 13px; color: var(--text-muted);">Please try searching again.</p>
+                </div>
+              </div>
+            </div>
+          `;
+        }
+      }
+    } catch (e) {
+      console.error('🔴🔴🔴 POPUP: CATCH BLOCK TRIGGERED 🔴🔴🔴');
+      console.error('🔴 POPUP: Error type:', e?.name);
+      console.error('🔴 POPUP: Error message:', e?.message);
+      console.error('🔴 POPUP: Error stack:', e?.stack);
+      console.error('🔴 POPUP: Full error object:', e);
+      // For statements, don't show "did you mean" - show error message instead
+      if (isStatement) {
+        const errorMsg = e?.message || 'Unknown error occurred';
+        wordOfDayDiv.innerHTML = `
+          <div class="word-card-modal">
+            <div class="word-card-header">
+              <div class="word-card-header-top">
+                <div class="word-card-word-container">
+                  <div class="word-card-word-wrapper">
+                    <span class="word-card-word">${word}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="word-card-content">
+              <div style="padding: 20px; text-align: center; color: var(--text-secondary);">
+                <p style="margin-bottom: 12px; font-weight: 600; color: var(--text-primary);">Error processing statement</p>
+                <p style="font-size: 13px; color: var(--text-muted);">${errorMsg}</p>
+                <p style="font-size: 11px; color: var(--text-muted); margin-top: 8px;">Open popup console (right-click extension icon → Inspect popup) and background console (chrome://extensions → Service worker) for details.</p>
+              </div>
+            </div>
+          </div>
+        `;
+      } else {
+        // Only show "did you mean" for single words
         const suggestions = await getDidYouMeanSuggestions(word);
         showDidYouMean(word, suggestions);
       }
-    } catch (e) {
-      console.error('Error getting word details', e);
-      // Show "did you mean" on error
-      const suggestions = await getDidYouMeanSuggestions(word);
-      showDidYouMean(word, suggestions);
     }
   }
 
-  async function displayWordDetails(word, data) {
+  async function displayWordDetails(word, data, isNewSearch = false) {
     currentView = 'word';
     // Add hub-search-mode class when showing search results (after highlighting)
     document.body.classList.add('hub-search-mode');
+    
+    // Hide search bar for 3+ word statements (AI chat) only - keep logo visible
+    const isStatement = word.trim().split(/\s+/).length >= 3;
+    const searchContainer = document.querySelector('.search-container');
+    if (searchContainer) {
+      if (isStatement) {
+        searchContainer.style.display = 'none';
+      } else {
+        // Ensure search bar is visible for single words
+        searchContainer.style.display = '';
+        searchContainer.style.visibility = 'visible';
+      }
+    }
     
     // Hide other sections
     document.querySelectorAll('.section').forEach(section => {
@@ -3301,13 +3409,14 @@
     
     // Build HTML matching modal layout exactly
     const hasBack = navigationHistory.length > 1;
+    // isStatement already declared above at line 3642
     wordOfDayDiv.innerHTML = `
       <div class="word-card-modal">
         <div class="word-card-header">
           <div class="word-card-header-top">
             <div class="word-card-word-container">
               <div class="word-card-word-wrapper">
-                <span class="word-card-word">${word}</span>
+                <span class="word-card-word ${isStatement ? 'statement-text' : ''}">${word}</span>
                 ${showPhonetic && data.pronunciation ? `<span class="word-card-phonetic">${data.pronunciation}</span>` : ''}
               </div>
               <button class="word-card-copy-btn" id="wordCardCopyBtn" title="Copy word">
@@ -3320,28 +3429,130 @@
           </div>
           ${hasBack ? `<button class="back-btn" id="wordCardBackBtn">← Back</button>` : ''}
         </div>
-        <div class="word-card-explanation">${data.explanation || 'No explanation available.'}</div>
-        ${showExamples && data.examples && data.examples.length > 0 ? `
-          <div class="word-card-examples-container">
-            <div class="word-card-examples-label">${translations[window.currentUILanguage || 'en']?.examplesLabel || 'Examples'}</div>
-            <div class="word-card-examples-list">
-              ${data.examples.map(ex => `<div class="word-card-example-item">${ex}</div>`).join('')}
+        ${word.trim().split(/\s+/).length >= 3 ? `
+          <!-- Chat Interface for AI Responses - For statements, show chat only -->
+          <div class="ai-chat-container" id="aiChatContainer" style="margin-top: 0; padding: 20px 0; width: 100%;">
+            <div class="ai-chat-messages" id="aiChatMessages" style="max-height: 400px; overflow-y: auto; margin-bottom: 16px; padding: 16px; display: flex; flex-direction: column; gap: 16px;">
+              <!-- User message: The highlighted sentence -->
+              <div class="ai-message ai-user" style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
+                <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">You</div>
+                <div style="padding: 12px 16px; background: var(--accent-blue); color: white; border-radius: 12px; max-width: 80%; line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${word}</div>
+              </div>
+              <!-- AI response -->
+              <div class="ai-message ai-assistant" style="display: flex; flex-direction: column; gap: 4px;">
+                <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+                <div style="padding: 12px 16px; background: var(--card-bg); color: var(--text-primary); border-radius: 12px; line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${data.explanation || 'No explanation available.'}</div>
+              </div>
+            </div>
+        ` : `
+          <!-- Regular word display for single words -->
+          <div class="word-card-explanation">${data.explanation || 'No explanation available.'}</div>
+          ${showExamples && data.examples && data.examples.length > 0 ? `
+            <div class="word-card-examples-container">
+              <div class="word-card-examples-label">${translations[window.currentUILanguage || 'en']?.examplesLabel || 'Examples'}</div>
+              <div class="word-card-examples-list">
+                ${data.examples.map(ex => `<div class="word-card-example-item">${ex}</div>`).join('')}
+              </div>
+            </div>
+          ` : ''}
+          ${synonyms.length > 0 ? `
+            <div class="word-card-synonyms-container">
+              <div class="word-card-synonyms-label">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
+                </svg>
+                ${translations[window.currentUILanguage || 'en']?.synonymsLabel || 'Synonyms'}
+              </div>
+              <div class="word-card-synonyms-scroll">
+                ${synonyms.map(s => `<span class="word-card-synonym-tag" data-synonym="${s}">${s}</span>`).join('')}
+              </div>
+            </div>
+          ` : ''}
+        `}
+        ${word.trim().split(/\s+/).length >= 3 ? `
+            </div>
+            <div class="ai-chat-input-container" style="display: flex; gap: 8px; align-items: center; padding: 0 16px 20px 16px;">
+              <input type="text" id="aiChatInput" placeholder="Ask a follow-up question..." style="flex: 1; padding: 12px 16px; border: 2px solid var(--border-color); border-radius: 12px; background: var(--card-bg); color: var(--text-primary); font-size: 13px; outline: none; box-shadow: var(--card-shadow-inner), var(--card-shadow);" />
+              <button id="aiChatSendBtn" style="padding: 12px 16px; background: var(--accent-blue); color: white; border: none; border-radius: 12px; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.2s ease; box-shadow: var(--card-shadow-inner), var(--card-shadow);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="22" y1="2" x2="11" y2="13"></line>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
+              </button>
+            </div>
+          </div>
+          ${data.newsArticles && data.newsArticles.length > 0 ? `
+            <div class="word-card-news-container" style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border-color, rgba(226, 232, 240, 0.8));">
+              <div style="font-size: 14px; font-weight: 700; color: var(--text-inverse); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"></path>
+                  <rect x="11" y="7" width="10" height="5" rx="1"></rect>
+                  <rect x="11" y="14" width="7" height="5" rx="1"></rect>
+                </svg>
+                Recent News & Articles
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 10px;">
+                  ${data.newsArticles.slice(0, 5).map(article => {
+                    // Clean description - remove any HTML tags, href links, and URLs
+                    let cleanDescription = article.description || '';
+                    cleanDescription = cleanDescription.replace(/<[^>]*>/g, ''); // Remove HTML tags
+                    cleanDescription = cleanDescription.replace(/https?:\/\/[^\s]+/g, ''); // Remove URLs
+                    cleanDescription = cleanDescription.replace(/href=["'][^"']*["']/gi, ''); // Remove href attributes
+                    cleanDescription = cleanDescription.replace(/<a\s+[^>]*>/gi, ''); // Remove anchor tags
+                    cleanDescription = cleanDescription.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+                    
+                    // Make article clickable if link exists
+                    const articleContent = `
+                    <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px; line-height: 1.4; color: var(--text-primary);">${article.title || 'No title'}</div>
+                    ${cleanDescription ? `<div style="font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 6px;">${cleanDescription.substring(0, 100)}${cleanDescription.length > 100 ? '...' : ''}</div>` : ''}
+                    ${article.date ? `<div style="font-size: 11px; color: var(--text-muted);">${new Date(article.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</div>` : ''}
+                    `;
+                    
+                    if (article.link) {
+                      return `
+                      <a href="${article.link}" target="_blank" rel="noopener noreferrer" class="word-card-news-item" style="display: block; padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); box-shadow: var(--card-shadow-inner), var(--card-shadow); text-decoration: none; cursor: pointer; transition: all 0.2s ease;">
+                        ${articleContent}
+                      </a>
+                    `;
+                    } else {
+                      return `
+                      <div class="word-card-news-item" style="display: block; padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); box-shadow: var(--card-shadow-inner), var(--card-shadow);">
+                        ${articleContent}
+                      </div>
+                    `;
+                    }
+                  }).join('')}
+              </div>
+            </div>
+          ` : ''}
+          <div class="word-card-links-container" style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border-color, rgba(226, 232, 240, 0.8));">
+            <div style="font-size: 13px; font-weight: 600; color: var(--text-inverse); margin-bottom: 12px;">Learn More:</div>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <a href="https://en.wikipedia.org/wiki/${encodeURIComponent(word)}" target="_blank" rel="noopener noreferrer" class="word-card-link" style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--card-bg); border: 2px solid var(--border-color); border-radius: 12px; text-decoration: none; color: var(--text-primary); font-size: 13px; font-weight: 700; transition: all 0.2s ease; box-shadow: var(--card-shadow-inner), var(--card-shadow);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                </svg>
+                Wikipedia
+              </a>
+              <a href="https://www.google.com/search?q=${encodeURIComponent(word)}" target="_blank" rel="noopener noreferrer" class="word-card-link" style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--card-bg); border: 2px solid var(--border-color); border-radius: 12px; text-decoration: none; color: var(--text-primary); font-size: 13px; font-weight: 700; transition: all 0.2s ease; box-shadow: var(--card-shadow-inner), var(--card-shadow);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"/>
+                  <path d="m21 21-4.35-4.35"/>
+                </svg>
+                Google Search
+              </a>
+              <a href="https://news.google.com/search?q=${encodeURIComponent(word)}" target="_blank" rel="noopener noreferrer" class="word-card-link" style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--card-bg); border: 2px solid var(--border-color); border-radius: 12px; text-decoration: none; color: var(--text-primary); font-size: 13px; font-weight: 700; transition: all 0.2s ease; box-shadow: var(--card-shadow-inner), var(--card-shadow);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"></path>
+                  <rect x="11" y="7" width="10" height="5" rx="1"></rect>
+                  <rect x="11" y="14" width="7" height="5" rx="1"></rect>
+                </svg>
+                Google News
+              </a>
             </div>
           </div>
         ` : ''}
-        ${synonyms.length > 0 ? `
-          <div class="word-card-synonyms-container">
-            <div class="word-card-synonyms-label">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/>
-              </svg>
-              ${translations[window.currentUILanguage || 'en']?.synonymsLabel || 'Synonyms'}
-            </div>
-            <div class="word-card-synonyms-scroll">
-              ${synonyms.map(s => `<span class="word-card-synonym-tag" data-synonym="${s}">${s}</span>`).join('')}
-            </div>
-          </div>
-        ` : ''}
+        ${word.trim().split(/\s+/).length < 3 ? `
         <div class="word-card-actions">
           <button class="word-card-fav-btn-icon ${isFavorited ? 'favorited' : ''}" id="wordCardFavBtn" title="${isFavorited ? 'Remove from favorites' : 'Add to favorites'}">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="${isFavorited ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2">
@@ -3354,52 +3565,283 @@
             </svg>
           </button>
         </div>
+        ` : ''}
       </div>
     `;
     
     // Event handlers
     if (hasBack) {
-      document.getElementById('wordCardBackBtn').addEventListener('click', () => {
-        navigationHistory.pop(); // Remove current
-        const previousWord = navigationHistory[navigationHistory.length - 1];
-        if (previousWord) {
-          showWordDetails(previousWord, false); // Don't push to history
-        } else {
-          returnToHub();
+      const backBtn = document.getElementById('wordCardBackBtn');
+      if (backBtn) {
+        backBtn.addEventListener('click', () => {
+          navigationHistory.pop(); // Remove current
+          const previousWord = navigationHistory[navigationHistory.length - 1];
+          if (previousWord) {
+            showWordDetails(previousWord, false); // Don't push to history
+          } else {
+            returnToHub();
+          }
+        });
+      }
+    }
+    
+    const copyBtn = document.getElementById('wordCardCopyBtn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(word);
+        copyBtn.classList.add('copied');
+        setTimeout(() => copyBtn.classList.remove('copied'), 2000);
+        } catch (e) {
+          console.error('Failed to copy', e);
         }
       });
     }
     
-    document.getElementById('wordCardCopyBtn').addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(word);
-        const btn = document.getElementById('wordCardCopyBtn');
-        btn.classList.add('copied');
-        setTimeout(() => btn.classList.remove('copied'), 2000);
-      } catch (e) {
-        console.error('Failed to copy', e);
-      }
+    // Add hover effects for links (if they exist - for 3+ word statements)
+    document.querySelectorAll('.word-card-link').forEach(link => {
+      link.addEventListener('mouseenter', function() {
+        this.style.background = 'rgba(241, 245, 249, 0.8)';
+        this.style.transform = 'translateX(4px)';
+      });
+      link.addEventListener('mouseleave', function() {
+        this.style.background = 'rgba(241, 245, 249, 0.5)';
+        this.style.transform = 'translateX(0)';
+      });
     });
     
-    document.getElementById('wordCardFavBtn').addEventListener('click', async () => {
-      const favorites = await getStorage('favorites') || [];
-      const index = favorites.indexOf(word);
-      if (index > -1) {
-        favorites.splice(index, 1);
+    const favBtn = document.getElementById('wordCardFavBtn');
+    if (favBtn) {
+      favBtn.addEventListener('click', async () => {
+        const favorites = await getStorage('favorites') || [];
+        const index = favorites.indexOf(word);
+        if (index > -1) {
+          favorites.splice(index, 1);
+        } else {
+          favorites.push(word);
+        }
+        await setStorage({ favorites });
+        const isNowFavorited = favorites.includes(word);
+        favBtn.classList.toggle('favorited', isNowFavorited);
+        const svg = favBtn.querySelector('svg');
+        if (svg) svg.setAttribute('fill', isNowFavorited ? 'currentColor' : 'none');
+        loadFavorites();
+      });
+    }
+    
+    const searchBtn = document.getElementById('wordCardSearchBtn');
+    if (searchBtn) {
+      searchBtn.addEventListener('click', () => {
+        window.open(`https://www.google.com/search?q=${encodeURIComponent(word)}`, '_blank');
+      });
+    }
+    
+    // Chat functionality for AI responses (3+ words)
+    if (word.trim().split(/\s+/).length >= 3) {
+      const chatInput = document.getElementById('aiChatInput');
+      const chatSendBtn = document.getElementById('aiChatSendBtn');
+      const chatMessages = document.getElementById('aiChatMessages');
+      
+      // Initialize conversation - always start fresh for new searches
+      let conversationId = null;
+      let conversationHistory = [
+        { role: 'user', content: word },
+        { role: 'assistant', content: data.explanation || 'No explanation available.' }
+      ];
+      
+      // Only load existing conversation if NOT a new search (e.g., clicking from conversations list)
+      if (!isNewSearch) {
+        chrome.storage.local.get(['conversations'], (result) => {
+          const conversations = result.conversations || {};
+          const queryTitle = word.substring(0, 50);
+          
+          // Find existing conversation with matching title
+          for (const [id, conv] of Object.entries(conversations)) {
+            if (conv.title === queryTitle) {
+              conversationId = id;
+              conversationHistory = conv.messages || conversationHistory;
+              break;
+            }
+          }
+          
+          // If found existing conversation, render its messages
+          if (conversationId && conversations[conversationId] && conversations[conversationId].messages) {
+            conversationHistory = conversations[conversationId].messages;
+            chatMessages.innerHTML = conversationHistory.map(msg => {
+              if (msg.role === 'user') {
+                return `
+                  <div class="ai-message ai-user" style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
+                    <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">You</div>
+                    <div style="padding: 12px 16px; background: var(--accent-blue); color: white; border-radius: 12px; max-width: 80%; line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${msg.content}</div>
+                  </div>
+                `;
+              } else if (msg.role === 'assistant') {
+                return `
+                  <div class="ai-message ai-assistant" style="display: flex; flex-direction: column; gap: 4px;">
+                    <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+                    <div style="padding: 12px 16px; background: var(--card-bg); color: var(--text-primary); border-radius: 12px; line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${msg.content}</div>
+                  </div>
+                `;
+              }
+              return '';
+            }).join('');
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+          }
+          
+          // Store conversation ID on the input
+          if (chatInput) {
+            chatInput.dataset.conversationId = conversationId || `conv_${Date.now()}_${word.substring(0, 20).replace(/\s+/g, '_')}`;
+            chatInput.dataset.originalQuery = word;
+          }
+        });
       } else {
-        favorites.push(word);
+        // For new searches, always create a fresh conversation ID
+        conversationId = `conv_${Date.now()}_${word.substring(0, 20).replace(/\s+/g, '_')}`;
+        if (chatInput) {
+          chatInput.dataset.conversationId = conversationId;
+          chatInput.dataset.originalQuery = word;
+        }
+        // Render initial messages (user query + AI response)
+        chatMessages.innerHTML = `
+          <div class="ai-message ai-user" style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
+            <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">You</div>
+            <div style="padding: 12px 16px; background: var(--accent-blue); color: white; border-radius: 12px; max-width: 80%; line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${word}</div>
+          </div>
+          <div class="ai-message ai-assistant" style="display: flex; flex-direction: column; gap: 4px;">
+            <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+            <div style="padding: 12px 16px; background: var(--card-bg); color: var(--text-primary); border-radius: 12px; line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${data.explanation || 'No explanation available.'}</div>
+          </div>
+        `;
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+        
+        // Save conversation AFTER first AI response (only for new searches)
+        chrome.storage.local.get(['conversations'], (result) => {
+          const conversations = result.conversations || {};
+          conversations[conversationId] = {
+            title: word.substring(0, 50),
+            messages: conversationHistory,
+            timestamp: Date.now(),
+            lastUpdated: Date.now()
+          };
+          chrome.storage.local.set({ conversations }, () => {
+            loadConversations(); // Refresh conversations list
+          });
+        });
       }
-      await setStorage({ favorites });
-      const btn = document.getElementById('wordCardFavBtn');
-      const isNowFavorited = favorites.includes(word);
-      btn.classList.toggle('favorited', isNowFavorited);
-      btn.querySelector('svg').setAttribute('fill', isNowFavorited ? 'currentColor' : 'none');
-      loadFavorites();
-    });
-    
-    document.getElementById('wordCardSearchBtn').addEventListener('click', () => {
-      window.open(`https://www.google.com/search?q=${encodeURIComponent(word)}`, '_blank');
-    });
+      
+      const sendMessage = async () => {
+        const message = chatInput.value.trim();
+        if (!message) return;
+        
+        // Add user message to UI
+        const userMsgDiv = document.createElement('div');
+        userMsgDiv.className = 'ai-message ai-user';
+          userMsgDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px; align-items: flex-end;';
+          userMsgDiv.innerHTML = `
+            <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">You</div>
+            <div style="padding: 12px 16px; background: var(--accent-blue); color: white; border-radius: 12px; max-width: 80%; line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${message}</div>
+          `;
+        chatMessages.appendChild(userMsgDiv);
+        conversationHistory.push({ role: 'user', content: message });
+        
+        // Add loading message
+        const loadingDiv = document.createElement('div');
+        loadingDiv.className = 'ai-message ai-assistant';
+          loadingDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
+          loadingDiv.innerHTML = `
+            <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+            <div style="padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); line-height: 1.5; font-size: 13px; box-shadow: var(--card-shadow-inner), var(--card-shadow);">Thinking...</div>
+          `;
+        chatMessages.appendChild(loadingDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+        
+        chatInput.value = '';
+        chatInput.disabled = true;
+        chatSendBtn.disabled = true;
+        
+        try {
+          // Send to background script with conversation context
+          const response = await new Promise((resolve) => {
+            chrome.runtime.sendMessage({
+              type: 'chat',
+              message: message,
+              conversationHistory: conversationHistory.slice(0, -1), // Exclude the current user message
+              originalQuery: word
+            }, (resp) => {
+              if (chrome.runtime.lastError) {
+                resolve({ error: chrome.runtime.lastError.message });
+              } else {
+                resolve(resp);
+              }
+            });
+          });
+          
+          // Remove loading message
+          loadingDiv.remove();
+          
+          if (response && response.explanation && !response.error) {
+            // Add AI response
+            const aiMsgDiv = document.createElement('div');
+            aiMsgDiv.className = 'ai-message ai-assistant';
+              aiMsgDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
+              aiMsgDiv.innerHTML = `
+                <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+                <div style="padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${response.explanation}</div>
+              `;
+            chatMessages.appendChild(aiMsgDiv);
+            conversationHistory.push({ role: 'assistant', content: response.explanation });
+            
+            // Save conversation
+            const currentConvId = chatInput?.dataset?.conversationId || conversationId;
+            chrome.storage.local.get(['conversations'], (result) => {
+              const conversations = result.conversations || {};
+              const existingConv = conversations[currentConvId];
+              conversations[currentConvId] = {
+                title: word.substring(0, 50),
+                messages: conversationHistory,
+                timestamp: existingConv?.timestamp || Date.now(),
+                lastUpdated: Date.now()
+              };
+              chrome.storage.local.set({ conversations });
+              loadConversations(); // Refresh conversations list
+            });
+          } else {
+            // Show error
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'ai-message ai-assistant';
+            errorDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
+            errorDiv.innerHTML = `
+              <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+              <div style="padding: 10px 14px; background: #fee2e2; border-radius: 12px; border: 1px solid #fca5a5; color: #991b1b; line-height: 1.5; font-size: 13px;">Sorry, I couldn't process that. Please try again.</div>
+            `;
+            chatMessages.appendChild(errorDiv);
+          }
+        } catch (err) {
+          loadingDiv.remove();
+          const errorDiv = document.createElement('div');
+          errorDiv.className = 'ai-message ai-assistant';
+          errorDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
+          errorDiv.innerHTML = `
+            <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+            <div style="padding: 10px 14px; background: #fee2e2; border-radius: 12px; border: 1px solid #fca5a5; color: #991b1b; line-height: 1.5; font-size: 13px;">Error: ${err.message}</div>
+          `;
+          chatMessages.appendChild(errorDiv);
+        }
+        
+        chatInput.disabled = false;
+        chatSendBtn.disabled = false;
+        chatInput.focus();
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      };
+      
+      chatSendBtn.addEventListener('click', sendMessage);
+      chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      });
+    }
     
     // Make synonyms clickable
     wordOfDayDiv.querySelectorAll('.word-card-synonym-tag').forEach(tag => {
@@ -3423,6 +3865,7 @@
     
     // Simple Levenshtein-like matching (find words with similar length and characters)
     for (const candidate of allWords) {
+      if (!candidate || typeof candidate !== 'string') continue;
       const candidateLower = candidate.toLowerCase();
       if (candidateLower === wordLower) continue;
       
@@ -3513,8 +3956,326 @@
     return `/${word}/`;
   }
 
+  async function loadConversations() {
+    try {
+      const conversationsDiv = document.getElementById('conversations');
+      if (!conversationsDiv) return;
+      
+      const conversations = await getStorage('conversations') || {};
+      const conversationEntries = Object.entries(conversations);
+      
+      if (conversationEntries.length === 0) {
+        const lang = window.currentUILanguage || 'en';
+        const t = translations[lang] || translations.en;
+        conversationsDiv.innerHTML = `<div class="empty-state">${t.noConversations || 'No conversations yet'}</div>`;
+        return;
+      }
+      
+      // Sort by lastUpdated (most recent first)
+      conversationEntries.sort((a, b) => (b[1].lastUpdated || b[1].timestamp || 0) - (a[1].lastUpdated || a[1].timestamp || 0));
+      
+      // Build table view similar to recent searches
+      const lang = window.currentUILanguage || 'en';
+      const t = translations[lang] || translations.en;
+      
+      conversationsDiv.innerHTML = `
+        <div class="recent-table-container">
+          <div class="recent-table">
+            ${conversationEntries.map(([id, conv]) => {
+              const title = conv.title || 'Untitled Conversation';
+              const timestamp = conv.lastUpdated || conv.timestamp || Date.now();
+              const timeAgo = getTimeAgo(timestamp);
+              const messageCount = conv.messages ? conv.messages.length : 0;
+              
+              return `
+                <div class="recent-table-row conversation-row" data-conversation-id="${id}">
+                  <div class="recent-table-word" style="flex: 1; cursor: pointer;">
+                    <div style="font-weight: 700; color: var(--text-primary); font-size: 15px; margin-bottom: 4px;">${title}</div>
+                    <div style="font-size: 12px; color: var(--text-muted);">${messageCount} message${messageCount !== 1 ? 's' : ''}</div>
+                  </div>
+                  <div class="recent-table-time" style="min-width: 80px; text-align: right; color: var(--text-muted); font-size: 12px;">${timeAgo}</div>
+                  <button class="recent-remove-btn conversation-delete-btn" data-conversation-id="${id}" title="Delete conversation" style="margin-left: 8px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                    </svg>
+                  </button>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      `;
+      
+      // Add click handlers for conversation rows - make entire row clickable
+      conversationsDiv.querySelectorAll('.conversation-row').forEach(row => {
+        const conversationId = row.dataset.conversationId;
+        
+        // Make entire row clickable (except delete button)
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', (e) => {
+          // Don't trigger if clicking the delete button
+          if (e.target.closest('.conversation-delete-btn')) {
+            return;
+          }
+          
+          // Load the conversation - find the original query from the conversation
+          const conv = conversations[conversationId];
+          if (conv && conv.messages && conv.messages.length > 0) {
+            // Get the original query from the first user message or title
+            const firstUserMsg = conv.messages.find(m => m.role === 'user');
+            const originalQuery = firstUserMsg?.content || conv.title || 'Unknown';
+            
+            
+            // Get the first AI response to use as the explanation for displayWordDetails
+            const firstAssistantMsg = conv.messages.find(m => m.role === 'assistant');
+            const explanation = firstAssistantMsg?.content || 'No explanation available.';
+            
+            // Create a data object similar to what showWordDetails would receive
+            const conversationData = {
+              explanation: explanation,
+              synonyms: [],
+              examples: [],
+              newsArticles: conv.newsArticles || []
+            };
+            
+            // Use displayWordDetails directly to skip API call and show conversation immediately
+            displayWordDetails(originalQuery, conversationData, false).then(async () => {
+              // After the word details are shown, restore the conversation
+              // Wait a bit longer to ensure chat UI is fully rendered
+              await new Promise(resolve => setTimeout(resolve, 400));
+              
+              const chatMessages = document.getElementById('aiChatMessages');
+              const chatInput = document.getElementById('aiChatInput');
+              const chatSendBtn = document.getElementById('aiChatSendBtn');
+              
+              
+              if (chatMessages && conv.messages) {
+                // Re-render all messages
+                chatMessages.innerHTML = conv.messages.map(msg => {
+                    if (msg.role === 'assistant') {
+                      return `
+                        <div class="ai-message ai-assistant" style="display: flex; flex-direction: column; gap: 4px;">
+                          <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+                          <div style="padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${msg.content}</div>
+                        </div>
+                      `;
+                    } else {
+                      return `
+                        <div class="ai-message ai-user" style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
+                          <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">You</div>
+                          <div style="padding: 12px 16px; background: var(--accent-blue); color: white; border-radius: 12px; max-width: 80%; line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${msg.content}</div>
+                        </div>
+                      `;
+                    }
+                  }).join('');
+                  chatMessages.scrollTop = chatMessages.scrollHeight;
+                  
+                  // Store conversation ID and history for continuing the conversation
+                  if (chatInput) {
+                    chatInput.dataset.conversationId = conversationId;
+                    chatInput.dataset.originalQuery = originalQuery;
+                    
+                    // Set up sendMessage handler if not already set
+                    if (chatSendBtn && !chatSendBtn.dataset.handlerAttached) {
+                      chatSendBtn.dataset.handlerAttached = 'true';
+                      
+                      const sendMessage = async () => {
+                        const message = chatInput.value.trim();
+                        if (!message) return;
+                        
+                        // Add user message to UI
+                        const userMsgDiv = document.createElement('div');
+                        userMsgDiv.className = 'ai-message ai-user';
+                        userMsgDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px; align-items: flex-end;';
+                        userMsgDiv.innerHTML = `
+                          <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">You</div>
+                          <div style="padding: 12px 16px; background: var(--accent-blue); color: white; border-radius: 12px; max-width: 80%; line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${message}</div>
+                        `;
+                        chatMessages.appendChild(userMsgDiv);
+                        
+                        // Get current conversation history
+                        const currentConvId = chatInput.dataset.conversationId;
+                        chrome.storage.local.get(['conversations'], async (result) => {
+                          const conversations = result.conversations || {};
+                          const currentConv = conversations[currentConvId] || conv;
+                          const conversationHistory = currentConv.messages || [];
+                          conversationHistory.push({ role: 'user', content: message });
+                          
+                          // Add loading message
+                          const loadingDiv = document.createElement('div');
+                          loadingDiv.className = 'ai-message ai-assistant';
+                          loadingDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
+                          loadingDiv.innerHTML = `
+                            <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+                            <div style="padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); line-height: 1.5; font-size: 13px; box-shadow: var(--card-shadow-inner), var(--card-shadow);">Thinking...</div>
+                          `;
+                          chatMessages.appendChild(loadingDiv);
+                          chatMessages.scrollTop = chatMessages.scrollHeight;
+                          
+                          chatInput.value = '';
+                          chatInput.disabled = true;
+                          chatSendBtn.disabled = true;
+                          
+                          try {
+                            // Send to background script with conversation context
+                            const response = await new Promise((resolve) => {
+                              chrome.runtime.sendMessage({
+                                type: 'chat',
+                                message: message,
+                                conversationHistory: conversationHistory.slice(0, -1),
+                                originalQuery: chatInput.dataset.originalQuery || originalQuery
+                              }, (resp) => {
+                                if (chrome.runtime.lastError) {
+                                  resolve({ error: chrome.runtime.lastError.message });
+                                } else {
+                                  resolve(resp);
+                                }
+                              });
+                            });
+                            
+                            // Remove loading message
+                            loadingDiv.remove();
+                            
+                            if (response && response.explanation && !response.error) {
+                              // Add AI response
+                              const aiMsgDiv = document.createElement('div');
+                              aiMsgDiv.className = 'ai-message ai-assistant';
+                              aiMsgDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
+                              aiMsgDiv.innerHTML = `
+                                <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+                                <div style="padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${response.explanation}</div>
+                              `;
+                              chatMessages.appendChild(aiMsgDiv);
+                              conversationHistory.push({ role: 'assistant', content: response.explanation });
+                              
+                              // Save updated conversation
+                              conversations[currentConvId] = {
+                                title: currentConv.title || originalQuery.substring(0, 50),
+                                messages: conversationHistory,
+                                timestamp: currentConv.timestamp || Date.now(),
+                                lastUpdated: Date.now()
+                              };
+                              chrome.storage.local.set({ conversations });
+                              loadConversations();
+                            } else {
+                              // Show error
+                              const errorDiv = document.createElement('div');
+                              errorDiv.className = 'ai-message ai-assistant';
+                              errorDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
+                              errorDiv.innerHTML = `
+                                <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+                                <div style="padding: 10px 14px; background: #fee2e2; border-radius: 12px; border: 1px solid #fca5a5; color: #991b1b; line-height: 1.5; font-size: 13px;">Sorry, I couldn't process that. Please try again.</div>
+                              `;
+                              chatMessages.appendChild(errorDiv);
+                            }
+                          } catch (err) {
+                            loadingDiv.remove();
+                            const errorDiv = document.createElement('div');
+                            errorDiv.className = 'ai-message ai-assistant';
+                            errorDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
+                            errorDiv.innerHTML = `
+                              <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+                              <div style="padding: 10px 14px; background: #fee2e2; border-radius: 12px; border: 1px solid #fca5a5; color: #991b1b; line-height: 1.5; font-size: 13px;">Error: ${err.message}</div>
+                            `;
+                            chatMessages.appendChild(errorDiv);
+                          }
+                          
+                          chatInput.disabled = false;
+                          chatSendBtn.disabled = false;
+                          chatInput.focus();
+                        });
+                      };
+                      
+                      // Attach handlers
+                      chatSendBtn.addEventListener('click', sendMessage);
+                      chatInput.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          sendMessage();
+                        }
+                      });
+                    } else {
+                      // Handler already attached, just update the conversation ID
+                    }
+                  } else {
+                    console.error('Nimbus: Chat elements not found after displayWordDetails');
+                  }
+              }
+            }).catch(err => {
+              console.error('Nimbus: Error in displayWordDetails:', err);
+            });
+          }
+        });
+      });
+      
+      // Add delete handler using event delegation - more reliable
+      // Remove old handler if exists
+      if (conversationsDiv._deleteHandler) {
+        conversationsDiv.removeEventListener('click', conversationsDiv._deleteHandler, true);
+      }
+      
+      conversationsDiv._deleteHandler = (e) => {
+        // Check if click is on delete button or its SVG child
+        const deleteBtn = e.target.closest('.conversation-delete-btn');
+        if (!deleteBtn) return;
+        
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        const conversationId = deleteBtn.dataset.conversationId;
+        if (!conversationId) {
+          console.error('No conversation ID found on delete button');
+          return;
+        }
+        
+        // Delete immediately without confirmation
+        chrome.storage.local.get(['conversations'], (data) => {
+          if (chrome.runtime.lastError) {
+            console.error('Error getting conversations:', chrome.runtime.lastError);
+            return;
+          }
+          
+          const conversations = data.conversations || {};
+          
+          if (!conversations[conversationId]) {
+            console.warn('Conversation not found:', conversationId);
+            return;
+          }
+          
+          // Delete the conversation
+          delete conversations[conversationId];
+          
+          // Save back to storage
+          chrome.storage.local.set({ conversations }, () => {
+            if (chrome.runtime.lastError) {
+              console.error('Error saving conversations:', chrome.runtime.lastError);
+              return;
+            }
+            
+            // Immediately refresh the UI after successful save
+            loadConversations();
+          });
+        });
+      };
+      
+      // Attach handler with capture phase to fire before row click handler
+      conversationsDiv.addEventListener('click', conversationsDiv._deleteHandler, true);
+    } catch (e) {
+      console.error('Error loading conversations', e);
+      const conversationsDiv = document.getElementById('conversations');
+      if (conversationsDiv) {
+        conversationsDiv.innerHTML = '<div class="empty-state">Error loading conversations</div>';
+      }
+    }
+  }
+
   async function loadFavorites() {
     try {
+      if (!favoritesDiv) {
+        console.error('Nimbus: favoritesDiv not found');
+        return;
+      }
       const favorites = await getStorage('favorites') || [];
       
       if (favorites.length === 0) {
@@ -3559,6 +4320,10 @@
 
   async function loadRecent() {
     try {
+      if (!recentDiv) {
+        console.error('Nimbus: recentDiv not found');
+        return;
+      }
       let recent = await getStorage('recentSearches') || [];
       
       // Migrate old format (strings) to new format (objects with timestamp)
@@ -3567,16 +4332,17 @@
         await setStorage({ recentSearches: recent });
       }
       
-      // Remove entries older than 3 days
-      const threeDaysAgo = Date.now() - (3 * 24 * 60 * 60 * 1000);
-      recent = recent.filter(item => {
+      // Auto-cleanup: Remove entries older than 14 days
+      const fourteenDaysAgo = Date.now() - (14 * 24 * 60 * 60 * 1000);
+      const cleaned = recent.filter(item => {
         const timestamp = typeof item === 'string' ? Date.now() : item.timestamp;
-        return timestamp > threeDaysAgo;
+        return timestamp > fourteenDaysAgo;
       });
       
-      // Save cleaned list
-      if (recent.length !== (await getStorage('recentSearches') || []).length) {
-        await setStorage({ recentSearches: recent });
+      // Save cleaned list if any items were removed
+      if (cleaned.length !== recent.length) {
+        await setStorage({ recentSearches: cleaned });
+        recent = cleaned;
       }
       
       allRecentSearches = recent;
@@ -3650,21 +4416,32 @@
         });
       });
       
-      document.getElementById('clearAllRecent').addEventListener('click', async () => {
-        const lang = window.currentUILanguage || 'en';
-        const t = translations[lang] || translations.en;
-        const confirmed = await showConfirmDialog(
-          t.clearAllRecentConfirm || 'Are you sure you want to clear all recent searches? This cannot be undone.',
-          t.clearAllRecent || 'Clear All Recent Searches'
-        );
-        if (confirmed) {
-          await setStorage({ recentSearches: [] });
-          allRecentSearches = [];
-          recentExpanded = false;
-          await loadRecent();
-          showNotification(t.recentSearchesCleared || 'All recent searches cleared!', 'success');
-        }
-      });
+      // Add clear all button handler - attach immediately after HTML is set
+      const clearAllBtn = recentDiv.querySelector('#clearAllRecent');
+      if (clearAllBtn) {
+        // Remove any existing listeners
+        const newBtn = clearAllBtn.cloneNode(true);
+        clearAllBtn.parentNode.replaceChild(newBtn, clearAllBtn);
+        
+        newBtn.addEventListener('click', async function(e) {
+          e.stopPropagation();
+          e.preventDefault();
+          
+          const lang = window.currentUILanguage || 'en';
+          const t = translations[lang] || translations.en;
+          
+          try {
+            await setStorage({ recentSearches: [] });
+            allRecentSearches = [];
+            recentExpanded = false;
+            await loadRecent();
+            showNotification(t.recentSearchesCleared || 'All recent searches cleared!', 'success');
+          } catch (err) {
+            console.error('Nimbus: Error in clear all:', err);
+            showNotification('Error clearing recent searches. Please try again.', 'error');
+          }
+        });
+      }
       
       document.getElementById('collapseRecent').addEventListener('click', () => {
         recentExpanded = false;
@@ -3748,20 +4525,16 @@
     wordOfDayDiv.innerHTML = `<div class="loading">${loadingText}</div>`;
 
     try {
-      console.log('Nimbus: Starting to load word of day...');
       
       // Get a random word from a list or generate one
       const word = await getRandomWord();
-      console.log('Nimbus: Word of day selected:', word);
       
       if (!word) {
         throw new Error('No word generated');
       }
       
       // Get detailed explanation with pronunciation and examples
-      console.log('Nimbus: Fetching details for word:', word);
       const details = await getWordOfDayDetails(word);
-      console.log('Nimbus: Details received:', details);
       
       // Check if wordOfDayDiv still exists (might have been removed)
       if (!wordOfDayDiv || !wordOfDayDiv.parentNode) {
@@ -3775,7 +4548,6 @@
       
       // Even if details has an error, still try to display it
       if (details && details.explanation) {
-        console.log('Nimbus: Displaying word of day:', word, details);
         displayWordOfDay(word, details);
       } else {
         // If we have a word but no explanation, show the word with a fallback message
@@ -3976,7 +4748,6 @@
 
   async function getWordOfDayDetails(word) {
     try {
-      console.log('Nimbus: Getting word of day details for:', word);
       // Get explanation with detailed info
       const resp = await new Promise((resolve) => {
         try {
@@ -4003,7 +4774,6 @@
               console.error('Nimbus: Error in sendMessage:', chrome.runtime.lastError.message);
               resolve({ error: chrome.runtime.lastError.message });
             } else {
-              console.log('Nimbus: Received response for word of day:', response);
               resolve(response || { error: 'No response' });
             }
           });
@@ -4013,7 +4783,6 @@
         }
       });
 
-      console.log('Nimbus: Response from background:', resp);
       
       // Even if there's an error in the response, try to use what we have
       if (resp) {
@@ -4216,9 +4985,19 @@
   // Helper functions
   function getStorage(key) {
     return new Promise((resolve) => {
-      chrome.storage.local.get([key], (res) => {
-        resolve(res[key]);
-      });
+      try {
+        chrome.storage.local.get([key], (res) => {
+          if (chrome.runtime.lastError) {
+            console.error('Nimbus: Storage get error:', chrome.runtime.lastError);
+            resolve(null);
+            return;
+          }
+          resolve(res[key]);
+        });
+      } catch (e) {
+        console.error('Nimbus: Error in getStorage:', e);
+        resolve(null);
+      }
     });
   }
 
@@ -4252,7 +5031,7 @@
     // Check if we're in incognito mode - don't save if so
     try {
       if (chrome && chrome.extension && chrome.extension.inIncognitoContext) {
-        console.log('CursorIQ: Incognito mode detected, not saving to recent');
+        // Incognito mode detected, not saving to recent
         return;
       }
     } catch (e) {
@@ -4276,12 +5055,12 @@
     // Add to front with timestamp
     filtered.unshift({ word: word, timestamp: Date.now() });
     
-    // Remove entries older than 3 days
-    const threeDaysAgo = Date.now() - (3 * 24 * 60 * 60 * 1000);
-    const cleaned = filtered.filter(item => {
-      const timestamp = typeof item === 'string' ? Date.now() : item.timestamp;
-      return timestamp > threeDaysAgo;
-    });
+          // Remove entries older than 14 days
+          const fourteenDaysAgo2 = Date.now() - (14 * 24 * 60 * 60 * 1000);
+          const cleaned = filtered.filter(item => {
+            const timestamp = typeof item === 'string' ? Date.now() : item.timestamp;
+            return timestamp > fourteenDaysAgo2;
+          });
     
     await setStorage({ recentSearches: cleaned.slice(0, 50) });
   }

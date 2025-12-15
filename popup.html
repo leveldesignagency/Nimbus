@@ -471,8 +471,7 @@
     
     .word-item:hover {
       border-color: var(--accent-blue);
-      box-shadow: var(--card-shadow-inner), 0 4px 16px rgba(30, 58, 138, 0.3);
-      transform: translateY(-2px);
+      box-shadow: var(--card-shadow-inner), 0 0 20px rgba(30, 58, 138, 0.4), 0 0 40px rgba(30, 58, 138, 0.2);
     }
     
     .word-item:hover::before {
@@ -641,8 +640,7 @@
     .show-less-btn:hover {
       border-color: var(--accent-blue);
       background: var(--bg-secondary);
-      box-shadow: var(--card-shadow-inner), 0 4px 12px rgba(30, 58, 138, 0.3);
-      transform: translateY(-2px);
+      box-shadow: var(--card-shadow-inner), 0 0 20px rgba(30, 58, 138, 0.4), 0 0 40px rgba(30, 58, 138, 0.2);
       color: var(--accent-blue);
     }
     
@@ -684,8 +682,7 @@
     .clear-all-btn:hover {
       background: rgba(254, 226, 226, 0.8);
       border-color: #dc2626;
-      box-shadow: var(--card-shadow-inner), 0 4px 12px rgba(220, 38, 38, 0.3);
-      transform: translateY(-2px);
+      box-shadow: var(--card-shadow-inner), 0 0 20px rgba(220, 38, 38, 0.4), 0 0 40px rgba(220, 38, 38, 0.2);
     }
     
     @media (prefers-color-scheme: dark) {
@@ -750,12 +747,15 @@
     
     .recent-table-row:hover {
       border-color: var(--accent-blue);
-      box-shadow: var(--card-shadow-inner), 0 4px 16px rgba(30, 58, 138, 0.3);
-      transform: translateY(-2px);
+      box-shadow: var(--card-shadow-inner), 0 0 20px rgba(30, 58, 138, 0.4), 0 0 40px rgba(30, 58, 138, 0.2);
     }
     
     .recent-table-row:hover::before {
       opacity: 0.2;
+    }
+    
+    .conversation-row .recent-table-word {
+      pointer-events: auto;
     }
     
     .recent-table-row .recent-table-word {
@@ -806,7 +806,7 @@
       background: var(--card-bg);
       border-radius: 16px;
       overflow: hidden;
-      border: 2px solid var(--border-strong);
+      border: 1px solid var(--border-color);
       box-shadow: var(--card-shadow-inner), var(--card-shadow);
       margin: 0;
       position: relative;
@@ -830,7 +830,7 @@
     
     .word-card-header {
       padding: 18px 20px 14px;
-      border-bottom: 2px solid var(--border-color);
+      border-bottom: 1px solid var(--border-color);
       background: var(--card-bg);
     }
     
@@ -860,6 +860,12 @@
       font-weight: 800;
       color: var(--accent-blue);
       letter-spacing: -0.03em;
+    }
+    
+    .word-card-word.statement-text {
+      font-size: 18px;
+      font-weight: 600;
+      line-height: 1.4;
     }
     
     @media (prefers-color-scheme: dark) {
@@ -905,17 +911,17 @@
       background: var(--bg-secondary);
       opacity: 1;
       color: var(--text-secondary);
-      transform: scale(1.1);
+      box-shadow: 0 0 15px rgba(30, 58, 138, 0.4), 0 0 30px rgba(30, 58, 138, 0.2);
     }
     
     .word-card-copy-btn.copied {
       color: #10b981;
-      transform: scale(1.15);
+      box-shadow: 0 0 15px rgba(16, 185, 129, 0.4), 0 0 30px rgba(16, 185, 129, 0.2);
       opacity: 1;
     }
     
     .word-card-explanation {
-      padding: 16px 18px 16px;
+      padding: 20px 20px 20px;
       color: var(--text-secondary);
       font-weight: 500;
       font-size: 14px;
@@ -1013,8 +1019,7 @@
       background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-blue-light) 100%);
       color: var(--text-inverse);
       border-color: var(--accent-blue);
-      transform: translateY(-2px);
-      box-shadow: var(--card-shadow-inner), 0 4px 12px rgba(30, 58, 138, 0.4);
+      box-shadow: var(--card-shadow-inner), 0 0 20px rgba(30, 58, 138, 0.5), 0 0 40px rgba(30, 58, 138, 0.3);
     }
     
     .word-card-actions {
@@ -1048,8 +1053,7 @@
       background: var(--bg-secondary);
       border-color: var(--accent-blue);
       color: var(--accent-blue);
-      transform: scale(1.08);
-      box-shadow: var(--card-shadow-inner), 0 2px 8px rgba(30, 58, 138, 0.2);
+      box-shadow: var(--card-shadow-inner), 0 0 15px rgba(30, 58, 138, 0.4), 0 0 30px rgba(30, 58, 138, 0.2);
     }
     
     .word-card-fav-btn-icon.favorited {
@@ -1186,8 +1190,7 @@
     .person-news-item:hover {
       background: var(--bg-secondary);
       border-color: var(--accent-blue);
-      transform: translateY(-2px);
-      box-shadow: var(--card-shadow-inner), 0 4px 12px rgba(30, 58, 138, 0.3);
+      box-shadow: var(--card-shadow-inner), 0 0 20px rgba(30, 58, 138, 0.4), 0 0 40px rgba(30, 58, 138, 0.2);
     }
     
     .person-news-title-text {
@@ -1218,6 +1221,42 @@
     .person-wiki-link a:hover {
       color: var(--accent-blue-light);
       border-bottom-color: var(--accent-blue-light);
+    }
+    
+    /* Learn More links hover effects - match main hub styling */
+    .word-card-link {
+      background: var(--card-bg) !important;
+      background-color: var(--card-bg) !important;
+    }
+    
+    .word-card-link:hover {
+      background: var(--card-bg) !important;
+      background-color: var(--card-bg) !important;
+      border-color: var(--accent-blue) !important;
+      box-shadow: var(--card-shadow-inner), 0 0 20px rgba(30, 58, 138, 0.4), 0 0 40px rgba(30, 58, 138, 0.2) !important;
+      transform: translateY(-1px);
+      color: var(--text-primary) !important;
+    }
+    
+    .word-card-link:active,
+    .word-card-link:focus,
+    .word-card-link:visited {
+      background: var(--card-bg) !important;
+      background-color: var(--card-bg) !important;
+    }
+    
+    /* News article links hover effects */
+    .word-card-news-item {
+      text-decoration: none !important;
+      color: var(--text-primary) !important;
+    }
+    
+    .word-card-news-item:hover {
+      border-color: var(--accent-blue) !important;
+      box-shadow: var(--card-shadow-inner), 0 0 20px rgba(30, 58, 138, 0.4), 0 0 40px rgba(30, 58, 138, 0.2) !important;
+      transform: translateY(-1px);
+      background: var(--card-bg) !important;
+      background-color: var(--card-bg) !important;
     }
     
     /* Settings Page Styles */
@@ -1257,13 +1296,18 @@
     }
     
     .language-selector .custom-dropdown {
-      min-width: 120px;
-      max-width: 140px;
+      min-width: 50px;
+      max-width: 60px;
     }
     
     .language-selector .custom-dropdown-selected {
-      padding: 8px 32px 8px 10px;
+      padding: 8px 20px 8px 10px;
       font-size: 13px;
+    }
+    
+    .language-selector .custom-dropdown-arrow {
+      padding-right: 0;
+      margin-left: 4px;
     }
     
     .settings-header h2 {
@@ -1601,8 +1645,7 @@
     .settings-action-btn:hover {
       background: var(--bg-secondary);
       border-color: var(--accent-blue-light);
-      transform: translateY(-2px);
-      box-shadow: var(--card-shadow-inner), 0 4px 12px rgba(30, 58, 138, 0.3);
+      box-shadow: var(--card-shadow-inner), 0 0 20px rgba(30, 58, 138, 0.4), 0 0 40px rgba(30, 58, 138, 0.2);
     }
     
     .settings-action-btn.danger {
@@ -1654,30 +1697,48 @@
     }
     
     .notification-toast.success {
-      border-color: #10b981;
-      background: #f0fdf4;
+      border-color: var(--accent-blue, #1e3a8a);
+      background: var(--card-bg);
+      box-shadow: var(--card-shadow-inner), 0 8px 24px rgba(30, 58, 138, 0.2);
     }
     
     .notification-toast.error {
       border-color: #dc2626;
-      background: #fef2f2;
+      background: var(--card-bg);
+      box-shadow: var(--card-shadow-inner), 0 8px 24px rgba(220, 38, 38, 0.2);
     }
     
     .notification-content {
       display: flex;
       align-items: center;
       gap: 12px;
-      color: #1e3a8a;
+      color: var(--text-primary);
       font-size: 14px;
       font-weight: 500;
     }
     
     .notification-toast.success .notification-content {
-      color: #059669;
+      color: var(--accent-blue, #1e3a8a);
     }
     
     .notification-toast.error .notification-content {
       color: #dc2626;
+    }
+    
+    @media (prefers-color-scheme: dark) {
+      .notification-toast.success {
+        border-color: var(--accent-blue, #3b82f6);
+        background: var(--card-bg);
+      }
+      
+      .notification-toast.error {
+        border-color: #f87171;
+        background: var(--card-bg);
+      }
+      
+      .notification-toast.success .notification-content {
+        color: var(--text-primary, #ffffff);
+      }
     }
     
     .notification-content::before {
@@ -1691,11 +1752,60 @@
     }
     
     .notification-toast.success .notification-content::before {
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%2310b981' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6L9 17l-5-5'/%3E%3C/svg%3E");
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%231e3a8a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6L9 17l-5-5'/%3E%3C/svg%3E");
+    }
+    
+    @media (prefers-color-scheme: dark) {
+      .notification-toast.success .notification-content::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6L9 17l-5-5'/%3E%3C/svg%3E");
+      }
     }
     
     .notification-toast.error .notification-content::before {
       background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23dc2626' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M15 9l-6 6M9 9l6 6'/%3E%3C/svg%3E");
+    }
+    
+    /* Loading skeleton animation */
+    @keyframes shimmer {
+      0% {
+        background-position: -200% 0;
+      }
+      100% {
+        background-position: 200% 0;
+      }
+    }
+    
+    .loading-card {
+      position: relative;
+      overflow: hidden;
+      opacity: 0.95;
+      backdrop-filter: blur(8px);
+    }
+    
+    .loading-content {
+      padding: 20px 18px;
+    }
+    
+    .loading-skeleton-text {
+      color: var(--text-primary);
+      font-weight: 700;
+      opacity: 0.7;
+    }
+    
+    .loading-skeleton-line {
+      width: 100%;
+      height: 16px;
+      margin-bottom: 12px;
+      background: linear-gradient(90deg, rgba(241, 245, 249, 0.6) 25%, rgba(226, 232, 240, 0.8) 50%, rgba(241, 245, 249, 0.6) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: 6px;
+      opacity: 0.8;
+      backdrop-filter: blur(4px);
+    }
+    
+    .loading-skeleton-line:last-child {
+      margin-bottom: 0;
     }
   </style>
 </head>
@@ -1726,7 +1836,6 @@
             <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
           </svg>
         </button>
-        <div id="suggestions" class="suggestions-dropdown"></div>
       </div>
     </div>
   </div>
@@ -1737,6 +1846,22 @@
   </div>
   
   <div class="content" id="mainContent">
+    <!-- Conversations -->
+    <div class="section">
+      <div class="section-title" id="conversationsHeader">
+        <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span data-i18n="conversations">Conversations</span>
+        <svg class="section-arrow" id="conversationsArrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; height: 16px; transition: transform 0.2s; margin-left: auto;">
+          <path d="M6 9l6 6 6-6"/>
+        </svg>
+      </div>
+      <div id="conversations" class="word-list" style="display: none;">
+        <div class="loading">Loading conversations...</div>
+      </div>
+    </div>
+    
     <!-- Favorites -->
     <div class="section">
       <div class="section-title">
@@ -1773,28 +1898,28 @@
           <div class="custom-dropdown" id="languageDropdown">
             <input type="hidden" id="dictionaryLanguage" value="en">
             <div class="custom-dropdown-selected">
-              <span class="custom-dropdown-text">English</span>
+              <span class="custom-dropdown-text">🇬🇧</span>
               <svg class="custom-dropdown-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <path d="M6 9l6 6 6-6"/>
               </svg>
             </div>
             <div class="custom-dropdown-options">
-              <div class="custom-dropdown-option" data-value="en">English</div>
-              <div class="custom-dropdown-option" data-value="es">Spanish</div>
-              <div class="custom-dropdown-option" data-value="fr">French</div>
-              <div class="custom-dropdown-option" data-value="de">German</div>
-              <div class="custom-dropdown-option" data-value="it">Italian</div>
-              <div class="custom-dropdown-option" data-value="pt">Portuguese</div>
-              <div class="custom-dropdown-option" data-value="ru">Russian</div>
-              <div class="custom-dropdown-option" data-value="ja">Japanese</div>
-              <div class="custom-dropdown-option" data-value="zh">Chinese</div>
-              <div class="custom-dropdown-option" data-value="ko">Korean</div>
-              <div class="custom-dropdown-option" data-value="ar">Arabic</div>
-              <div class="custom-dropdown-option" data-value="hi">Hindi</div>
-              <div class="custom-dropdown-option" data-value="nl">Dutch</div>
-              <div class="custom-dropdown-option" data-value="sv">Swedish</div>
-              <div class="custom-dropdown-option" data-value="pl">Polish</div>
-              <div class="custom-dropdown-option" data-value="tr">Turkish</div>
+              <div class="custom-dropdown-option" data-value="en" data-flag="🇬🇧">🇬🇧</div>
+              <div class="custom-dropdown-option" data-value="es" data-flag="🇪🇸">🇪🇸</div>
+              <div class="custom-dropdown-option" data-value="fr" data-flag="🇫🇷">🇫🇷</div>
+              <div class="custom-dropdown-option" data-value="de" data-flag="🇩🇪">🇩🇪</div>
+              <div class="custom-dropdown-option" data-value="it" data-flag="🇮🇹">🇮🇹</div>
+              <div class="custom-dropdown-option" data-value="pt" data-flag="🇵🇹">🇵🇹</div>
+              <div class="custom-dropdown-option" data-value="ru" data-flag="🇷🇺">🇷🇺</div>
+              <div class="custom-dropdown-option" data-value="ja" data-flag="🇯🇵">🇯🇵</div>
+              <div class="custom-dropdown-option" data-value="zh" data-flag="🇨🇳">🇨🇳</div>
+              <div class="custom-dropdown-option" data-value="ko" data-flag="🇰🇷">🇰🇷</div>
+              <div class="custom-dropdown-option" data-value="ar" data-flag="🇸🇦">🇸🇦</div>
+              <div class="custom-dropdown-option" data-value="hi" data-flag="🇮🇳">🇮🇳</div>
+              <div class="custom-dropdown-option" data-value="nl" data-flag="🇳🇱">🇳🇱</div>
+              <div class="custom-dropdown-option" data-value="sv" data-flag="🇸🇪">🇸🇪</div>
+              <div class="custom-dropdown-option" data-value="pl" data-flag="🇵🇱">🇵🇱</div>
+              <div class="custom-dropdown-option" data-value="tr" data-flag="🇹🇷">🇹🇷</div>
             </div>
           </div>
         </div>
@@ -1921,20 +2046,20 @@
             <div class="settings-item">
               <label>
                 <input type="checkbox" id="saveInIncognito">
-                <span>Save searches in incognito mode</span>
+                <span data-i18n="saveInIncognitoLabel">Save searches in incognito mode</span>
               </label>
-              <p class="settings-description">By default, searches are not saved in incognito mode</p>
+              <p class="settings-description" data-i18n="incognitoDesc">By default, searches are not saved in incognito mode</p>
             </div>
             <div class="settings-item">
               <label>
                 <input type="checkbox" id="showPhonetic">
-                <span>Show phonetic pronunciation</span>
+                <span data-i18n="showPhoneticLabel">Show phonetic pronunciation</span>
               </label>
             </div>
             <div class="settings-item">
               <label>
                 <input type="checkbox" id="showExamples">
-                <span>Show example sentences</span>
+                <span data-i18n="showExamplesLabel">Show example sentences</span>
               </label>
             </div>
             <div class="settings-item">
@@ -1954,6 +2079,14 @@
           </svg>
         </button>
         <div class="settings-tab-content" id="tab-contact">
+          <div class="settings-section">
+            <h3 style="color: var(--text-primary); font-size: 20px; font-weight: 700; margin: 0 0 8px 0; text-align: center;">
+              We would love to hear from you!
+            </h3>
+            <p style="color: var(--text-secondary); font-size: 13px; font-weight: 400; line-height: 1.5; margin: 0 0 24px 0; text-align: center;">
+              We welcome all feedback and suggestions for future innovations or additions to make the extension better. Your input helps us improve Nimbus for everyone.
+            </p>
+          </div>
           <div class="settings-section">
             <div class="settings-item">
               <label data-i18n="name">Name:</label>
