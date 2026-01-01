@@ -520,3 +520,97 @@
   color: #475569;
   flex: 1;
 }
+
+/* Icon-only modal for long text selections - compact, light mode only */
+.cursoriq-icon-only-modal {
+  min-width: auto !important;
+  width: auto !important;
+  max-width: none !important;
+  padding: 8px 10px !important;
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%) !important;
+  border: 2px solid rgba(30, 58, 138, 0.2) !important;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05) !important;
+}
+
+.cursoriq-icon-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+}
+
+.cursoriq-icon-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: rgba(241, 245, 249, 0.9);
+  border: 1.5px solid rgba(226, 232, 240, 0.8);
+  border-radius: 8px;
+  color: #1e3a8a;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  flex-shrink: 0;
+}
+
+.cursoriq-icon-btn:hover {
+  background: rgba(241, 245, 249, 1);
+  border-color: #1e3a8a;
+  color: #1e3a8a;
+  transform: scale(1.08);
+  box-shadow: 0 2px 8px rgba(30, 58, 138, 0.15);
+}
+
+.cursoriq-icon-btn:active {
+  transform: scale(0.96);
+}
+
+.cursoriq-icon-btn.copied {
+  color: #10b981;
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.cursoriq-icon-btn.playing {
+  color: #1e3a8a;
+  border-color: #1e3a8a;
+  background: rgba(30, 58, 138, 0.1);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.cursoriq-icon-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  stroke: #1e3a8a;
+  fill: none;
+}
+
+.cursoriq-icon-btn img {
+  width: 20px;
+  height: 20px;
+  display: block;
+  filter: none;
+  margin: auto;
+  object-fit: contain;
+}
+
+/* Close button for icon modal - smaller */
+.cursoriq-icon-only-modal .cursoriq-close-btn {
+  width: 24px;
+  height: 24px;
+  top: -10px;
+  right: -10px;
+  font-size: 16px;
+}

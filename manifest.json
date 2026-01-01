@@ -2,10 +2,10 @@
   "manifest_version": 3,
   "name": "Nimbus",
   "short_name": "Nimbus",
-  "description": "Select any word to get a real-world, plain-English explanation with synonyms.",
-  "version": "1.0.0",
-  "permissions": ["activeTab", "scripting", "storage", "identity"],
-  "host_permissions": ["https://api.openai.com/*", "https://api.dictionaryapi.dev/*", "https://api.web3forms.com/*", "https://en.wiktionary.org/*", "https://libretranslate.de/*", "https://api.mymemory.translated.net/*", "https://*.wikipedia.org/*", "https://en.wikipedia.org/*", "https://news.google.com/*", "https://www.google.com/search*"],
+  "description": "Select any word, phrase, or name for instant definitions, AI explanations, and context. Your intelligent learning companion.",
+  "version": "1.0.7",
+  "permissions": ["storage", "identity", "tabs"],
+  "host_permissions": ["https://api.dictionaryapi.dev/*", "https://en.wiktionary.org/*", "https://libretranslate.de/*", "https://api.mymemory.translated.net/*", "https://en.wikipedia.org/*", "https://news.google.com/*", "https://nimbus-api-ten.vercel.app/*", "https://www.googleapis.com/*"],
   "background": {
     "service_worker": "background.js"
   },
@@ -34,7 +34,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["Nimbus Favicon.png"],
+      "resources": ["Nimbus Favicon.png", "ai.svg", "Nimbus Logo-02.svg", "NimbusLogo.svg"],
       "matches": ["<all_urls>"]
     }
   ]

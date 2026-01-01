@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>Nimbus Hub</title>
   <link rel="icon" type="image/png" href="Nimbus Favicon.png">
+  <script src="https://js.stripe.com/v3/"></script>
   <style>
     /* CSS Variables for Light/Dark Theme */
     :root {
@@ -1938,21 +1939,22 @@
         <div class="settings-tab-content" id="tab-subscription">
           <div class="settings-section">
             <div class="settings-item">
-              <label>
-                <input type="checkbox" id="autoRenewToggle">
-                <span>Auto-renew subscription</span>
-              </label>
-              <p class="settings-description">Automatically renew your subscription when it expires</p>
-            </div>
-            <div class="settings-item">
-              <div class="subscription-status">
-                <span>Status: <strong id="subscriptionStatus">Active</strong></span>
-                <span>Expires: <strong id="subscriptionExpiry">-</strong></span>
+              <div id="popup-subscription-info" style="margin-bottom: 20px; padding: 20px; background: linear-gradient(135deg, rgba(30, 58, 138, 0.1) 0%, rgba(30, 64, 175, 0.08) 100%); border: 1px solid rgba(30, 58, 138, 0.2); border-radius: 12px; font-size: 14px; color: var(--text-primary);">
+                <div class="loading" style="text-align: center; color: var(--text-muted);">Loading subscription info...</div>
               </div>
             </div>
             <div class="settings-item">
-              <button class="settings-action-btn" id="manageSubscriptionBtn" data-i18n="manageSubscription">Manage Subscription</button>
+              <button class="settings-action-btn" id="popup-cancel-btn" style="display: none; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 4px rgba(245, 158, 11, 0.3);" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 4px 8px rgba(245, 158, 11, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 2px 4px rgba(245, 158, 11, 0.3)'">Cancel Subscription</button>
+              <p id="popup-cancel-hint" style="display: none; margin: 8px 0 0 0; font-size: 12px; color: var(--text-muted);">Your subscription will be cancelled at the end of the current billing period. You'll retain access until then.</p>
             </div>
+            <div class="settings-item">
+              <button class="settings-action-btn" id="popup-resubscribe-btn" style="display: none; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 4px rgba(30, 58, 138, 0.3);" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 4px 8px rgba(30, 58, 138, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 2px 4px rgba(30, 58, 138, 0.3)'">Resubscribe</button>
+            </div>
+            <div class="settings-item">
+              <button class="settings-action-btn" id="popup-refund-btn" style="display: none; background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 4px rgba(220, 38, 38, 0.3);" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 4px 8px rgba(220, 38, 38, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 2px 4px rgba(220, 38, 38, 0.3)'">Request Refund</button>
+              <p id="popup-refund-hint" style="display: none; margin: 8px 0 0 0; font-size: 12px; color: var(--text-muted);">Available within 7 days of purchase. Your subscription will be cancelled immediately.</p>
+            </div>
+            <div id="popup-subscription-status" style="margin-top: 16px; padding: 12px; border-radius: 6px; font-size: 13px; color: var(--text-primary);"></div>
           </div>
         </div>
       </div>

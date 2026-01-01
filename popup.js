@@ -10,6 +10,934 @@
   let currentView = 'hub'; // 'hub' or 'word'
   
   // Notification system
+  // Usage limits configuration
+  const USAGE_LIMITS = {
+    CODE_REQUESTS_PER_YEAR: 15,
+    IMAGE_REQUESTS_PER_YEAR: 0 // Blocked
+  };
+
+  // Subscription checking - Using Stripe (Chrome Web Store doesn't manage products)
+  const API_BASE_URL = 'https://nimbus-api-ten.vercel.app/api';
+  let subscriptionActive = false;
+  let userEmail = null;
+
+  // Get user email via Google Identity
+  async function getUserEmail() {
+    return new Promise((resolve) => {
+      // Try to get email from storage first (cached)
+      chrome.storage.local.get(['userEmail'], (result) => {
+        if (result.userEmail) {
+          userEmail = result.userEmail;
+          resolve(result.userEmail);
+          return;
+        }
+        
+        // Try to get from Chrome identity
+        chrome.identity.getProfileUserInfo((userInfo) => {
+          if (userInfo && userInfo.email) {
+            userEmail = userInfo.email;
+            // Cache it
+            chrome.storage.local.set({ userEmail: userInfo.email });
+            resolve(userInfo.email);
+          } else {
+            // If getProfileUserInfo doesn't work, try getAuthToken
+            chrome.identity.getAuthToken({ interactive: false }, (token) => {
+              if (chrome.runtime.lastError) {
+                // User needs to sign in
+                resolve(null);
+              } else if (token) {
+                // Get user info from token
+                fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                  headers: { 'Authorization': `Bearer ${token}` }
+                })
+                .then(res => res.json())
+                .then(data => {
+                  if (data.email) {
+                    userEmail = data.email;
+                    chrome.storage.local.set({ userEmail: data.email });
+                    resolve(data.email);
+                  } else {
+                    resolve(null);
+                  }
+                })
+                .catch(() => resolve(null));
+              } else {
+                resolve(null);
+              }
+            });
+          }
+        });
+      });
+    });
+  }
+
+  // Poll for payment completion
+  let paymentPollInterval = null;
+  function startPaymentPolling(sessionId, email) {
+    // Clear any existing polling
+    if (paymentPollInterval) {
+      clearInterval(paymentPollInterval);
+    }
+    
+    if (!email) {
+      console.error('Popup: Cannot start polling without email');
+      return;
+    }
+    
+    let attempts = 0;
+    const maxAttempts = 60; // Poll for up to 5 minutes (5 second intervals)
+    
+    console.log('Popup: Starting payment polling for email:', email);
+    
+    paymentPollInterval = setInterval(async () => {
+      attempts++;
+      
+      if (attempts > maxAttempts) {
+        clearInterval(paymentPollInterval);
+        paymentPollInterval = null;
+        console.log('Popup: Polling timeout, stopping');
+        return;
+      }
+      
+      try {
+        console.log(`Popup: Polling attempt ${attempts}/${maxAttempts}...`);
+        
+        // First try by session ID if available
+        if (sessionId && attempts <= 10) {
+          try {
+            const sessionResponse = await fetch(`${API_BASE_URL}/get-session`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId }),
+            });
+            
+            if (sessionResponse.ok) {
+              const sessionData = await sessionResponse.json();
+              if (sessionData.valid) {
+                // Save subscription
+                await chrome.storage.local.set({
+                  subscriptionId: sessionData.subscriptionId,
+                  subscriptionExpiry: sessionData.expiryDate,
+                  subscriptionActive: true,
+                  userEmail: sessionData.email || email,
+                });
+                
+                // Clear pending checkout
+                await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
+                
+                clearInterval(paymentPollInterval);
+                paymentPollInterval = null;
+                console.log('Popup: Subscription found via session polling, reloading');
+                location.reload();
+                return;
+              }
+            }
+          } catch (e) {
+            console.log('Popup: Session verification failed, trying email:', e);
+          }
+        }
+        
+        // Check if subscription was created by email
+        const verifyResponse = await fetch(`${API_BASE_URL}/verify-license`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ licenseKey: email }),
+        });
+        
+        const verifyData = await verifyResponse.json();
+        if (verifyData.valid) {
+          // Payment completed!
+          clearInterval(paymentPollInterval);
+          paymentPollInterval = null;
+          
+          // Clear pending checkout
+          chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail']);
+          
+          // Save subscription
+          chrome.storage.local.set({
+            subscriptionId: verifyData.subscriptionId,
+            subscriptionExpiry: verifyData.expiryDate,
+            subscriptionActive: true,
+            userEmail: email,
+          });
+          
+          showNotification('Payment successful! Subscription activated.', 'success');
+          setTimeout(() => location.reload(), 1000);
+        }
+      } catch (e) {
+        console.error('Payment polling error:', e);
+      }
+    }, 5000); // Poll every 5 seconds
+  }
+
+  // Check subscription status via our API (Stripe backend)
+  async function checkSubscription() {
+    // NO BYPASS - Test actual payment flow even in development
+    try {
+      // Get subscription ID from storage
+      const result = await new Promise((resolve) => {
+        chrome.storage.local.get(['subscriptionId', 'subscriptionExpiry'], resolve);
+      });
+
+      const subscriptionId = result.subscriptionId;
+      const expiry = result.subscriptionExpiry;
+
+      if (!subscriptionId) {
+        subscriptionActive = false;
+        return false;
+      }
+
+      // Check if expired locally
+      if (expiry && new Date(expiry) < new Date()) {
+        subscriptionActive = false;
+        chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry']);
+        return false;
+      }
+
+      // Verify with API
+      try {
+        const response = await fetch(`${API_BASE_URL}/verify-license`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ licenseKey: subscriptionId }),
+        });
+
+        if (!response.ok) {
+          subscriptionActive = false;
+          return false;
+        }
+
+        const data = await response.json();
+        if (data.valid) {
+          subscriptionActive = true;
+          if (data.expiryDate) {
+            chrome.storage.local.set({
+              subscriptionExpiry: data.expiryDate,
+              subscriptionId: subscriptionId,
+            });
+          }
+          return true;
+        } else {
+          subscriptionActive = false;
+          chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry']);
+          return false;
+        }
+      } catch (apiError) {
+        // If API fails but expiry is still valid, allow access
+        if (expiry && new Date(expiry) > new Date()) {
+          subscriptionActive = true;
+          return true;
+        }
+        subscriptionActive = false;
+        return false;
+      }
+    } catch (e) {
+      console.error('Nimbus: Error checking subscription:', e);
+      subscriptionActive = false;
+      return false;
+    }
+  }
+
+  // Show upgrade prompt in popup - Stripe payment with Google sign-in
+  async function showUpgradePromptInPopup() {
+    const mainContent = document.getElementById('mainContent');
+    const wordOfDay = document.getElementById('wordOfDay');
+    const headerContent = document.querySelector('.header-content');
+    
+    if (!mainContent) return;
+    
+    // Hide header and search when showing payment screen
+    if (headerContent) {
+      headerContent.style.display = 'none';
+    }
+    
+    // Get user email
+    const email = await getUserEmail();
+    
+    // Clear all loading states first - hide everything
+    mainContent.innerHTML = '';
+    if (wordOfDay) wordOfDay.innerHTML = '';
+    
+    // Hide all sections and loading elements
+    document.querySelectorAll('.section').forEach(section => {
+      section.style.display = 'none';
+    });
+    document.querySelectorAll('.loading').forEach(loading => {
+      loading.style.display = 'none';
+    });
+    
+    // Also hide the search input if visible
+    const searchInput = document.getElementById('searchInput');
+    if (searchInput) {
+      searchInput.style.display = 'none';
+    }
+    
+    const upgradeHtml = `
+      <div style="text-align: center; padding: 20px 30px; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%); border-radius: 16px; margin: 5px 20px; max-width: 500px; margin-left: auto; margin-right: auto; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
+        <img src="${chrome.runtime.getURL('NimbusLogo.svg')}" alt="Nimbus" style="height: 40px; margin-bottom: 15px; filter: brightness(0) invert(1);" onerror="this.style.display='none'">
+        <h2 style="margin: 0 0 10px 0; color: #ffffff; font-size: 28px; font-weight: 700;">Subscribe to Nimbus</h2>
+        <p style="margin: 0 0 12px 0; color: #e2e8f0; font-size: 16px; line-height: 1.5;">Unlock unlimited word definitions, AI explanations, and context</p>
+        <div style="background: rgba(255,255,255,0.2); padding: 10px 16px; border-radius: 8px; margin: 0 auto 25px auto; display: inline-block;">
+          <span style="color: #ffffff; font-size: 15px; font-weight: 600;">✨ Start with a 3-Day Free Trial</span>
+        </div>
+        <div style="background: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 25px; border-radius: 12px; margin-bottom: 25px; border: 1px solid rgba(255,255,255,0.2);">
+          <div style="font-size: 42px; font-weight: 700; color: #ffffff; margin-bottom: 5px;">£4.99</div>
+          <div style="font-size: 16px; color: #cbd5e1;">per year • Then £4.99/year</div>
+        </div>
+        
+        ${email ? `<p style="margin: 0 0 25px 0; color: #cbd5e1; font-size: 14px;">Signed in as: <strong style="color: #ffffff;">${email}</strong></p>` : ''}
+        
+        ${!email ? `<button id="signin-btn" style="width: 100%; background: #ffffff; color: #1e3a8a; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600; margin-bottom: 20px; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: center; gap: 8px;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+          </svg>
+          Sign in with Google
+        </button>` : ''}
+        
+        <button id="subscribe-btn" style="width: 100%; background: #ffffff; color: #1e3a8a; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 16px; font-weight: 600; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); ${!email ? 'opacity: 0.5; cursor: not-allowed;' : ''}" ${!email ? 'disabled' : ''}>
+          ${email ? 'Start Free Trial - 3 Days Free' : 'Sign in to Subscribe'}
+        </button>
+
+        ${email ? `
+          <button id="verify-subscription-btn" style="width: 100%; background: rgba(255,255,255,0.2); color: #ffffff; border: 1px solid rgba(255,255,255,0.3); padding: 10px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; margin-top: 15px; transition: all 0.2s;">
+            Already paid? Verify Subscription
+          </button>
+          <button id="signout-btn" style="width: 100%; background: transparent; color: #cbd5e1; border: 1px solid rgba(255,255,255,0.2); padding: 8px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 400; margin-top: 10px; transition: all 0.2s;">
+            Sign Out
+          </button>
+        ` : ''}
+        
+        <p style="margin: 25px 0 0 0; color: #94a3b8; font-size: 12px;">All features are locked until you subscribe</p>
+      </div>
+    `;
+    
+    mainContent.innerHTML = upgradeHtml;
+    
+    // Set up button handlers
+    setTimeout(() => {
+      const subscribeBtn = document.getElementById('subscribe-btn');
+      const signinBtn = document.getElementById('signin-btn');
+      
+      if (subscribeBtn && email) {
+        subscribeBtn.addEventListener('click', async () => {
+          subscribeBtn.disabled = true;
+          subscribeBtn.textContent = 'Opening checkout...';
+          
+          try {
+            console.log('Creating checkout session for email:', email);
+            console.log('API URL:', `${API_BASE_URL}/create-checkout`);
+            
+            // Create Stripe checkout session
+            const response = await fetch(`${API_BASE_URL}/create-checkout`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                email: email,
+                returnUrl: chrome.runtime.getURL('popup.html')
+              }),
+            });
+
+            console.log('Response status:', response.status, response.statusText);
+            console.log('Response headers:', [...response.headers.entries()]);
+
+            if (!response.ok) {
+              // Try to get error details from response (read body only once)
+              let errorMessage = 'Failed to create checkout session';
+              let errorDetails = null;
+              
+              // Read response as text first (can always parse text)
+              const responseText = await response.text();
+              
+              // Try to parse as JSON
+              try {
+                errorDetails = JSON.parse(responseText);
+                if (errorDetails && errorDetails.error) {
+                  errorMessage = errorDetails.error;
+                  // Include details if available
+                  if (errorDetails.details) {
+                    errorMessage += `: ${errorDetails.details}`;
+                  }
+                }
+              } catch (e) {
+                // Not JSON, use text as error message
+                errorMessage = responseText || `HTTP ${response.status}: ${response.statusText}`;
+              }
+              
+              // Show detailed error to user
+              const fullError = `${errorMessage} (Status: ${response.status})`;
+              console.error('Checkout API error:', {
+                status: response.status,
+                statusText: response.statusText,
+                responseText: responseText,
+                parsed: errorDetails
+              });
+              
+              throw new Error(fullError);
+            }
+
+            const data = await response.json();
+            console.log('Checkout session created:', data);
+            
+            if (!data.url || !data.sessionId) {
+              console.error('No URL or sessionId in response:', data);
+              throw new Error('No checkout URL received from server');
+            }
+            
+            // Store session ID and email for later verification
+            await chrome.storage.local.set({
+              pendingCheckoutSessionId: data.sessionId,
+              pendingCheckoutEmail: email,
+              checkoutInitiatedAt: Date.now()
+            });
+            
+            // Open Stripe checkout in new tab
+            chrome.tabs.create({ url: data.url });
+            showNotification('Complete your payment in the new tab. The extension will activate automatically.', 'success');
+            
+            // Start polling for subscription activation
+            startPaymentPolling(email, data.sessionId);
+            
+            // Listen for tab updates to detect when user returns
+            chrome.tabs.onUpdated.addListener(function listener(tabId, changeInfo, tab) {
+              if (changeInfo.status === 'complete' && tab.url && tab.url.includes('popup.html')) {
+                chrome.tabs.onUpdated.removeListener(listener);
+                // Check if payment was successful by verifying subscription
+                setTimeout(async () => {
+                  const email = await getUserEmail();
+                  if (email) {
+                    // Try to verify subscription by email
+                    try {
+                      const verifyResponse = await fetch(`${API_BASE_URL}/verify-license`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ licenseKey: email }),
+                      });
+                      
+                      const verifyData = await verifyResponse.json();
+                      if (verifyData.valid) {
+                        chrome.storage.local.set({
+                          subscriptionId: verifyData.subscriptionId,
+                          subscriptionExpiry: verifyData.expiryDate,
+                          userEmail: email,
+                        });
+                        showNotification('Payment successful! Activating subscription...', 'success');
+                        setTimeout(() => location.reload(), 1000);
+                      }
+                    } catch (e) {
+                      console.error('Subscription verification error:', e);
+                    }
+                  }
+                }, 500);
+              }
+            });
+            
+            // Listen for tab updates to detect when user returns
+            chrome.tabs.onUpdated.addListener(function listener(tabId, changeInfo, tab) {
+              if (changeInfo.status === 'complete' && tab.url && tab.url.includes('popup.html')) {
+                chrome.tabs.onUpdated.removeListener(listener);
+                // Check if payment was successful by verifying subscription
+                setTimeout(async () => {
+                  const email = await getUserEmail();
+                  if (email) {
+                    // Try to verify subscription by email
+                    try {
+                      const verifyResponse = await fetch(`${API_BASE_URL}/verify-license`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ licenseKey: email }),
+                      });
+                      
+                      const verifyData = await verifyResponse.json();
+                      if (verifyData.valid) {
+                        chrome.storage.local.set({
+                          subscriptionId: verifyData.subscriptionId,
+                          subscriptionExpiry: verifyData.expiryDate,
+                          userEmail: email,
+                        });
+                        showNotification('Payment successful! Activating subscription...', 'success');
+                        setTimeout(() => location.reload(), 1000);
+                      }
+                    } catch (e) {
+                      console.error('Subscription verification error:', e);
+                    }
+                  }
+                }, 500);
+              }
+            });
+          } catch (error) {
+            console.error('Checkout error:', error);
+            // Show more detailed error message
+            let errorMsg = error.message || 'Failed to open checkout. Please try again.';
+            
+            // Extract details from error message if available
+            if (errorMsg.includes('details:')) {
+              // Keep the full error message with details
+            } else if (errorMsg.includes('Status: 500')) {
+              errorMsg = 'Server error. Check Vercel function logs for details.';
+            }
+            
+            showNotification(errorMsg, 'error');
+            subscribeBtn.disabled = false;
+            subscribeBtn.textContent = 'Subscribe Now - £4.99/year';
+          }
+        });
+      }
+      
+      if (signinBtn) {
+        signinBtn.addEventListener('click', async () => {
+          signinBtn.disabled = true;
+          signinBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" opacity="0.3"/><path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Signing in...';
+          
+          // Try proper Google OAuth flow first (works when published)
+          chrome.identity.getAuthToken({ 
+            interactive: true,
+            scopes: ['https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile']
+          }, async (token) => {
+            if (chrome.runtime.lastError) {
+              console.log('OAuth not available (likely unpacked mode), using test fallback');
+              // Fallback for unpacked mode - show email input for testing
+              showTestEmailInput();
+              return;
+            }
+            
+            if (token) {
+              // Get user email from Google API using the token
+              try {
+                const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                  headers: {
+                    'Authorization': `Bearer ${token}`
+                  }
+                });
+                
+                if (response.ok) {
+                  const userInfo = await response.json();
+                  if (userInfo.email) {
+                    userEmail = userInfo.email;
+                    chrome.storage.local.set({ userEmail: userInfo.email });
+                    showNotification('Signed in!', 'success');
+                    setTimeout(() => showUpgradePromptInPopup(), 500);
+                  } else {
+                    throw new Error('No email in response');
+                  }
+                } else {
+                  throw new Error('Failed to get user info');
+                }
+              } catch (error) {
+                console.error('Error getting user info:', error);
+                showTestEmailInput();
+              }
+            } else {
+              showTestEmailInput();
+            }
+          });
+        });
+      }
+      
+      // Verify subscription button handler
+      const verifyBtn = document.getElementById('verify-subscription-btn');
+      if (verifyBtn && email) {
+        verifyBtn.addEventListener('click', async () => {
+          verifyBtn.disabled = true;
+          verifyBtn.textContent = 'Checking...';
+          
+          try {
+            console.log('Manually verifying subscription for email:', email);
+            
+            // First try by session ID if we have one
+            const pendingData = await new Promise((resolve) => {
+              chrome.storage.local.get(['pendingCheckoutSessionId'], resolve);
+            });
+            
+            if (pendingData.pendingCheckoutSessionId) {
+              console.log('Trying to verify by session ID:', pendingData.pendingCheckoutSessionId);
+              try {
+                const sessionResponse = await fetch(`${API_BASE_URL}/get-session`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ sessionId: pendingData.pendingCheckoutSessionId }),
+                });
+                
+                if (sessionResponse.ok) {
+                  const sessionData = await sessionResponse.json();
+                  console.log('Session verification response:', sessionData);
+                  
+                  if (sessionData.valid) {
+                    // Save subscription
+                    await chrome.storage.local.set({
+                      subscriptionId: sessionData.subscriptionId,
+                      subscriptionExpiry: sessionData.expiryDate,
+                      subscriptionActive: true,
+                      userEmail: sessionData.email || email,
+                    });
+                    
+                    // Clear pending checkout
+                    await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
+                    
+                    showNotification('Subscription verified! Reloading...', 'success');
+                    setTimeout(() => {
+                      location.reload();
+                    }, 1000);
+                    return;
+                  } else {
+                    console.error('Session verification failed:', sessionData.error);
+                  }
+                } else {
+                  const errorText = await sessionResponse.text();
+                  console.error('Session verification HTTP error:', sessionResponse.status, errorText);
+                }
+              } catch (e) {
+                console.error('Session verification error:', e);
+              }
+            }
+            
+            // Fallback: Check subscription by email
+            console.log('Trying to verify by email:', email);
+            const response = await fetch(`${API_BASE_URL}/verify-license`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ licenseKey: email }),
+            });
+            
+            const data = await response.json();
+            console.log('Email verification response:', data);
+            console.log('Response status:', response.status);
+            
+            if (data.valid) {
+              // Save subscription
+              await chrome.storage.local.set({
+                subscriptionId: data.subscriptionId,
+                subscriptionExpiry: data.expiryDate,
+                subscriptionActive: true,
+                userEmail: email,
+              });
+              
+              // Clear pending checkout
+              await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
+              
+              showNotification('Subscription verified! Reloading...', 'success');
+              setTimeout(() => {
+                location.reload();
+              }, 1000);
+            } else {
+              verifyBtn.disabled = false;
+              verifyBtn.textContent = 'Already paid? Verify Subscription';
+              const errorMsg = data.error || 'No active subscription found for this email.';
+              console.error('Verification failed:', errorMsg, 'Full response:', data);
+              showNotification(`${errorMsg} Check Stripe dashboard to confirm payment.`, 'error');
+            }
+          } catch (error) {
+            console.error('Verification error:', error);
+            verifyBtn.disabled = false;
+            verifyBtn.textContent = 'Already paid? Verify Subscription';
+            showNotification(`Failed to verify: ${error.message}. Check console for details.`, 'error');
+          }
+        });
+      }
+      
+      // Sign out button handler
+      const signoutBtn = document.getElementById('signout-btn');
+      if (signoutBtn && email) {
+        signoutBtn.addEventListener('click', async () => {
+          if (confirm('Sign out? You will need to sign in again to subscribe.')) {
+            // Clear all user data
+            await chrome.storage.local.remove(['userEmail', 'subscriptionId', 'subscriptionExpiry', 'subscriptionActive', 'tempSessionData']);
+            showNotification('Signed out. Reloading...', 'success');
+            setTimeout(() => {
+              location.reload();
+            }, 500);
+          }
+        });
+      }
+      
+      // Test mode fallback - allows testing payment flow in unpacked extensions
+      function showTestEmailInput() {
+        const signinBtn = document.getElementById('signin-btn');
+        if (!signinBtn) return;
+        
+        // Hide Google sign-in button
+        signinBtn.style.display = 'none';
+        
+        // Show test email input
+        const emailSection = document.createElement('div');
+        emailSection.id = 'test-email-section';
+        emailSection.style.marginBottom = '20px';
+        emailSection.innerHTML = `
+          <div style="background: rgba(255,255,255,0.1); padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.2);">
+            <p style="margin: 0; color: #cbd5e1; font-size: 12px; text-align: center;">Test Mode: Enter email to test payment flow</p>
+          </div>
+          <label style="display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600; color: #ffffff; text-align: left;">Email Address</label>
+          <input type="email" id="test-email-input" placeholder="your.email@example.com" style="width: 100%; padding: 12px; border: 2px solid rgba(255,255,255,0.3); border-radius: 8px; background: rgba(255,255,255,0.95); color: #1e293b; font-size: 14px; box-sizing: border-box; margin-bottom: 12px;" autocomplete="email">
+          <button id="test-email-submit" style="width: 100%; background: #ffffff; color: #1e3a8a; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
+            Continue
+          </button>
+        `;
+        
+        signinBtn.parentNode.insertBefore(emailSection, signinBtn.nextSibling);
+        
+        const emailInput = document.getElementById('test-email-input');
+        const submitBtn = document.getElementById('test-email-submit');
+        
+        if (emailInput) {
+          emailInput.focus();
+          emailInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && submitBtn) {
+              submitBtn.click();
+            }
+          });
+        }
+        
+        if (submitBtn) {
+          submitBtn.addEventListener('click', () => {
+            const emailValue = emailInput ? emailInput.value.trim() : '';
+            
+            if (!emailValue || !emailValue.includes('@') || !emailValue.includes('.')) {
+              showNotification('Please enter a valid email address', 'error');
+              if (emailInput) {
+                emailInput.focus();
+                emailInput.style.borderColor = '#dc2626';
+                setTimeout(() => {
+                  if (emailInput) emailInput.style.borderColor = 'rgba(255,255,255,0.3)';
+                }, 2000);
+              }
+              return;
+            }
+            
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Saving...';
+            
+            userEmail = emailValue.toLowerCase();
+            chrome.storage.local.set({ userEmail: userEmail });
+            showNotification('Email saved!', 'success');
+            setTimeout(() => showUpgradePromptInPopup(), 500);
+          });
+        }
+      }
+    }, 100);
+  }
+  
+  // Legacy payment handlers (kept for backwards compatibility but not used in new flow)
+  // Add click handler for upgrade button
+  setTimeout(() => {
+      const upgradeBtn = document.getElementById('popup-upgrade-btn');
+      const verifyBtn = document.getElementById('verify-license-btn');
+      const licenseInput = document.getElementById('license-key-input');
+      const licenseStatus = document.getElementById('license-status');
+      
+      if (upgradeBtn) {
+        upgradeBtn.addEventListener('click', async () => {
+          // Open Stripe checkout
+          try {
+            const response = await fetch(`${API_BASE_URL}/create-checkout`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                returnUrl: chrome.runtime.getURL('popup.html'),
+              }),
+            });
+
+            if (!response.ok) {
+              throw new Error('Failed to create checkout session');
+            }
+
+            const data = await response.json();
+            
+            // Open Stripe checkout in new tab
+            if (data.url) {
+              chrome.tabs.create({ url: data.url });
+              showNotification('Opening payment page... Complete your purchase and return here.', 'success');
+            } else {
+              throw new Error('No checkout URL received');
+            }
+          } catch (error) {
+            console.error('Nimbus: Checkout error:', error);
+            showNotification('Failed to open payment page. Please try again or contact support.', 'error');
+          }
+        });
+        
+        // Hover effect
+        upgradeBtn.addEventListener('mouseenter', () => {
+          upgradeBtn.style.background = '#1e40af';
+        });
+        upgradeBtn.addEventListener('mouseleave', () => {
+          upgradeBtn.style.background = '#1e3a8a';
+        });
+      }
+      
+      // License key verification handler
+      if (verifyBtn && licenseInput) {
+        const verifyLicense = async () => {
+          const licenseKey = licenseInput.value.trim();
+          if (!licenseKey) {
+            licenseStatus.textContent = 'Please enter a license key';
+            licenseStatus.style.color = '#dc2626';
+            return;
+          }
+          
+          verifyBtn.disabled = true;
+          verifyBtn.textContent = 'Verifying...';
+          licenseStatus.textContent = '';
+          
+          try {
+            const response = await fetch(`${API_BASE_URL}/verify-license`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ licenseKey }),
+            });
+            
+            if (!response.ok) {
+              throw new Error('Verification failed');
+            }
+            
+            const data = await response.json();
+            
+            if (data.valid) {
+              // Save license key
+              chrome.storage.local.set({
+                licenseKey: licenseKey,
+                licenseExpiry: data.expiryDate,
+              });
+              
+              licenseStatus.textContent = 'License verified! Reloading...';
+              licenseStatus.style.color = '#059669';
+              
+              // Reload popup to activate subscription
+              setTimeout(() => {
+                location.reload();
+              }, 1000);
+            } else {
+              licenseStatus.textContent = data.error || 'Invalid license key';
+              licenseStatus.style.color = '#dc2626';
+              verifyBtn.disabled = false;
+              verifyBtn.textContent = 'Verify';
+            }
+          } catch (error) {
+            console.error('License verification error:', error);
+            licenseStatus.textContent = 'Error verifying license. Please try again.';
+            licenseStatus.style.color = '#dc2626';
+            verifyBtn.disabled = false;
+            verifyBtn.textContent = 'Verify';
+          }
+        };
+        
+        verifyBtn.addEventListener('click', verifyLicense);
+        licenseInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            verifyLicense();
+          }
+        });
+      }
+    }, 100);
+
+  // Format message with proper code block handling
+  function formatMessage(content) {
+    if (!content) return '';
+    
+    // Escape HTML first
+    let escaped = content
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    
+    // Handle code blocks (```language\ncode\n```)
+    escaped = escaped.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
+      const language = lang || 'text';
+      return `<div class="code-block-container" style="margin: 8px 0; border-radius: 8px; overflow: hidden; background: #1e293b; border: 1px solid #334155;">
+        <div style="padding: 8px 12px; background: #0f172a; border-bottom: 1px solid #334155; font-size: 11px; color: #94a3b8; font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
+          <span>${language}</span>
+          <button class="copy-code-btn" style="background: transparent; border: none; color: #94a3b8; cursor: pointer; font-size: 10px; padding: 2px 6px; border-radius: 4px; transition: all 0.2s;" onmouseover="this.style.background='#334155'; this.style.color='#fff';" onmouseout="this.style.background='transparent'; this.style.color='#94a3b8';">Copy</button>
+        </div>
+        <pre style="margin: 0; padding: 12px; overflow-x: auto; max-height: 300px; overflow-y: auto; color: #e2e8f0; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 12px; line-height: 1.5; white-space: pre; word-wrap: normal;"><code>${code.trim()}</code></pre>
+      </div>`;
+    });
+    
+    // Handle inline code (`code`)
+    escaped = escaped.replace(/`([^`]+)`/g, '<code style="background: #1e293b; color: #60a5fa; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 12px;">$1</code>');
+    
+    // Convert line breaks to <br>
+    escaped = escaped.replace(/\n/g, '<br>');
+    
+    return escaped;
+  }
+
+  // Check if request is for image generation
+  function isImageRequest(message) {
+    const imageKeywords = ['generate image', 'create image', 'draw', 'picture', 'photo', 'illustration', 'dalle', 'midjourney', 'stable diffusion', 'image generation'];
+    const lowerMessage = message.toLowerCase();
+    return imageKeywords.some(keyword => lowerMessage.includes(keyword));
+  }
+
+  // Check if request is for code
+  function isCodeRequest(message) {
+    const codeKeywords = ['write code', 'create code', 'generate code', 'code snippet', 'program', 'function', 'script', 'hello world', 'example code'];
+    const lowerMessage = message.toLowerCase();
+    return codeKeywords.some(keyword => lowerMessage.includes(keyword));
+  }
+
+  // Check if request is for document creation
+  function isDocumentRequest(message) {
+    const docKeywords = ['word document', 'pdf', 'create document', 'generate document', 'docx', 'export to'];
+    const lowerMessage = message.toLowerCase();
+    return docKeywords.some(keyword => lowerMessage.includes(keyword));
+  }
+
+  // Get usage stats
+  async function getUsageStats() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(['usageStats', 'subscriptionStartDate'], (result) => {
+        const stats = result.usageStats || { codeRequests: 0, imageRequests: 0 };
+        const startDate = result.subscriptionStartDate || Date.now();
+        const oneYearAgo = Date.now() - (365 * 24 * 60 * 60 * 1000);
+        
+        // Reset stats if subscription is older than a year
+        if (startDate < oneYearAgo) {
+          stats.codeRequests = 0;
+          stats.imageRequests = 0;
+          chrome.storage.local.set({ 
+            usageStats: stats,
+            subscriptionStartDate: Date.now()
+          });
+        }
+        
+        resolve(stats);
+      });
+    });
+  }
+
+  // Check if user can make request
+  async function canMakeRequest(message) {
+    const stats = await getUsageStats();
+    
+    // Block image requests
+    if (isImageRequest(message)) {
+      return { allowed: false, reason: 'Image generation is not available in this subscription plan.' };
+    }
+    
+    // Check code request limit
+    if (isCodeRequest(message)) {
+      if (stats.codeRequests >= USAGE_LIMITS.CODE_REQUESTS_PER_YEAR) {
+        return { allowed: false, reason: `You've reached your annual limit of ${USAGE_LIMITS.CODE_REQUESTS_PER_YEAR} code requests. Please upgrade your subscription for more requests.` };
+      }
+    }
+    
+    return { allowed: true };
+  }
+
+  // Increment usage stats
+  async function incrementUsage(message) {
+    if (isCodeRequest(message)) {
+      const stats = await getUsageStats();
+      stats.codeRequests = (stats.codeRequests || 0) + 1;
+      chrome.storage.local.set({ usageStats: stats });
+    }
+  }
+
   function showNotification(message, type = 'success') {
     const toast = document.getElementById('notificationToast');
     const messageEl = document.getElementById('notificationMessage');
@@ -99,6 +1027,31 @@
     // Favicon setting failed, continue silently
   }
 
+  // Set logo dynamically (Chrome extension popups need this)
+  function setLogo() {
+    try {
+      const logoImg = document.getElementById('nimbusTitle');
+      if (logoImg && logoImg.tagName === 'IMG') {
+        logoImg.src = chrome.runtime.getURL('NimbusLogo.svg');
+        logoImg.onerror = () => {
+          console.error('Logo failed to load:', logoImg.src);
+        };
+      }
+    } catch (e) {
+      console.error('Failed to set logo:', e);
+    }
+  }
+  
+  // Set logo when DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setLogo);
+  } else {
+    setLogo();
+  }
+  
+  // Also try after a short delay in case the element isn't ready yet
+  setTimeout(setLogo, 100);
+
   // Load all data on popup open
   // Load settings and translate UI on initial load (after translations object is defined)
   // Note: translateUI will be called after translations object is defined (see line ~428)
@@ -180,51 +1133,202 @@
         handlePendingSearch();
       }, 100); // Small delay to ensure storage is updated
     }
+    // Listen for subscription activation
+    if (areaName === 'local' && (changes.subscriptionId || changes.subscriptionActive)) {
+      // Reload popup when subscription is activated
+      console.log('Popup: Subscription activated via storage change');
+      setTimeout(() => {
+        location.reload();
+      }, 500);
+    }
   });
   
-  // Load content normally if no pending search
-  try {
-    // Ensure header is visible by default
-    const headerContent = document.querySelector('.header-content');
-    if (headerContent) {
-      headerContent.style.display = '';
-      headerContent.style.visibility = 'visible';
+  // Listen for subscription activation message from background
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg && msg.action === 'subscriptionActivated') {
+      console.log('Popup: Subscription activated via message');
+      setTimeout(() => {
+        location.reload();
+      }, 500);
+    }
+    return true; // Keep channel open for async response
+  });
+  
+  // Also poll for subscription activation after a checkout (in case message/storage change missed)
+  chrome.storage.local.get(['tempSessionData'], async (result) => {
+    if (result.tempSessionData && result.tempSessionData.checkoutInitiated) {
+      const timeSinceCheckout = Date.now() - result.tempSessionData.timestamp;
+      // If checkout was initiated less than 5 minutes ago, poll for activation
+      if (timeSinceCheckout < 5 * 60 * 1000) {
+        console.log('Popup: Polling for subscription activation after checkout');
+        const pollInterval = setInterval(async () => {
+          const subData = await new Promise((resolve) => {
+            chrome.storage.local.get(['subscriptionActive', 'subscriptionId'], resolve);
+          });
+          if (subData.subscriptionActive) {
+            clearInterval(pollInterval);
+            chrome.storage.local.remove(['tempSessionData']);
+            console.log('Popup: Subscription found via polling, reloading');
+            location.reload();
+          }
+        }, 2000); // Poll every 2 seconds
+        
+        // Stop polling after 5 minutes
+        setTimeout(() => {
+          clearInterval(pollInterval);
+        }, 5 * 60 * 1000);
+      }
+    }
+  });
+  
+  // Check subscription FIRST - show payment screen immediately if not subscribed
+  // This runs BEFORE any content loading
+  (async () => {
+    // Clear any URL params immediately (background script handles verification)
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('session_id') || urlParams.has('success') || urlParams.has('cancelled')) {
+      window.history.replaceState({}, document.title, window.location.pathname);
     }
     
-    // Ensure all sections are visible
-    document.querySelectorAll('.section').forEach(section => {
-      section.style.display = 'block';
+    // If there's a pending checkout, verify subscription first
+    const pendingData = await new Promise((resolve) => {
+      chrome.storage.local.get(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt'], resolve);
     });
     
-    loadConversations();
-    loadFavorites();
-    loadRecent();
-    loadWordOfDay();
-    
-    // Conversations expand/collapse
-    const conversationsHeader = document.getElementById('conversationsHeader');
-    const conversationsArrow = document.getElementById('conversationsArrow');
-    const conversationsDiv = document.getElementById('conversations');
-    if (conversationsHeader && conversationsDiv) {
-      conversationsHeader.style.cursor = 'pointer';
-      conversationsHeader.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const isHidden = conversationsDiv.style.display === 'none' || !conversationsDiv.style.display;
-        conversationsDiv.style.display = isHidden ? 'block' : 'none';
-        if (conversationsArrow) {
-          conversationsArrow.style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+    if (pendingData.pendingCheckoutSessionId || pendingData.pendingCheckoutEmail) {
+      const email = pendingData.pendingCheckoutEmail || await getUserEmail();
+      const sessionId = pendingData.pendingCheckoutSessionId;
+      
+      console.log('Popup: Found pending checkout, verifying...', { email, sessionId });
+      
+      // Try to verify by session ID first
+      if (sessionId) {
+        try {
+          const sessionResponse = await fetch(`${API_BASE_URL}/get-session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId }),
+          });
+          
+          if (sessionResponse.ok) {
+            const sessionData = await sessionResponse.json();
+            if (sessionData.valid) {
+              // Save subscription
+              await chrome.storage.local.set({
+                subscriptionId: sessionData.subscriptionId,
+                subscriptionExpiry: sessionData.expiryDate,
+                subscriptionActive: true,
+                userEmail: sessionData.email || email,
+              });
+              
+              // Clear pending checkout
+              await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
+              
+              console.log('Popup: Subscription verified, reloading');
+              location.reload();
+              return;
+            }
+          }
+        } catch (e) {
+          console.error('Popup: Error verifying by session:', e);
         }
-        // Load conversations when expanded
-        if (isHidden) {
-          loadConversations();
+      }
+      
+      // Fallback: verify by email
+      if (email) {
+        try {
+          const verifyResponse = await fetch(`${API_BASE_URL}/verify-license`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ licenseKey: email }),
+          });
+          
+          const verifyData = await verifyResponse.json();
+          if (verifyData.valid) {
+            // Save subscription
+            await chrome.storage.local.set({
+              subscriptionId: verifyData.subscriptionId,
+              subscriptionExpiry: verifyData.expiryDate,
+              subscriptionActive: true,
+              userEmail: email,
+            });
+            
+            // Clear pending checkout
+            await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
+            
+            console.log('Popup: Subscription verified by email, reloading');
+            location.reload();
+            return;
+          }
+        } catch (e) {
+          console.error('Popup: Error verifying by email:', e);
         }
-      });
-    } else {
-      console.error('Nimbus: Conversations header or div not found!', { conversationsHeader, conversationsDiv });
+      }
     }
-  } catch (e) {
-    console.error('Nimbus: Error loading initial content:', e);
-  }
+    
+    // Check subscription status
+    const isActive = await checkSubscription();
+    
+    if (!isActive) {
+      // Show payment screen immediately - don't load any content
+      showUpgradePromptInPopup();
+      return; // Stop here - don't load anything else
+    }
+    
+    // Subscription active - load content normally
+    try {
+      // Ensure header is visible
+      const headerContent = document.querySelector('.header-content');
+      if (headerContent) {
+        headerContent.style.display = '';
+        headerContent.style.visibility = 'visible';
+      }
+      
+      // Ensure all sections are visible
+      document.querySelectorAll('.section').forEach(section => {
+        section.style.display = 'block';
+      });
+      
+      loadConversations();
+      loadFavorites();
+      loadRecent();
+      loadWordOfDay();
+      
+      // Ensure all sections are visible
+      document.querySelectorAll('.section').forEach(section => {
+        section.style.display = 'block';
+      });
+      
+      loadConversations();
+      loadFavorites();
+      loadRecent();
+      loadWordOfDay();
+      
+      // Conversations expand/collapse
+      const conversationsHeader = document.getElementById('conversationsHeader');
+      const conversationsArrow = document.getElementById('conversationsArrow');
+      const conversationsDiv = document.getElementById('conversations');
+      if (conversationsHeader && conversationsDiv) {
+        conversationsHeader.style.cursor = 'pointer';
+        conversationsHeader.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const isHidden = conversationsDiv.style.display === 'none' || !conversationsDiv.style.display;
+          conversationsDiv.style.display = isHidden ? 'block' : 'none';
+          if (conversationsArrow) {
+            conversationsArrow.style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+          }
+          // Load conversations when expanded
+          if (isHidden) {
+            loadConversations();
+          }
+        });
+      } else {
+        console.error('Nimbus: Conversations header or div not found!', { conversationsHeader, conversationsDiv });
+      }
+    } catch (e) {
+      console.error('Nimbus: Error loading initial content:', e);
+    }
+  })();
 
   // Nimbus title click handler - return to hub
   nimbusTitle.addEventListener('click', () => {
@@ -2476,21 +3580,458 @@
   });
   
   // Manage subscription button
-  const manageSubscriptionBtn = document.getElementById('manageSubscriptionBtn');
-  if (manageSubscriptionBtn) {
-    manageSubscriptionBtn.addEventListener('click', () => {
-      if (chrome && chrome.payments && chrome.payments.getPurchases) {
-        chrome.payments.getPurchases((purchases) => {
-          if (chrome.runtime.lastError) {
-            console.error('Nimbus: Error getting purchases:', chrome.runtime.lastError);
-            showNotification('Unable to access subscription. Please try again later.', 'error');
-            return;
-          }
-          // Open Chrome payment management
-          chrome.tabs.create({ url: 'https://pay.google.com/gp/v/u/0/home/purchases' });
+  // Subscription Management in Popup
+  // Load subscription info when subscription tab is opened
+  const subscriptionTabHeader = document.querySelector('[data-tab="subscription"]');
+  if (subscriptionTabHeader) {
+    subscriptionTabHeader.addEventListener('click', () => {
+      // Load subscription info when tab is clicked
+      setTimeout(() => {
+        loadPopupSubscriptionInfo();
+      }, 300); // Wait for tab to expand
+    });
+  }
+
+  // Load subscription information in popup
+  async function loadPopupSubscriptionInfo() {
+    const subscriptionInfo = document.getElementById('popup-subscription-info');
+    const cancelBtn = document.getElementById('popup-cancel-btn');
+    const resubscribeBtn = document.getElementById('popup-resubscribe-btn');
+    const refundBtn = document.getElementById('popup-refund-btn');
+    const refundHint = document.getElementById('popup-refund-hint');
+    const statusDiv = document.getElementById('popup-subscription-status');
+
+    if (!subscriptionInfo) return;
+
+    try {
+      const result = await chrome.storage.local.get(['subscriptionId', 'userEmail', 'subscriptionExpiry']);
+      
+      if (!result.subscriptionId && !result.userEmail) {
+        subscriptionInfo.innerHTML = '<strong>Status:</strong> Not subscribed';
+        cancelBtn.style.display = 'none';
+        resubscribeBtn.style.display = 'none';
+        refundBtn.style.display = 'none';
+        return;
+      }
+
+      // Verify subscription status
+      const response = await fetch(`${API_BASE_URL}/verify-license`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ licenseKey: result.subscriptionId || result.userEmail }),
+      });
+
+      const data = await response.json();
+
+      if (data.valid) {
+        const expiry = new Date(data.expiryDate);
+        const now = new Date();
+        const daysRemaining = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
+        const isCancelled = data.cancelAtPeriodEnd === true;
+        const isTrialing = data.status === 'trialing';
+        
+        // Calculate trial end if in trial
+        let trialEndDate = null;
+        let trialDaysRemaining = null;
+        if (isTrialing && data.trialEnd) {
+          trialEndDate = new Date(data.trialEnd * 1000);
+          trialDaysRemaining = Math.ceil((trialEndDate - now) / (1000 * 60 * 60 * 24));
+        }
+        
+        // Calculate days since purchase (for 7-day refund window)
+        // Use created timestamp if available, otherwise estimate from current period end
+        const subscriptionStartDate = data.created 
+          ? new Date(data.created * 1000)
+          : new Date(data.currentPeriodEnd * 1000 - (365 * 24 * 60 * 60 * 1000)); // Fallback: estimate 1 year ago
+        const daysSincePurchase = (now - subscriptionStartDate) / (1000 * 60 * 60 * 24);
+        const within7Days = daysSincePurchase <= 7;
+        
+        // Debug logging
+        console.log('Refund button check:', {
+          created: data.created,
+          subscriptionStartDate: subscriptionStartDate.toISOString(),
+          daysSincePurchase: daysSincePurchase.toFixed(2),
+          within7Days: within7Days,
+          status: data.status,
+          isTrialing: isTrialing
         });
+        
+        // Build subscription info HTML with center alignment and titles above
+        let statusText = 'Active';
+        if (isTrialing) {
+          statusText = 'Trial Active';
+        } else if (isCancelled) {
+          statusText = 'Active (Cancelling at period end)';
+        }
+        
+        subscriptionInfo.innerHTML = `
+          <div style="text-align: center;">
+            <div style="margin-bottom: 16px;">
+              <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Status</div>
+              <div style="font-size: 16px; font-weight: 700; color: ${isCancelled ? '#f59e0b' : isTrialing ? '#3b82f6' : '#10b981'};">${statusText}</div>
+            </div>
+            ${trialEndDate ? `
+            <div style="margin-bottom: 16px;">
+              <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Trial Ends</div>
+              <div style="font-size: 14px; font-weight: 600; color: var(--text-primary);">${trialEndDate.toLocaleDateString()} (${trialDaysRemaining} day${trialDaysRemaining !== 1 ? 's' : ''} left)</div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Your card will be charged automatically when the trial ends</div>
+            </div>
+            ` : ''}
+            <div style="margin-bottom: 16px;">
+              <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Subscription Expires</div>
+              <div style="font-size: 14px; font-weight: 600; color: var(--text-primary);">${expiry.toLocaleDateString()} (${daysRemaining} day${daysRemaining !== 1 ? 's' : ''} remaining)</div>
+            </div>
+            <div style="margin-bottom: 16px;">
+              <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Subscription ID</div>
+              <div style="display: flex; align-items: center; justify-content: center; gap: 8px;">
+                <code style="font-size: 12px; background: var(--bg-secondary); padding: 6px 12px; border-radius: 6px; color: var(--text-primary); font-family: 'Monaco', 'Courier New', monospace;">${data.subscriptionId}</code>
+                <button id="copy-subscription-id" style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; transition: all 0.2s;" title="Copy Subscription ID">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+        subscriptionInfo.style.color = isCancelled ? '#f59e0b' : '#10b981';
+        
+        // Add copy button handler
+        const copyBtn = subscriptionInfo.querySelector('#copy-subscription-id');
+        if (copyBtn) {
+          copyBtn.addEventListener('click', async () => {
+            try {
+              await navigator.clipboard.writeText(data.subscriptionId);
+              const originalHTML = copyBtn.innerHTML;
+              copyBtn.innerHTML = '✓ Copied';
+              copyBtn.style.background = 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
+              setTimeout(() => {
+                copyBtn.innerHTML = originalHTML;
+                copyBtn.style.background = 'linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%)';
+              }, 2000);
+              showNotification('Subscription ID copied!', 'success');
+            } catch (err) {
+              showNotification('Failed to copy', 'error');
+            }
+          });
+        }
+
+        // Show appropriate buttons
+        if (isCancelled) {
+          cancelBtn.style.display = 'none';
+          resubscribeBtn.style.display = 'inline-block';
+          refundBtn.style.display = 'none';
+        } else {
+          cancelBtn.style.display = 'inline-block';
+          resubscribeBtn.style.display = 'none';
+          // Show refund button only if within 7 days
+          // Also show during trial (trial counts as within grace period)
+          if (within7Days || isTrialing) {
+            refundBtn.style.display = 'inline-block';
+            refundBtn.disabled = false;
+            refundBtn.style.opacity = '1';
+            if (refundHint) refundHint.style.display = 'block';
+          } else {
+            refundBtn.style.display = 'none'; // Hide after 7 days
+            if (refundHint) refundHint.style.display = 'none';
+          }
+        }
       } else {
-        showNotification('Subscription management is not available in this environment.', 'error');
+        subscriptionInfo.innerHTML = `<strong>Status:</strong> ${data.error || 'Inactive'}`;
+        subscriptionInfo.style.color = '#dc2626';
+        cancelBtn.style.display = 'none';
+        resubscribeBtn.style.display = 'none';
+        refundBtn.style.display = 'none';
+      }
+    } catch (error) {
+      console.error('Error loading subscription:', error);
+      subscriptionInfo.innerHTML = '<strong>Status:</strong> Error loading subscription';
+      subscriptionInfo.style.color = '#dc2626';
+      cancelBtn.style.display = 'none';
+      resubscribeBtn.style.display = 'none';
+      refundBtn.style.display = 'none';
+    }
+  }
+
+  // Show confirmation modal
+  function showConfirmationModal(title, message, confirmText, cancelText, onConfirm) {
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 10000; display: flex; align-items: center; justify-content: center;';
+    
+    const modalContent = document.createElement('div');
+    modalContent.style.cssText = 'background: white; padding: 24px; border-radius: 12px; max-width: 400px; width: 90%; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3);';
+    
+    modalContent.innerHTML = `
+      <h3 style="margin: 0 0 16px 0; color: #1e3a8a; font-size: 20px; font-weight: 700;">${title}</h3>
+      <p style="margin: 0 0 24px 0; color: #475569; font-size: 14px; line-height: 1.6;">${message}</p>
+      <div style="display: flex; gap: 12px; justify-content: flex-end;">
+        <button id="modal-cancel" style="padding: 10px 20px; border: 1px solid #cbd5e1; background: white; color: #475569; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px;">${cancelText || 'Cancel'}</button>
+        <button id="modal-confirm" style="padding: 10px 20px; border: none; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; box-shadow: 0 2px 4px rgba(30, 58, 138, 0.3);">${confirmText || 'Confirm'}</button>
+      </div>
+    `;
+    
+    modal.appendChild(modalContent);
+    document.body.appendChild(modal);
+    
+    const confirmBtn = modalContent.querySelector('#modal-confirm');
+    const cancelBtn = modalContent.querySelector('#modal-cancel');
+    
+    return new Promise((resolve) => {
+      confirmBtn.addEventListener('click', () => {
+        document.body.removeChild(modal);
+        resolve(true);
+      });
+      
+      cancelBtn.addEventListener('click', () => {
+        document.body.removeChild(modal);
+        resolve(false);
+      });
+      
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          document.body.removeChild(modal);
+          resolve(false);
+        }
+      });
+    });
+  }
+
+  // Cancel subscription button
+  const popupCancelBtn = document.getElementById('popup-cancel-btn');
+  const cancelHint = document.getElementById('popup-cancel-hint');
+  if (popupCancelBtn) {
+    // Show/hide hint when button is shown
+    const observer = new MutationObserver(() => {
+      if (popupCancelBtn.style.display !== 'none') {
+        if (cancelHint) cancelHint.style.display = 'block';
+      } else {
+        if (cancelHint) cancelHint.style.display = 'none';
+      }
+    });
+    observer.observe(popupCancelBtn, { attributes: true, attributeFilter: ['style'] });
+    
+    popupCancelBtn.addEventListener('click', async () => {
+      const confirmed = await showConfirmationModal(
+        'Cancel Subscription',
+        'Your subscription will be cancelled at the end of the current billing period. You will retain access until then. If you are within 7 days of purchase, you will receive a full refund automatically.',
+        'Yes, Cancel Subscription',
+        'Keep Subscription'
+      );
+      
+      if (!confirmed) return;
+
+      popupCancelBtn.disabled = true;
+      popupCancelBtn.textContent = 'Cancelling...';
+      const statusDiv = document.getElementById('popup-subscription-status');
+      if (statusDiv) {
+        statusDiv.innerHTML = '';
+        statusDiv.style.color = '';
+      }
+
+      try {
+        const result = await chrome.storage.local.get(['subscriptionId', 'userEmail']);
+        const response = await fetch(`${API_BASE_URL}/cancel-subscription`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscriptionId: result.subscriptionId,
+            email: result.userEmail,
+            autoRefund: true, // Request auto-refund if within 7 days
+          }),
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          if (data.refunded) {
+            // Was refunded (within 7 days)
+            await chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
+            if (statusDiv) {
+              statusDiv.innerHTML = `✅ Subscription cancelled and refunded. £${data.refundAmount || 4.99} will be refunded to your original payment method.`;
+              statusDiv.style.color = '#10b981';
+            }
+            showNotification('Subscription cancelled and refunded', 'success');
+          } else {
+            // Cancelled at period end
+            if (statusDiv) {
+              statusDiv.innerHTML = `✅ Subscription will be cancelled at period end. You'll retain access until ${new Date(data.currentPeriodEnd * 1000).toLocaleDateString()}.`;
+              statusDiv.style.color = '#10b981';
+            }
+            showNotification('Subscription cancellation scheduled', 'success');
+          }
+          
+          // Reload subscription info
+          setTimeout(() => {
+            loadPopupSubscriptionInfo();
+          }, 2000);
+        } else {
+          if (statusDiv) {
+            statusDiv.innerHTML = `❌ ${data.error || 'Failed to cancel subscription'}`;
+            statusDiv.style.color = '#dc2626';
+          }
+          showNotification('Failed to cancel subscription', 'error');
+          popupCancelBtn.disabled = false;
+          popupCancelBtn.textContent = 'Cancel Subscription';
+        }
+      } catch (error) {
+        console.error('Cancel error:', error);
+        if (statusDiv) {
+          statusDiv.innerHTML = '❌ Error cancelling subscription. Please try again.';
+          statusDiv.style.color = '#dc2626';
+        }
+        showNotification('Error cancelling subscription', 'error');
+        popupCancelBtn.disabled = false;
+        popupCancelBtn.textContent = 'Cancel Subscription';
+      }
+    });
+  }
+
+  // Resubscribe button
+  const popupResubscribeBtn = document.getElementById('popup-resubscribe-btn');
+  if (popupResubscribeBtn) {
+    popupResubscribeBtn.addEventListener('click', async () => {
+      const confirmed = await showConfirmationModal(
+        'Resubscribe',
+        'This will reactivate your subscription and it will continue to renew automatically.',
+        'Yes, Resubscribe',
+        'Cancel'
+      );
+      
+      if (!confirmed) return;
+
+      popupResubscribeBtn.disabled = true;
+      popupResubscribeBtn.textContent = 'Reactivating...';
+      const statusDiv = document.getElementById('popup-subscription-status');
+      if (statusDiv) {
+        statusDiv.innerHTML = '';
+        statusDiv.style.color = '';
+      }
+
+      try {
+        const result = await chrome.storage.local.get(['subscriptionId', 'userEmail']);
+        const response = await fetch(`${API_BASE_URL}/cancel-subscription`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscriptionId: result.subscriptionId,
+            email: result.userEmail,
+            action: 'reactivate',
+          }),
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          if (statusDiv) {
+            statusDiv.innerHTML = '✅ Subscription reactivated successfully!';
+            statusDiv.style.color = '#10b981';
+          }
+          showNotification('Subscription reactivated', 'success');
+          
+          // Reload subscription info
+          setTimeout(() => {
+            loadPopupSubscriptionInfo();
+          }, 2000);
+        } else {
+          if (statusDiv) {
+            statusDiv.innerHTML = `❌ ${data.error || 'Failed to reactivate subscription'}`;
+            statusDiv.style.color = '#dc2626';
+          }
+          showNotification('Failed to reactivate subscription', 'error');
+          popupResubscribeBtn.disabled = false;
+          popupResubscribeBtn.textContent = 'Resubscribe';
+        }
+      } catch (error) {
+        console.error('Resubscribe error:', error);
+        if (statusDiv) {
+          statusDiv.innerHTML = '❌ Error reactivating subscription. Please try again.';
+          statusDiv.style.color = '#dc2626';
+        }
+        showNotification('Error reactivating subscription', 'error');
+        popupResubscribeBtn.disabled = false;
+        popupResubscribeBtn.textContent = 'Resubscribe';
+      }
+    });
+  }
+
+  // Refund button
+  const popupRefundBtn = document.getElementById('popup-refund-btn');
+  const refundHint = document.getElementById('popup-refund-hint');
+  if (popupRefundBtn) {
+    // Show/hide hint when button is shown
+    const observer = new MutationObserver(() => {
+      if (popupRefundBtn.style.display !== 'none') {
+        if (refundHint) refundHint.style.display = 'block';
+      } else {
+        if (refundHint) refundHint.style.display = 'none';
+      }
+    });
+    observer.observe(popupRefundBtn, { attributes: true, attributeFilter: ['style'] });
+    
+    popupRefundBtn.addEventListener('click', async () => {
+      const confirmed = await showConfirmationModal(
+        'Request Refund',
+        'Are you sure you want to request a refund? Your subscription will be cancelled immediately and you will lose access. This action cannot be undone. Refunds are only available within 7 days of purchase.',
+        'Yes, Request Refund',
+        'Cancel'
+      );
+      
+      if (!confirmed) return;
+
+      popupRefundBtn.disabled = true;
+      popupRefundBtn.textContent = 'Processing refund...';
+      const statusDiv = document.getElementById('popup-subscription-status');
+      if (statusDiv) {
+        statusDiv.innerHTML = '';
+        statusDiv.style.color = '';
+      }
+
+      try {
+        const result = await chrome.storage.local.get(['subscriptionId', 'userEmail']);
+        const response = await fetch(`${API_BASE_URL}/process-refund`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            subscriptionId: result.subscriptionId,
+            email: result.userEmail,
+          }),
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          // Clear subscription from storage
+          await chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
+          
+          if (statusDiv) {
+            statusDiv.innerHTML = `✅ Refund processed successfully! £${data.amount || 4.99} will be refunded to your original payment method.`;
+            statusDiv.style.color = '#10b981';
+          }
+          showNotification('Refund processed successfully', 'success');
+          
+          // Reload subscription info
+          setTimeout(() => {
+            loadPopupSubscriptionInfo();
+          }, 2000);
+        } else {
+          if (statusDiv) {
+            statusDiv.innerHTML = `❌ ${data.error || 'Failed to process refund'}. ${data.details || ''}`;
+            statusDiv.style.color = '#dc2626';
+          }
+          showNotification('Failed to process refund', 'error');
+          popupRefundBtn.disabled = false;
+          popupRefundBtn.textContent = 'Request Refund (7-day window)';
+        }
+      } catch (error) {
+        console.error('Refund error:', error);
+        if (statusDiv) {
+          statusDiv.innerHTML = '❌ Error processing refund. Please try again.';
+          statusDiv.style.color = '#dc2626';
+        }
+        showNotification('Error processing refund', 'error');
+        popupRefundBtn.disabled = false;
+        popupRefundBtn.textContent = 'Request Refund (7-day window)';
       }
     });
   }
@@ -2610,9 +4151,15 @@
 
   // Search input handler - execute search on Enter
   if (searchInput) {
-    searchInput.addEventListener('keydown', (e) => {
+    searchInput.addEventListener('keydown', async (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
+        const isActive = await checkSubscription();
+        if (!isActive) {
+          showUpgradePromptInPopup();
+          showNotification('Please subscribe to use search functionality.', 'error');
+          return;
+        }
         const query = searchInput.value.trim();
         if (query.length >= 2) {
           executeSearch(query);
@@ -2623,7 +4170,13 @@
     // Search icon button handler
     const searchIconBtn = document.getElementById('searchIconBtn');
     if (searchIconBtn) {
-      searchIconBtn.addEventListener('click', () => {
+      searchIconBtn.addEventListener('click', async () => {
+        const isActive = await checkSubscription();
+        if (!isActive) {
+          showUpgradePromptInPopup();
+          showNotification('Please subscribe to use search functionality.', 'error');
+          return;
+        }
         const query = searchInput.value.trim();
         if (query.length >= 2) {
           executeSearch(query);
@@ -2671,6 +4224,14 @@
   // Execute search - handles both words and people
   async function executeSearch(query) {
     if (!query || typeof query !== 'string' || query.trim().length < 2) {
+      return;
+    }
+    
+    // Check subscription before executing search
+    const isActive = await checkSubscription();
+    if (!isActive) {
+      showUpgradePromptInPopup();
+      showNotification('Please subscribe to use search functionality.', 'error');
       return;
     }
     
@@ -3441,7 +5002,7 @@
               <!-- AI response -->
               <div class="ai-message ai-assistant" style="display: flex; flex-direction: column; gap: 4px;">
                 <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
-                <div style="padding: 12px 16px; background: var(--card-bg); color: var(--text-primary); border-radius: 12px; line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${data.explanation || 'No explanation available.'}</div>
+                <div style="padding: 12px 16px; background: var(--card-bg); color: var(--text-primary); border-radius: 12px; line-height: 1.5; font-size: 13px; word-wrap: break-word; overflow-wrap: break-word; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${formatMessage(data.explanation || 'No explanation available.')}</div>
               </div>
             </div>
         ` : `
@@ -3760,6 +5321,48 @@
         chatSendBtn.disabled = true;
         
         try {
+          // Check if request is allowed
+          const canRequest = await canMakeRequest(message);
+          if (!canRequest.allowed) {
+            loadingDiv.remove();
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'ai-message ai-assistant';
+            errorDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
+            errorDiv.innerHTML = `
+              <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+              <div style="padding: 10px 14px; background: #fef3c7; border-radius: 12px; border: 1px solid #fbbf24; color: #92400e; line-height: 1.5; font-size: 13px;">${canRequest.reason}</div>
+            `;
+            chatMessages.appendChild(errorDiv);
+            chatInput.disabled = false;
+            chatSendBtn.disabled = false;
+            chatInput.focus();
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return;
+          }
+          
+          // Handle document requests
+          if (isDocumentRequest(message)) {
+            loadingDiv.remove();
+            const infoDiv = document.createElement('div');
+            infoDiv.className = 'ai-message ai-assistant';
+            infoDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
+            infoDiv.innerHTML = `
+              <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+              <div style="padding: 10px 14px; background: #dbeafe; border-radius: 12px; border: 1px solid #60a5fa; color: #1e40af; line-height: 1.5; font-size: 13px;">I can help explain concepts and provide information, but I cannot create Word documents or PDFs. You can copy any text I provide and paste it into your document editor.</div>
+            `;
+            chatMessages.appendChild(infoDiv);
+            chatInput.disabled = false;
+            chatSendBtn.disabled = false;
+            chatInput.focus();
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return;
+          }
+          
+          // Increment usage for code requests
+          if (isCodeRequest(message)) {
+            await incrementUsage(message);
+          }
+          
           // Send to background script with conversation context
           const response = await new Promise((resolve) => {
             chrome.runtime.sendMessage({
@@ -3786,8 +5389,27 @@
               aiMsgDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
               aiMsgDiv.innerHTML = `
                 <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
-                <div style="padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${response.explanation}</div>
+                <div style="padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); line-height: 1.5; font-size: 13px; word-wrap: break-word; overflow-wrap: break-word; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${formatMessage(response.explanation)}</div>
               `;
+              
+              // Add copy button handlers for code blocks
+              setTimeout(() => {
+                aiMsgDiv.querySelectorAll('.copy-code-btn').forEach(btn => {
+                  btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const codeBlock = btn.closest('.code-block-container');
+                    const code = codeBlock.querySelector('code').textContent;
+                    navigator.clipboard.writeText(code).then(() => {
+                      btn.textContent = 'Copied!';
+                      setTimeout(() => {
+                        btn.textContent = 'Copy';
+                      }, 2000);
+                    }).catch(err => {
+                      console.error('Failed to copy:', err);
+                    });
+                  });
+                });
+              }, 0);
             chatMessages.appendChild(aiMsgDiv);
             conversationHistory.push({ role: 'assistant', content: response.explanation });
             
@@ -4056,7 +5678,7 @@
                       return `
                         <div class="ai-message ai-assistant" style="display: flex; flex-direction: column; gap: 4px;">
                           <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
-                          <div style="padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${msg.content}</div>
+                          <div style="padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); line-height: 1.5; font-size: 13px; word-wrap: break-word; overflow-wrap: break-word; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${formatMessage(msg.content)}</div>
                         </div>
                       `;
                     } else {
@@ -4069,6 +5691,25 @@
                     }
                   }).join('');
                   chatMessages.scrollTop = chatMessages.scrollHeight;
+                  
+                  // Add copy button handlers for code blocks in loaded messages
+                  setTimeout(() => {
+                    chatMessages.querySelectorAll('.copy-code-btn').forEach(btn => {
+                      btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const codeBlock = btn.closest('.code-block-container');
+                        const code = codeBlock.querySelector('code').textContent;
+                        navigator.clipboard.writeText(code).then(() => {
+                          btn.textContent = 'Copied!';
+                          setTimeout(() => {
+                            btn.textContent = 'Copy';
+                          }, 2000);
+                        }).catch(err => {
+                          console.error('Failed to copy:', err);
+                        });
+                      });
+                    });
+                  }, 0);
                   
                   // Store conversation ID and history for continuing the conversation
                   if (chatInput) {
@@ -4117,6 +5758,48 @@
                           chatSendBtn.disabled = true;
                           
                           try {
+                            // Check if request is allowed
+                            const canRequest = await canMakeRequest(message);
+                            if (!canRequest.allowed) {
+                              loadingDiv.remove();
+                              const errorDiv = document.createElement('div');
+                              errorDiv.className = 'ai-message ai-assistant';
+                              errorDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
+                              errorDiv.innerHTML = `
+                                <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+                                <div style="padding: 10px 14px; background: #fef3c7; border-radius: 12px; border: 1px solid #fbbf24; color: #92400e; line-height: 1.5; font-size: 13px;">${canRequest.reason}</div>
+                              `;
+                              chatMessages.appendChild(errorDiv);
+                              chatInput.disabled = false;
+                              chatSendBtn.disabled = false;
+                              chatInput.focus();
+                              chatMessages.scrollTop = chatMessages.scrollHeight;
+                              return;
+                            }
+                            
+                            // Handle document requests
+                            if (isDocumentRequest(message)) {
+                              loadingDiv.remove();
+                              const infoDiv = document.createElement('div');
+                              infoDiv.className = 'ai-message ai-assistant';
+                              infoDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
+                              infoDiv.innerHTML = `
+                                <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
+                                <div style="padding: 10px 14px; background: #dbeafe; border-radius: 12px; border: 1px solid #60a5fa; color: #1e40af; line-height: 1.5; font-size: 13px;">I can help explain concepts and provide information, but I cannot create Word documents or PDFs. You can copy any text I provide and paste it into your document editor.</div>
+                              `;
+                              chatMessages.appendChild(infoDiv);
+                              chatInput.disabled = false;
+                              chatSendBtn.disabled = false;
+                              chatInput.focus();
+                              chatMessages.scrollTop = chatMessages.scrollHeight;
+                              return;
+                            }
+                            
+                            // Increment usage for code requests
+                            if (isCodeRequest(message)) {
+                              await incrementUsage(message);
+                            }
+                            
                             // Send to background script with conversation context
                             const response = await new Promise((resolve) => {
                               chrome.runtime.sendMessage({
@@ -4143,9 +5826,29 @@
                               aiMsgDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
                               aiMsgDiv.innerHTML = `
                                 <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
-                                <div style="padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); line-height: 1.5; font-size: 13px; white-space: pre-wrap; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${response.explanation}</div>
+                                <div style="padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); line-height: 1.5; font-size: 13px; word-wrap: break-word; overflow-wrap: break-word; box-shadow: var(--card-shadow-inner), var(--card-shadow);">${formatMessage(response.explanation)}</div>
                               `;
                               chatMessages.appendChild(aiMsgDiv);
+                              
+                              // Add copy button handlers for code blocks
+                              setTimeout(() => {
+                                aiMsgDiv.querySelectorAll('.copy-code-btn').forEach(btn => {
+                                  btn.addEventListener('click', (e) => {
+                                    e.stopPropagation();
+                                    const codeBlock = btn.closest('.code-block-container');
+                                    const code = codeBlock.querySelector('code').textContent;
+                                    navigator.clipboard.writeText(code).then(() => {
+                                      btn.textContent = 'Copied!';
+                                      setTimeout(() => {
+                                        btn.textContent = 'Copy';
+                                      }, 2000);
+                                    }).catch(err => {
+                                      console.error('Failed to copy:', err);
+                                    });
+                                  });
+                                });
+                              }, 0);
+                              
                               conversationHistory.push({ role: 'assistant', content: response.explanation });
                               
                               // Save updated conversation

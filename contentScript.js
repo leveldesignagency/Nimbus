@@ -11,6 +11,8 @@
   let currentSynonyms = [];
   let lastSelection = '';
   let manuallyClosed = false; // Track if user manually closed the tooltip
+  let savedRange = null; // Store the selection range to maintain highlight
+  let highlightOverlay = null; // Custom highlight overlay element
   let modalSettings = {
     placement: 'intuitive',
     draggable: true,
@@ -19,14 +21,75 @@
   };
   let isDragging = false;
 
+  // Function to find the best available voice for TTS
+  function getBestVoice(lang = 'en-US') {
+    if (!window.speechSynthesis) return null;
+    
+    // Ensure voices are loaded (they load asynchronously)
+    let voices = window.speechSynthesis.getVoices();
+    if (!voices || voices.length === 0) {
+      // Try to load voices if not already loaded
+      window.speechSynthesis.getVoices();
+      voices = window.speechSynthesis.getVoices();
+    }
+    if (!voices || voices.length === 0) return null;
+    
+    // Priority order for voice selection (most natural/lifelike first)
+    const voicePriorities = [
+      // Google Neural voices (best quality)
+      (v) => v.name.includes('Google') && (v.name.includes('Neural') || v.name.includes('Wavenet')),
+      // Microsoft Neural voices
+      (v) => v.name.includes('Microsoft') && (v.name.includes('Neural') || v.name.includes('Premium')),
+      // Google voices (good quality)
+      (v) => v.name.includes('Google'),
+      // Microsoft voices
+      (v) => v.name.includes('Microsoft'),
+      // Apple voices (Mac/iOS)
+      (v) => v.name.includes('Samantha') || v.name.includes('Alex') || v.name.includes('Victoria'),
+      // Other premium/neural voices
+      (v) => v.name.includes('Neural') || v.name.includes('Premium') || v.name.includes('Enhanced'),
+      // Default to any voice matching the language
+      (v) => v.lang.startsWith(lang.split('-')[0])
+    ];
+    
+    // Filter voices by language first
+    const langCode = lang.split('-')[0];
+    let matchingVoices = voices.filter(v => v.lang.startsWith(langCode));
+    
+    // If no exact language match, try broader match
+    if (matchingVoices.length === 0) {
+      matchingVoices = voices.filter(v => v.lang.includes(langCode));
+    }
+    
+    // If still no match, use all voices
+    if (matchingVoices.length === 0) {
+      matchingVoices = voices;
+    }
+    
+    // Try to find the best voice based on priorities
+    for (const priorityFn of voicePriorities) {
+      const found = matchingVoices.find(priorityFn);
+      if (found) return found;
+    }
+    
+    // Fallback: prefer female voices (often sound more natural)
+    const femaleVoice = matchingVoices.find(v => 
+      v.name.toLowerCase().includes('female') || 
+      v.name.includes('Samantha') || 
+      v.name.includes('Victoria') ||
+      v.name.includes('Karen') ||
+      v.name.includes('Zira')
+    );
+    if (femaleVoice) return femaleVoice;
+    
+    // Last resort: return first matching voice
+    return matchingVoices[0] || voices[0];
+  }
+
   // Initialize subscription status
   let subscriptionActive = false;
   const SUBSCRIPTION_ID = 'nimbus_yearly_subscription';
   let usage = { used: 0, date: new Date().toISOString().slice(0,10), limit: 999999 };
-  
-  // Check if extension is running in development mode (unpacked)
-  // In development, bypass subscription check for testing
-  const isDevelopmentMode = chrome.runtime.getManifest().update_url === undefined;
   
   function safeStorageGet(keys, callback) {
     try {
@@ -46,43 +109,97 @@
     }
   }
   
-  // Check subscription status
+  // Check subscription status via our API (Stripe backend)
   async function checkSubscription() {
-    // Bypass subscription check in development mode (unpacked extension)
-    const isDevelopmentMode = !chrome.runtime.getManifest().update_url;
-    if (isDevelopmentMode) {
-      console.log('Nimbus: Development mode detected - bypassing subscription check');
-      subscriptionActive = true;
-      return true;
-    }
-    
+    // NO BYPASS - Test actual payment flow even in development
     try {
-      // If payments API not available (dev mode or not published), allow access
-      if (!chrome || !chrome.payments || !chrome.payments.getPurchases) {
-        console.warn('Nimbus: Payments API not available - allowing access (dev mode)');
-        subscriptionActive = true;
-        return true;
-      }
-      
-      return new Promise((resolve) => {
-        chrome.payments.getPurchases((purchases) => {
-          if (chrome.runtime.lastError) {
-            console.warn('Nimbus: Error checking purchases:', chrome.runtime.lastError);
-            resolve(false);
-            return;
-          }
-          
-          const hasActiveSubscription = purchases && purchases.some(
-            p => p.productId === SUBSCRIPTION_ID && p.purchaseState === 'PURCHASED'
-          );
-          
-          subscriptionActive = hasActiveSubscription || false;
-          console.log('Nimbus: Subscription status:', subscriptionActive);
-          resolve(subscriptionActive);
-        });
+      // First check if subscriptionActive is set in storage (set by popup/background)
+      const storageResult = await new Promise((resolve) => {
+        chrome.storage.local.get(['subscriptionActive', 'subscriptionId', 'subscriptionExpiry', 'userEmail'], resolve);
       });
+
+      // If subscriptionActive is explicitly set to true in storage, trust it (but still verify expiry)
+      if (storageResult.subscriptionActive === true) {
+        const expiry = storageResult.subscriptionExpiry;
+        if (expiry && new Date(expiry) > new Date()) {
+          subscriptionActive = true;
+          console.log('Nimbus: Subscription active from storage');
+          return true;
+        } else if (!expiry) {
+          // No expiry date, but marked as active - verify with API
+          console.log('Nimbus: Subscription marked active but no expiry, verifying...');
+        } else {
+          // Expired
+          subscriptionActive = false;
+          chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
+          return false;
+        }
+      }
+
+      // Get subscription ID from storage
+      const subscriptionId = storageResult.subscriptionId;
+      const expiry = storageResult.subscriptionExpiry;
+      const userEmail = storageResult.userEmail;
+
+      if (!subscriptionId && !userEmail) {
+        subscriptionActive = false;
+        return false;
+      }
+
+      // Check if expired locally
+      if (expiry && new Date(expiry) < new Date()) {
+        subscriptionActive = false;
+        chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
+        return false;
+      }
+
+      // Verify with API - try subscriptionId first, then email
+      try {
+        const licenseKey = subscriptionId || userEmail;
+        if (!licenseKey) {
+          subscriptionActive = false;
+          return false;
+        }
+
+        const response = await fetch('https://nimbus-api-ten.vercel.app/api/verify-license', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ licenseKey }),
+        });
+
+        if (!response.ok) {
+          subscriptionActive = false;
+          return false;
+        }
+
+        const data = await response.json();
+        if (data.valid) {
+          subscriptionActive = true;
+          // Update storage with latest info
+          chrome.storage.local.set({
+            subscriptionActive: true,
+            subscriptionExpiry: data.expiryDate,
+            subscriptionId: data.subscriptionId,
+          });
+          console.log('Nimbus: Subscription verified and active');
+          return true;
+        } else {
+          subscriptionActive = false;
+          chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
+          return false;
+        }
+      } catch (apiError) {
+        // If API fails but expiry is still valid, allow access
+        if (expiry && new Date(expiry) > new Date()) {
+          subscriptionActive = true;
+          return true;
+        }
+        subscriptionActive = false;
+        return false;
+      }
     } catch (e) {
       console.error('Nimbus: Error checking subscription:', e);
+      subscriptionActive = false;
       return false;
     }
   }
@@ -100,14 +217,54 @@
   // Listen for storage changes
   try {
     if (chrome && chrome.storage && chrome.storage.onChanged) {
-      chrome.storage.onChanged.addListener((changes) => {
-        if (changes.usage) {
-          usage = changes.usage.newValue || usage;
+      chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName === 'local') {
+          if (changes.usage) {
+            usage = changes.usage.newValue || usage;
+          }
+          // Re-check subscription when subscription data changes
+          if (changes.subscriptionId || changes.subscriptionExpiry || changes.subscriptionActive || changes.userEmail) {
+            console.log('Nimbus: Subscription storage changed, re-checking...', changes);
+            checkSubscription().then((isActive) => {
+              console.log('Nimbus: Subscription re-check result:', isActive);
+              // If subscription just became active, close any upgrade prompts
+              if (isActive && tooltipEl) {
+                const upgradePrompt = tooltipEl.querySelector('[style*="Subscribe to Unlock"]');
+                if (upgradePrompt) {
+                  console.log('Nimbus: Subscription activated, closing upgrade prompt');
+                  hideTooltip();
+                }
+              }
+            });
+          }
         }
       });
     }
   } catch (e) {
     console.warn('Nimbus: Could not set up storage listener', e);
+  }
+  
+  // Also listen for messages from background/popup
+  try {
+    if (chrome && chrome.runtime && chrome.runtime.onMessage) {
+      chrome.runtime.onMessage.addListener((msg) => {
+        if (msg && msg.action === 'subscriptionActivated') {
+          console.log('Nimbus: Received subscription activation message');
+          checkSubscription().then((isActive) => {
+            if (isActive && tooltipEl) {
+              const upgradePrompt = tooltipEl.querySelector('[style*="Subscribe to Unlock"]');
+              if (upgradePrompt) {
+                console.log('Nimbus: Subscription activated via message, closing upgrade prompt');
+                hideTooltip();
+              }
+            }
+          });
+        }
+        return true; // Keep channel open for async response
+      });
+    }
+  } catch (e) {
+    console.warn('Nimbus: Message listener setup failed', e);
   }
 
   // Listen for purchase updates
@@ -165,7 +322,41 @@
     }
   });
 
-  function handleSelection() {
+  function handleSelection(e) {
+    // QUICK CHECK: If click happened on tooltip/modal, ignore completely
+    if (e && e.target) {
+      const clickedElement = e.target;
+      // Check if click is on tooltip or any of its children
+      if (tooltipEl && (tooltipEl === clickedElement || tooltipEl.contains(clickedElement))) {
+        return; // Clicked on tooltip, ignore selection
+      }
+      // Check if click is on highlight overlay
+      if (highlightOverlay && (highlightOverlay === clickedElement || highlightOverlay.contains(clickedElement))) {
+        return; // Clicked on highlight overlay, ignore selection
+      }
+    }
+    
+    // QUICK CHECK: If user is typing in an input field, ignore immediately
+    const activeEl = document.activeElement;
+    if (activeEl) {
+      const tagName = activeEl.tagName?.toLowerCase();
+      if (tagName === 'input' || tagName === 'textarea') {
+        return; // User is typing in input, ignore selection
+      }
+      if (activeEl.contentEditable === 'true' || activeEl.isContentEditable) {
+        return; // User is typing in contenteditable, ignore selection
+      }
+      const role = activeEl.getAttribute?.('role');
+      if (role === 'textbox' || role === 'searchbox' || role === 'combobox' || role === 'search') {
+        return; // User is in a search/textbox, ignore selection
+      }
+    }
+    
+    // If tooltip is currently visible, don't process new selections
+    if (tooltipEl && document.body.contains(tooltipEl)) {
+      return; // Tooltip is visible, ignore new selections
+    }
+    
     // Check extension context FIRST before doing anything
     try {
       if (!chrome || !chrome.runtime) {
@@ -207,6 +398,19 @@
         return;
       }
 
+      // Get the range early for positioning and save it to maintain highlight
+      let range = null;
+      try {
+        if (selection.rangeCount > 0) {
+          range = selection.getRangeAt(0);
+          // Clone and save the range to maintain highlight
+          savedRange = range.cloneRange();
+        }
+      } catch (e) {
+        console.warn('CursorIQ: Error getting range', e);
+        savedRange = null;
+      }
+
       // Check if selection is an email address
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (emailRegex.test(selectedText)) {
@@ -215,81 +419,154 @@
         return;
       }
 
-      // Limit to maximum 2 words - split and check word count
-      const words = selectedText.split(/\s+/).filter(w => w.trim().length > 0);
-      if (words.length > 2) {
-        // More than 2 words selected - don't show tooltip
-        return;
-      }
-
-      // Check if selection is inside an input, textarea, or search field
-      try {
-        if (selection.rangeCount > 0) {
-          const range = selection.getRangeAt(0);
-          const startContainer = range.startContainer;
-          const endContainer = range.endContainer;
+      // Check if selection is inside an input, textarea, or search field - DO THIS FIRST
+      // Helper function to check if a node is inside an input/textarea
+      const isInsideInput = (node) => {
+        if (!node) return false;
+        
+        let current = node;
+        let depth = 0;
+        const maxDepth = 50; // Increased depth for very complex nested structures like Reddit
+        
+        while (current && current !== document.body && current !== document.documentElement && depth < maxDepth) {
+          depth++;
           
-          // Helper function to check if a node is inside an input/textarea
-          const isInsideInput = (node) => {
-            let current = node;
-            let depth = 0;
-            const maxDepth = 20; // Prevent infinite loops
-            
-            while (current && current !== document.body && current !== document.documentElement && depth < maxDepth) {
-              depth++;
+          // Check if it's an input/textarea element
+          if (current.nodeType === Node.ELEMENT_NODE) {
+            const tagName = current.tagName?.toLowerCase();
+            if (tagName === 'input' || tagName === 'textarea' || tagName === 'search') {
+              return true;
+            }
+            // Check for contenteditable - but ONLY if it's actually an input field
+            // Don't block contenteditable divs that are just page content (like Reddit posts)
+            if (current.contentEditable === 'true' || current.isContentEditable) {
+              // Only block if it has input-like attributes (placeholder, role, etc.)
+              const role = current.getAttribute?.('role');
+              const placeholder = current.getAttribute?.('placeholder') || '';
+              const ariaLabel = current.getAttribute?.('aria-label') || '';
+              const type = current.getAttribute?.('type');
+              const id = current.getAttribute?.('id') || '';
+              const className = current.className || '';
+              const dataTestid = current.getAttribute?.('data-testid') || '';
               
-              // Check if it's an input/textarea element
-              if (current.nodeType === Node.ELEMENT_NODE) {
-                const tagName = current.tagName?.toLowerCase();
-                if (tagName === 'input' || tagName === 'textarea' || tagName === 'search') {
-                  return true;
-                }
-                // Check for contenteditable
-                if (current.contentEditable === 'true' || current.isContentEditable) {
-                  return true;
-                }
-                // Check for input-like classes/attributes
-                if (current.classList) {
-                  const classes = Array.from(current.classList);
-                  if (classes.some(c => c.includes('input') || c.includes('search') || c.includes('textarea') || c.includes('Search'))) {
-                    return true;
-                  }
-                }
-                // Check for input-like attributes
-                if (current.getAttribute && (current.getAttribute('role') === 'textbox' || current.getAttribute('type') === 'search' || current.getAttribute('type') === 'text')) {
-                  return true;
-                }
+              // Check for Reddit search bar specifically
+              const isRedditSearch = (
+                id.toLowerCase().includes('search') ||
+                className.toLowerCase().includes('search') ||
+                dataTestid.toLowerCase().includes('search') ||
+                ariaLabel.toLowerCase().includes('search reddit') ||
+                ariaLabel.toLowerCase().includes('search posts')
+              ) && (
+                className.toLowerCase().includes('input') ||
+                className.toLowerCase().includes('field') ||
+                className.toLowerCase().includes('box') ||
+                placeholder.toLowerCase().includes('search')
+              );
+              
+              // Only block if it's clearly an input field
+              if (role === 'textbox' || role === 'searchbox' || role === 'combobox' || 
+                  type === 'search' || type === 'text' ||
+                  placeholder.length > 0 || 
+                  ariaLabel.toLowerCase().includes('search') ||
+                  ariaLabel.toLowerCase().includes('input') ||
+                  isRedditSearch) {
+                return true;
               }
               
-              // Move up the tree
-              current = current.parentElement || current.parentNode;
+              // Check if it's inside a form or has input-like parent
+              let parent = current.parentElement;
+              let parentDepth = 0;
+              while (parent && parent !== document.body && parentDepth < 5) {
+                const parentTag = parent.tagName?.toLowerCase();
+                const parentRole = parent.getAttribute?.('role');
+                const parentId = parent.getAttribute?.('id') || '';
+                const parentClass = parent.className || '';
+                
+                // Check for Reddit search container
+                const isRedditSearchContainer = (
+                  parentId.toLowerCase().includes('search') ||
+                  parentClass.toLowerCase().includes('search')
+                ) && (
+                  parentClass.toLowerCase().includes('input') ||
+                  parentClass.toLowerCase().includes('field') ||
+                  parentClass.toLowerCase().includes('box') ||
+                  parentRole === 'search'
+                );
+                
+                if (parentTag === 'form' || 
+                    parentTag === 'input' ||
+                    parentRole === 'search' ||
+                    isRedditSearchContainer) {
+                  return true;
+                }
+                parent = parent.parentElement;
+                parentDepth++;
+              }
+              // If contenteditable doesn't have input attributes, don't block it
+              // (it's probably just page content like Reddit posts/comments)
             }
-            return false;
-          };
-          
-          // Check both start and end containers
-          if (isInsideInput(startContainer) || isInsideInput(endContainer)) {
-            console.log('CursorIQ: Selection is inside input/textarea/search, ignoring');
-            return;
           }
           
-          // Also check the common ancestor
+          // Move up the tree
+          current = current.parentElement || current.parentNode;
+        }
+        return false;
+      };
+      
+      try {
+        // Simple check: Is selection inside an input/textarea?
+        if (selection.rangeCount > 0 && range) {
+          const startContainer = range.startContainer;
+          const endContainer = range.endContainer;
           const commonAncestor = range.commonAncestorContainer;
-          if (isInsideInput(commonAncestor)) {
-            console.log('CursorIQ: Selection common ancestor is inside input/textarea/search, ignoring');
-            return;
+          
+          // Check if active element is an input and contains the selection
+          const activeElement = document.activeElement;
+          if (activeElement && activeElement !== document.body) {
+            const activeTag = activeElement.tagName?.toLowerCase();
+            if ((activeTag === 'input' || activeTag === 'textarea') && 
+                range && (activeElement.contains(commonAncestor) || activeElement === commonAncestor)) {
+              return; // Selection is in active input, ignore
+            }
+            const activeRole = activeElement.getAttribute?.('role');
+            if ((activeRole === 'textbox' || activeRole === 'searchbox' || activeRole === 'combobox' || activeRole === 'search') &&
+                range && (activeElement.contains(commonAncestor) || activeElement === commonAncestor)) {
+              return; // Selection is in active searchbox, ignore
+            }
+            if ((activeElement.contentEditable === 'true' || activeElement.isContentEditable) &&
+                range && (activeElement.contains(commonAncestor) || activeElement === commonAncestor)) {
+              const activeRole = activeElement.getAttribute?.('role');
+              const activePlaceholder = activeElement.getAttribute?.('placeholder') || '';
+              if (activeRole === 'textbox' || activeRole === 'searchbox' || activePlaceholder.length > 0) {
+                return; // Selection is in contenteditable input, ignore
+              }
+            }
           }
           
-          // Additional check: see if the active element is an input
-          const activeElement = document.activeElement;
-          if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'SEARCH' || activeElement.contentEditable === 'true')) {
-            console.log('CursorIQ: Active element is input/textarea/search, ignoring');
-            return;
+          // Check if selection containers are inside input elements
+          if (isInsideInput(startContainer) || isInsideInput(endContainer) || isInsideInput(commonAncestor)) {
+            return; // Selection is in input, ignore
           }
         }
       } catch (e) {
         // If check fails, continue anyway
-        console.warn('CursorIQ: Error checking if selection is in input', e);
+      }
+
+      // Check word count - split and filter
+      const words = selectedText.split(/\s+/).filter(w => w.trim().length > 0);
+      
+      // Anything OVER 2 words (3+ words) - show icon-only modal immediately, skip all dictionary/AI processing
+      if (words.length > 2) {
+        console.log('CursorIQ: 3+ words selected, showing icon-only modal:', selectedText);
+        // Clear any existing timers to prevent dictionary lookup
+        if (selectionTimer) {
+          clearTimeout(selectionTimer);
+          selectionTimer = null;
+        }
+        // Clear lastSelection to allow re-showing
+        lastSelection = '';
+        showIconOnlyModal(selectedText, range);
+        return;
       }
 
     // Don't process if same selection AND tooltip is already showing
@@ -301,12 +578,10 @@
     // Update lastSelection - this allows re-selecting after closing
     lastSelection = selectedText;
 
-      // Get the range and context
-      let range = null;
+      // Get context (range already obtained earlier)
       let context = selectedText;
       
       try {
-        range = selection.getRangeAt(0);
         if (range && range.commonAncestorContainer) {
           const parent = range.commonAncestorContainer.parentElement;
           if (parent && parent.innerText) {
@@ -314,7 +589,7 @@
           }
         }
       } catch (e) {
-        console.warn('CursorIQ: Error getting range/context', e);
+        console.warn('CursorIQ: Error getting context', e);
       }
 
       // Extract first word or phrase (up to 2 words max)
@@ -493,60 +768,67 @@
     });
   }
 
-  // Show upgrade prompt when subscription is not active
+  // Show upgrade prompt when subscription is not active - Branded subscribe tooltip with blue background
   function showUpgradePrompt(wordInfo) {
-    const upgradeHtml = `
-      <div style="text-align: center; padding: 20px;">
-        <h3 style="margin: 0 0 10px 0; color: #1e3a8a;">Subscribe to Nimbus</h3>
-        <p style="margin: 0 0 15px 0; color: #666;">Unlock unlimited word definitions for just £4.99/year</p>
-        <button id="nimbus-upgrade-btn" style="background: #1e3a8a; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 14px; font-weight: 600;">
-          Subscribe Now - £4.99/year
+    // Create a proper branded subscribe tooltip with blue gradient background
+    const tooltipContent = `
+      <div style="text-align: center; padding: 30px 25px; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%); border-radius: 12px;">
+        <img src="${chrome.runtime.getURL('NimbusLogo.svg')}" alt="Nimbus" style="height: 36px; margin-bottom: 18px; filter: brightness(0) invert(1);" onerror="this.style.display='none'">
+        <h3 style="margin: 0 0 12px 0; color: #ffffff; font-size: 20px; font-weight: 700;">Subscribe to Unlock</h3>
+        <p style="margin: 0 0 8px 0; color: #e2e8f0; font-size: 14px; line-height: 1.6;">Get instant definitions, AI explanations, and context for any word or phrase</p>
+        <div style="background: rgba(255,255,255,0.2); padding: 8px 12px; border-radius: 6px; margin: 0 0 22px 0; display: inline-block;">
+          <span style="color: #ffffff; font-size: 13px; font-weight: 600;">✨ 3-Day Free Trial</span>
+        </div>
+        <div style="background: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 18px; border-radius: 10px; margin-bottom: 22px; border: 1px solid rgba(255,255,255,0.2);">
+          <div style="font-size: 32px; font-weight: 700; color: #ffffff; margin-bottom: 5px;">£4.99</div>
+          <div style="font-size: 13px; color: #cbd5e1;">per year</div>
+        </div>
+        <button id="nimbus-upgrade-btn" style="background: #ffffff; color: #1e3a8a; border: none; padding: 14px 28px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600; width: 100%; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+          Start Free Trial
         </button>
+        <p style="margin: 18px 0 0 0; color: #94a3b8; font-size: 11px;">Click to open payment in extension</p>
       </div>
     `;
     
-    showTooltip(wordInfo, upgradeHtml, false, []);
+    // Use showTooltip with HTML flag to render properly
+    showTooltip(wordInfo, tooltipContent, false, [], null, [], true);
     
     // Add click handler for upgrade button
     setTimeout(() => {
       const upgradeBtn = document.getElementById('nimbus-upgrade-btn');
       if (upgradeBtn) {
-        upgradeBtn.addEventListener('click', () => {
-          // Launch Chrome payment flow
-          if (chrome && chrome.payments && chrome.payments.purchase) {
-            chrome.payments.purchase({
-              sku: SUBSCRIPTION_ID
-            }, (response) => {
-              if (chrome.runtime.lastError) {
-                console.error('Nimbus: Purchase error:', chrome.runtime.lastError);
-                showTooltip(wordInfo, "Purchase failed. Please try again.", true);
-                return;
-              }
-              
-              if (response && response.responseCode === 0) {
-                // Purchase successful, check subscription again
-                checkSubscription().then(() => {
-                  // Retry the word lookup
-                  triggerExplain(wordInfo);
-                });
-              } else {
-                showTooltip(wordInfo, "Purchase cancelled or failed.", true);
-              }
-            });
-          } else {
-            // Fallback: open extension popup or options page
-            chrome.runtime.sendMessage({ action: 'openUpgrade' });
-          }
+        upgradeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          // Open extension popup for payment
+          chrome.runtime.sendMessage({ action: 'openPayment' }, (response) => {
+            if (chrome.runtime.lastError) {
+              // Fallback: try to open popup directly
+              chrome.runtime.sendMessage({ action: 'openPopup' });
+            }
+          });
+        });
+        
+        // Hover effect
+        upgradeBtn.addEventListener('mouseenter', () => {
+          upgradeBtn.style.background = '#f1f5f9';
+          upgradeBtn.style.transform = 'scale(1.02)';
+        });
+        upgradeBtn.addEventListener('mouseleave', () => {
+          upgradeBtn.style.background = '#ffffff';
+          upgradeBtn.style.transform = 'scale(1)';
         });
       }
     }, 100);
   }
 
-  function showTooltip(wordInfo, text, isWarning=false, synonyms=[], pronunciation=null, examples=[]) {
+  function showTooltip(wordInfo, text, isWarning=false, synonyms=[], pronunciation=null, examples=[], isHtml=false) {
     // Reset manually closed flag when showing new tooltip
     manuallyClosed = false;
     removeTooltip();
     currentSynonyms = synonyms;
+    
+    // Maintain the text selection highlight
+    maintainSelectionHighlight();
     
     // Load settings (refresh in case they changed)
     loadModalSettings();
@@ -554,6 +836,24 @@
     tooltipEl = document.createElement('div');
     tooltipEl.className = 'cursoriq-tooltip';
     if (isWarning) tooltipEl.classList.add('warning');
+    
+    // Prevent clicks on tooltip buttons from triggering selection detection
+    // But allow dragging on the tooltip itself
+    tooltipEl.addEventListener('mouseup', (e) => {
+      // Only stop propagation for buttons and interactive elements
+      if (e.target.tagName === 'BUTTON' || 
+          e.target.tagName === 'A' || 
+          e.target.closest('button') || 
+          e.target.closest('a') ||
+          e.target.closest('.cursoriq-icon-btn') ||
+          e.target.closest('.cursoriq-copy-btn')) {
+        e.stopPropagation();
+      }
+    });
+    tooltipEl.addEventListener('click', (e) => {
+      // Stop propagation for all clicks on tooltip to prevent selection detection
+      e.stopPropagation();
+    });
     
     // Make entire modal draggable if enabled
     if (modalSettings.draggable || modalSettings.placement === 'custom') {
@@ -640,30 +940,32 @@
       }
     }
 
-    // Close button - positioned in top right corner, halfway out
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'cursoriq-close-btn';
-    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
-    closeBtn.setAttribute('aria-label', 'Close');
-    closeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      // Mark as manually closed BEFORE clearing selection
-      manuallyClosed = true;
-      // Clear any pending timers
-      if (selectionTimer) {
-        clearTimeout(selectionTimer);
-        selectionTimer = null;
-      }
-      // Clear the text selection
-      const selection = window.getSelection();
-      if (selection) {
-        selection.removeAllRanges();
-      }
-      // Remove tooltip
-      removeTooltip();
-    });
-    tooltipEl.appendChild(closeBtn);
+    // Close button - positioned in top right corner, halfway out (only for non-subscribe prompts)
+    if (!isHtml) {
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'cursoriq-close-btn';
+      closeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+      closeBtn.setAttribute('aria-label', 'Close');
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        // Mark as manually closed BEFORE clearing selection
+        manuallyClosed = true;
+        // Clear any pending timers
+        if (selectionTimer) {
+          clearTimeout(selectionTimer);
+          selectionTimer = null;
+        }
+        // Clear the text selection
+        const selection = window.getSelection();
+        if (selection) {
+          selection.removeAllRanges();
+        }
+        // Remove tooltip
+        removeTooltip();
+      });
+      tooltipEl.appendChild(closeBtn);
+    }
 
     // Header with word and copy button
     const header = document.createElement('div');
@@ -743,8 +1045,6 @@
       const wordToSpeak = currentWord || wordInfo.word;
       
       if ('speechSynthesis' in window) {
-        const utterance = new SpeechSynthesisUtterance(wordToSpeak);
-        
         chrome.storage.local.get(['settings'], (result) => {
           const lang = result.settings?.dictionaryLanguage || 'en';
           const langMap = {
@@ -752,23 +1052,50 @@
             'pt': 'pt-PT', 'ru': 'ru-RU', 'ja': 'ja-JP', 'zh': 'zh-CN', 'ko': 'ko-KR',
             'ar': 'ar-SA', 'hi': 'hi-IN', 'nl': 'nl-NL', 'sv': 'sv-SE', 'pl': 'pl-PL'
           };
-          utterance.lang = langMap[lang] || 'en-US';
+          const langCode = langMap[lang] || 'en-US';
           
-          utterance.onend = () => {
-            ttsBtn.classList.remove('playing');
-            ttsBtn.style.color = '#64748b';
-            ttsBtn.style.opacity = '0.7';
-            ttsBtn.style.transform = 'scale(1)';
+          // Ensure voices are loaded before creating utterance
+          const speakWithBestVoice = () => {
+            const utterance = new SpeechSynthesisUtterance(wordToSpeak);
+            utterance.lang = langCode;
+            
+            // Get the best available voice
+            const bestVoice = getBestVoice(langCode);
+            if (bestVoice) {
+              utterance.voice = bestVoice;
+              utterance.lang = bestVoice.lang; // Use voice's native language
+            }
+            
+            // Optimize for smooth, lifelike speech
+            utterance.rate = 0.95; // Slightly slower for clarity and naturalness
+            utterance.pitch = 1.0; // Natural pitch
+            utterance.volume = 1.0; // Full volume
+            
+            utterance.onend = () => {
+              ttsBtn.classList.remove('playing');
+              ttsBtn.style.color = '#64748b';
+              ttsBtn.style.opacity = '0.7';
+              ttsBtn.style.transform = 'scale(1)';
+            };
+            
+            utterance.onerror = () => {
+              ttsBtn.classList.remove('playing');
+              ttsBtn.style.color = '#64748b';
+              ttsBtn.style.opacity = '0.7';
+              ttsBtn.style.transform = 'scale(1)';
+            };
+            
+            window.speechSynthesis.speak(utterance);
           };
           
-          utterance.onerror = () => {
-            ttsBtn.classList.remove('playing');
-            ttsBtn.style.color = '#64748b';
-            ttsBtn.style.opacity = '0.7';
-            ttsBtn.style.transform = 'scale(1)';
-          };
-          
-          window.speechSynthesis.speak(utterance);
+          // Load voices if needed
+          if (window.speechSynthesis.getVoices().length === 0) {
+            window.speechSynthesis.addEventListener('voiceschanged', speakWithBestVoice, { once: true });
+            // Trigger voices loading
+            window.speechSynthesis.getVoices();
+          } else {
+            speakWithBestVoice();
+          }
         });
       } else {
         console.warn('CursorIQ: Text-to-speech not supported');
@@ -825,89 +1152,105 @@
     
     wordContainer.appendChild(buttonContainer);
     
-    header.appendChild(wordContainer);
-    tooltipEl.appendChild(header);
+    // For HTML content (subscribe prompt), don't show header - just show the content with blue background
+    if (isHtml) {
+      // Skip header for subscribe prompts - show content directly
+      // Override tooltip background to blue gradient for subscribe prompts
+      tooltipEl.style.background = 'linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%) !important';
+      tooltipEl.style.border = 'none !important';
+      tooltipEl.style.boxShadow = '0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1) !important';
+      
+      const contentDiv = document.createElement('div');
+      contentDiv.innerHTML = text;
+      contentDiv.style.padding = '0';
+      contentDiv.style.margin = '0';
+      tooltipEl.appendChild(contentDiv);
+    } else {
+      // Normal tooltip - show header and explanation
+      header.appendChild(wordContainer);
+      tooltipEl.appendChild(header);
 
-    // Main explanation text container
-    const explanationContainer = document.createElement('div');
-    explanationContainer.style.position = 'relative';
-    explanationContainer.style.padding = '0 18px 16px';
+      // Main explanation text container
+      const explanationContainer = document.createElement('div');
+      explanationContainer.style.position = 'relative';
+      explanationContainer.style.padding = '0 18px 16px';
+      
+      const textDiv = document.createElement('div');
+      textDiv.className = 'cursoriq-explanation';
+      textDiv.textContent = text;
+      textDiv.style.userSelect = 'text';
+      textDiv.style.webkitUserSelect = 'text';
+      textDiv.style.mozUserSelect = 'text';
+      textDiv.style.msUserSelect = 'text';
+      textDiv.style.cursor = 'text';
+      textDiv.style.padding = '0 36px 0 0'; // Add right padding to prevent text from going under copy button
+      textDiv.style.margin = '0';
+      explanationContainer.appendChild(textDiv);
     
-    const textDiv = document.createElement('div');
-    textDiv.className = 'cursoriq-explanation';
-    textDiv.textContent = text;
-    textDiv.style.userSelect = 'text';
-    textDiv.style.webkitUserSelect = 'text';
-    textDiv.style.mozUserSelect = 'text';
-    textDiv.style.msUserSelect = 'text';
-    textDiv.style.cursor = 'text';
-    textDiv.style.padding = '0 36px 0 0'; // Add right padding to prevent text from going under copy button
-    textDiv.style.margin = '0';
-    explanationContainer.appendChild(textDiv);
-    
-    // Add copy button for explanation text
-    const copyExplanationBtn = document.createElement('button');
-    copyExplanationBtn.className = 'cursoriq-copy-explanation-btn';
-    copyExplanationBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path></svg>';
-    copyExplanationBtn.setAttribute('aria-label', 'Copy explanation');
-    copyExplanationBtn.setAttribute('title', 'Copy explanation');
-    copyExplanationBtn.style.cssText = 'position: absolute; top: 0; right: 18px; width: 24px; height: 24px; padding: 0; background: rgba(241, 245, 249, 0.8); border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 6px; color: #64748b; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.7; transition: all 0.2s ease; z-index: 10;';
-    copyExplanationBtn.addEventListener('mouseenter', () => {
-      copyExplanationBtn.style.opacity = '1';
-      copyExplanationBtn.style.background = 'rgba(241, 245, 249, 1)';
-      copyExplanationBtn.style.borderColor = '#cbd5e1';
-    });
-    copyExplanationBtn.addEventListener('mouseleave', () => {
-      if (!copyExplanationBtn.classList.contains('copied')) {
-        copyExplanationBtn.style.opacity = '0.7';
-        copyExplanationBtn.style.background = 'rgba(241, 245, 249, 0.8)';
-        copyExplanationBtn.style.borderColor = 'rgba(226, 232, 240, 0.8)';
-      }
-    });
-      copyExplanationBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      // Only handle if this is our button from our modal
-      if (!tooltipEl || !tooltipEl.contains(e.target)) return;
-      
-      copyExplanationBtn.classList.add('copied');
-      copyExplanationBtn.style.color = '#10b981';
-      copyExplanationBtn.style.opacity = '1';
-      
-      // Get current text from the explanation div by querying the DOM
-      const explanationDivCurrent = tooltipEl.querySelector('.cursoriq-explanation');
-      const currentText = explanationDivCurrent ? explanationDivCurrent.textContent.trim() : text;
-      
-      console.log('CursorIQ: Copying explanation text:', currentText.substring(0, 50) + '...');
-      
-      try {
-        await navigator.clipboard.writeText(currentText);
-      } catch (err) {
-        console.error('CursorIQ: Failed to copy explanation', err);
-        // Fallback for older browsers
-        const textArea = document.createElement('textarea');
-        textArea.value = currentText;
-        textArea.style.position = 'fixed';
-        textArea.style.opacity = '0';
-        textArea.style.pointerEvents = 'none';
-        document.body.appendChild(textArea);
-        textArea.select();
-        try {
-          document.execCommand('copy');
-        } catch (e) {
-          console.error('CursorIQ: Fallback copy failed', e);
+      // Add copy button for explanation text
+      const copyExplanationBtn = document.createElement('button');
+      copyExplanationBtn.className = 'cursoriq-copy-explanation-btn';
+      copyExplanationBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path></svg>';
+      copyExplanationBtn.setAttribute('aria-label', 'Copy explanation');
+      copyExplanationBtn.setAttribute('title', 'Copy explanation');
+      copyExplanationBtn.style.cssText = 'position: absolute; top: 0; right: 18px; width: 24px; height: 24px; padding: 0; background: rgba(241, 245, 249, 0.8); border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 6px; color: #64748b; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.7; transition: all 0.2s ease; z-index: 10;';
+      copyExplanationBtn.addEventListener('mouseenter', () => {
+        copyExplanationBtn.style.opacity = '1';
+        copyExplanationBtn.style.background = 'rgba(241, 245, 249, 1)';
+        copyExplanationBtn.style.borderColor = '#cbd5e1';
+      });
+      copyExplanationBtn.addEventListener('mouseleave', () => {
+        if (!copyExplanationBtn.classList.contains('copied')) {
+          copyExplanationBtn.style.opacity = '0.7';
+          copyExplanationBtn.style.background = 'rgba(241, 245, 249, 0.8)';
+          copyExplanationBtn.style.borderColor = 'rgba(226, 232, 240, 0.8)';
         }
-        document.body.removeChild(textArea);
-      }
-      
-      setTimeout(() => {
-        copyExplanationBtn.classList.remove('copied');
-        copyExplanationBtn.style.color = '#64748b';
-        copyExplanationBtn.style.opacity = '0.7';
-      }, 2000);
-    });
-    explanationContainer.appendChild(copyExplanationBtn);
-    tooltipEl.appendChild(explanationContainer);
+      });
+      copyExplanationBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        // Only handle if this is our button from our modal
+        if (!tooltipEl || !tooltipEl.contains(e.target)) return;
+        
+        copyExplanationBtn.classList.add('copied');
+        copyExplanationBtn.style.color = '#10b981';
+        copyExplanationBtn.style.opacity = '1';
+        
+        // Get current text from the explanation div by querying the DOM
+        const explanationDivCurrent = tooltipEl.querySelector('.cursoriq-explanation');
+        const currentText = explanationDivCurrent ? explanationDivCurrent.textContent.trim() : text;
+        
+        console.log('CursorIQ: Copying explanation text:', currentText.substring(0, 50) + '...');
+        
+        try {
+          await navigator.clipboard.writeText(currentText);
+        } catch (err) {
+          console.error('CursorIQ: Failed to copy explanation', err);
+          // Fallback for older browsers
+          const textArea = document.createElement('textarea');
+          textArea.value = currentText;
+          textArea.style.position = 'fixed';
+          textArea.style.opacity = '0';
+          textArea.style.pointerEvents = 'none';
+          document.body.appendChild(textArea);
+          textArea.select();
+          try {
+            document.execCommand('copy');
+          } catch (e) {
+            console.error('CursorIQ: Fallback copy failed', e);
+          }
+          document.body.removeChild(textArea);
+        }
+        
+        setTimeout(() => {
+          copyExplanationBtn.classList.remove('copied');
+          copyExplanationBtn.style.color = '#64748b';
+          copyExplanationBtn.style.opacity = '0.7';
+        }, 2000);
+      });
+      explanationContainer.appendChild(copyExplanationBtn);
+      tooltipEl.appendChild(explanationContainer);
+    }
 
     // Examples section (if available and setting enabled)
     if (modalSettings.showExamples && examples && Array.isArray(examples) && examples.length > 0) {
@@ -961,42 +1304,285 @@
       console.log('CursorIQ: No synonyms to display');
     }
 
-    // Action buttons container - bottom right icons
-    const actionsDiv = document.createElement('div');
-    actionsDiv.className = 'cursoriq-actions';
+    // Action buttons container - bottom right icons (only show for non-subscribe prompts)
+    if (!isHtml) {
+      const actionsDiv = document.createElement('div');
+      actionsDiv.className = 'cursoriq-actions';
 
-    // Favorite button - icon only
-    const favBtn = document.createElement('button');
-    favBtn.className = 'cursoriq-fav-btn-icon';
-    favBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
-    favBtn.setAttribute('aria-label', 'Add to favorites');
-    favBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleFavorite(currentWord || wordInfo.word);
+      // Favorite button - icon only
+      const favBtn = document.createElement('button');
+      favBtn.className = 'cursoriq-fav-btn-icon';
+      favBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+      favBtn.setAttribute('aria-label', 'Add to favorites');
+      favBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleFavorite(currentWord || wordInfo.word);
+        updateFavoriteButtonIcon(favBtn, currentWord || wordInfo.word);
+      });
+      actionsDiv.appendChild(favBtn);
+
+      // Search button - icon only
+      const searchBtn = document.createElement('button');
+      searchBtn.className = 'cursoriq-search-btn-icon';
+      searchBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>';
+      searchBtn.setAttribute('aria-label', 'Search');
+      searchBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(currentWord || wordInfo.word)}`;
+        window.open(searchUrl, '_blank');
+      });
+      actionsDiv.appendChild(searchBtn);
+      tooltipEl.appendChild(actionsDiv);
+      
+      // Update favorite button state
       updateFavoriteButtonIcon(favBtn, currentWord || wordInfo.word);
-    });
-    actionsDiv.appendChild(favBtn);
-
-    // Search button - icon only
-    const searchBtn = document.createElement('button');
-    searchBtn.className = 'cursoriq-search-btn-icon';
-    searchBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>';
-    searchBtn.setAttribute('aria-label', 'Search');
-    searchBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(currentWord || wordInfo.word)}`;
-      window.open(searchUrl, '_blank');
-    });
-    actionsDiv.appendChild(searchBtn);
-    tooltipEl.appendChild(actionsDiv);
-    
-    // Update favorite button state
-    updateFavoriteButtonIcon(favBtn, currentWord || wordInfo.word);
+    }
 
     document.body.appendChild(tooltipEl);
 
     // Position tooltip based on settings
     positionTooltip(wordInfo);
+  }
+  
+  // Show icon-only modal for text selections over 2 words (3+ words)
+  function showIconOnlyModal(selectedText, range) {
+    manuallyClosed = false;
+    removeTooltip();
+    
+    // Save the range for visual highlight only (don't restore selection programmatically)
+    if (range) {
+      savedRange = range.cloneRange();
+      // Create visual highlight overlay without restoring selection
+      try {
+        const rect = savedRange.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          // Remove any existing overlay first
+          if (highlightOverlay) {
+            highlightOverlay.remove();
+            highlightOverlay = null;
+          }
+          
+          highlightOverlay = document.createElement('div');
+          highlightOverlay.style.position = 'fixed';
+          highlightOverlay.style.left = rect.left + window.scrollX + 'px';
+          highlightOverlay.style.top = rect.top + window.scrollY + 'px';
+          highlightOverlay.style.width = rect.width + 'px';
+          highlightOverlay.style.height = rect.height + 'px';
+          highlightOverlay.style.backgroundColor = 'rgba(59, 130, 246, 0.3)'; // Blue highlight
+          highlightOverlay.style.pointerEvents = 'none'; // Critical: don't block clicks
+          highlightOverlay.style.zIndex = '2147483646'; // Just below tooltip
+          highlightOverlay.style.borderRadius = '2px';
+          highlightOverlay.className = 'cursoriq-highlight-overlay';
+          document.body.appendChild(highlightOverlay);
+        }
+      } catch (err) {
+        // If range is invalid, clear saved range
+        savedRange = null;
+      }
+    }
+    
+    // Load settings for positioning
+    loadModalSettings();
+    
+    tooltipEl = document.createElement('div');
+    tooltipEl.className = 'cursoriq-tooltip cursoriq-icon-only-modal';
+    
+    // Prevent clicks on tooltip buttons from triggering selection detection
+    tooltipEl.addEventListener('mouseup', (e) => {
+      // Stop propagation for buttons and interactive elements
+      if (e.target.tagName === 'BUTTON' || 
+          e.target.closest('button') ||
+          e.target.closest('.cursoriq-icon-btn')) {
+        e.stopPropagation();
+      }
+    });
+    tooltipEl.addEventListener('click', (e) => {
+      // Stop propagation for all clicks on tooltip to prevent selection detection
+      e.stopPropagation();
+    });
+    
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'cursoriq-close-btn';
+    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      manuallyClosed = true;
+      if (selectionTimer) {
+        clearTimeout(selectionTimer);
+        selectionTimer = null;
+      }
+      const selection = window.getSelection();
+      if (selection) {
+        selection.removeAllRanges();
+      }
+      removeTooltip();
+    });
+    tooltipEl.appendChild(closeBtn);
+    
+    // Icon buttons container
+    const buttonsContainer = document.createElement('div');
+    buttonsContainer.className = 'cursoriq-icon-buttons';
+    
+    // Copy button
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'cursoriq-icon-btn cursoriq-copy-icon-btn';
+    copyBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1e3a8a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    copyBtn.setAttribute('aria-label', 'Copy text');
+    copyBtn.setAttribute('title', 'Copy text');
+    copyBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      // Only handle if this is our button from our modal
+      if (!tooltipEl || !tooltipEl.contains(e.target)) return;
+      
+      try {
+        await navigator.clipboard.writeText(selectedText);
+        copyBtn.classList.add('copied');
+        setTimeout(() => {
+          copyBtn.classList.remove('copied');
+        }, 2000);
+      } catch (err) {
+        console.error('CursorIQ: Failed to copy text', err);
+        // Fallback
+        const textArea = document.createElement('textarea');
+        textArea.value = selectedText;
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        textArea.style.pointerEvents = 'none';
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+          document.execCommand('copy');
+        } catch (e) {
+          console.error('CursorIQ: Fallback copy failed', e);
+        }
+        document.body.removeChild(textArea);
+      }
+    });
+    buttonsContainer.appendChild(copyBtn);
+    
+    // Sound/TTS button
+    const soundBtn = document.createElement('button');
+    soundBtn.className = 'cursoriq-icon-btn cursoriq-tts-icon-btn';
+    soundBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1e3a8a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>';
+    soundBtn.setAttribute('aria-label', 'Read aloud');
+    soundBtn.setAttribute('title', 'Read aloud');
+    soundBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      // Only handle if this is our button from our modal
+      if (!tooltipEl || !tooltipEl.contains(e.target)) return;
+      
+      if ('speechSynthesis' in window) {
+        // Stop any current speech
+        window.speechSynthesis.cancel();
+        
+        soundBtn.classList.add('playing');
+        soundBtn.style.color = '#1e3a8a';
+        soundBtn.style.transform = 'scale(1.1)';
+        
+        // Ensure voices are loaded before creating utterance
+        const speakWithBestVoice = () => {
+          const utterance = new SpeechSynthesisUtterance(selectedText);
+          utterance.lang = 'en-US';
+          
+          // Get the best available voice
+          const bestVoice = getBestVoice('en-US');
+          if (bestVoice) {
+            utterance.voice = bestVoice;
+            utterance.lang = bestVoice.lang; // Use voice's native language
+          }
+          
+          // Optimize for smooth, lifelike speech
+          utterance.rate = 0.95; // Slightly slower for clarity and naturalness
+          utterance.pitch = 1.0; // Natural pitch
+          utterance.volume = 1.0; // Full volume
+          
+          utterance.onend = () => {
+            soundBtn.classList.remove('playing');
+            soundBtn.style.color = '';
+            soundBtn.style.transform = '';
+          };
+          
+          utterance.onerror = () => {
+            soundBtn.classList.remove('playing');
+            soundBtn.style.color = '';
+            soundBtn.style.transform = '';
+          };
+          
+          window.speechSynthesis.speak(utterance);
+        };
+        
+        // Load voices if needed
+        if (window.speechSynthesis.getVoices().length === 0) {
+          window.speechSynthesis.addEventListener('voiceschanged', speakWithBestVoice, { once: true });
+          // Trigger voices loading
+          window.speechSynthesis.getVoices();
+        } else {
+          speakWithBestVoice();
+        }
+      } else {
+        console.warn('CursorIQ: Text-to-speech not supported');
+      }
+    });
+    buttonsContainer.appendChild(soundBtn);
+    
+    // Search button - opens hub and searches (using AI icon)
+    const searchBtn = document.createElement('button');
+    searchBtn.className = 'cursoriq-icon-btn cursoriq-search-icon-btn';
+    const aiIconImg = document.createElement('img');
+    aiIconImg.src = chrome.runtime.getURL('ai.svg');
+    aiIconImg.style.width = '20px';
+    aiIconImg.style.height = '20px';
+    aiIconImg.style.display = 'block';
+    aiIconImg.style.filter = 'none';
+    aiIconImg.style.margin = 'auto';
+    aiIconImg.style.objectFit = 'contain';
+    searchBtn.appendChild(aiIconImg);
+    searchBtn.setAttribute('aria-label', 'Search in hub');
+    searchBtn.setAttribute('title', 'Search in hub');
+    searchBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      // Only handle if this is our button from our modal
+      if (!tooltipEl || !tooltipEl.contains(e.target)) return;
+      
+      // Store search term and open hub
+      const searchTerm = selectedText.trim();
+      console.log('Nimbus: Setting pending search:', searchTerm);
+      
+      chrome.storage.local.set({
+        pendingSearch: {
+          type: 'search',
+          term: searchTerm
+        }
+      }, () => {
+        console.log('Nimbus: Pending search set, attempting to open popup');
+        // Try to open the popup
+        chrome.runtime.sendMessage({
+          action: 'openPopup'
+        }, (response) => {
+          if (chrome.runtime.lastError) {
+            console.log('Nimbus: Could not open popup automatically, user will need to open manually');
+          } else {
+            console.log('Nimbus: Popup open message sent');
+          }
+        });
+      });
+      
+      // Close the modal
+      removeTooltip();
+    });
+    buttonsContainer.appendChild(searchBtn);
+    
+    tooltipEl.appendChild(buttonsContainer);
+    document.body.appendChild(tooltipEl);
+    
+    // Position tooltip
+    positionTooltip({ range: range });
   }
   
   // Show email modal (simplified version for email addresses)
@@ -1343,7 +1929,74 @@
     });
   }
 
+  // Function to maintain text selection highlight
+  function maintainSelectionHighlight() {
+    // Remove any existing highlight overlay
+    if (highlightOverlay) {
+      highlightOverlay.remove();
+      highlightOverlay = null;
+    }
+    
+    if (!savedRange) return;
+    
+    try {
+      // Try to restore the selection programmatically
+      const selection = window.getSelection();
+      if (selection && savedRange) {
+        selection.removeAllRanges();
+        selection.addRange(savedRange.cloneRange());
+      }
+    } catch (e) {
+      // If we can't restore selection, create a visual highlight overlay
+      try {
+        const rect = savedRange.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          highlightOverlay = document.createElement('div');
+          highlightOverlay.style.position = 'fixed';
+          highlightOverlay.style.left = rect.left + window.scrollX + 'px';
+          highlightOverlay.style.top = rect.top + window.scrollY + 'px';
+          highlightOverlay.style.width = rect.width + 'px';
+          highlightOverlay.style.height = rect.height + 'px';
+          highlightOverlay.style.backgroundColor = 'rgba(59, 130, 246, 0.3)'; // Blue highlight
+          highlightOverlay.style.pointerEvents = 'none';
+          highlightOverlay.style.zIndex = '2147483646'; // Just below tooltip
+          highlightOverlay.style.borderRadius = '2px';
+          highlightOverlay.className = 'cursoriq-highlight-overlay';
+          document.body.appendChild(highlightOverlay);
+          
+          // Update highlight position on scroll
+          const updateHighlight = () => {
+            if (highlightOverlay && savedRange) {
+              try {
+                const rect = savedRange.getBoundingClientRect();
+                highlightOverlay.style.left = rect.left + window.scrollX + 'px';
+                highlightOverlay.style.top = rect.top + window.scrollY + 'px';
+              } catch (e) {
+                // Range might be invalid, remove overlay
+                if (highlightOverlay) {
+                  highlightOverlay.remove();
+                  highlightOverlay = null;
+                }
+              }
+            }
+          };
+          
+          window.addEventListener('scroll', updateHighlight, { passive: true });
+          window.addEventListener('resize', updateHighlight, { passive: true });
+        }
+      } catch (err) {
+        // If range is invalid, clear saved range
+        savedRange = null;
+      }
+    }
+  }
+
   function removeTooltip() {
+    // Remove highlight overlay when tooltip is removed
+    if (highlightOverlay) {
+      highlightOverlay.remove();
+      highlightOverlay = null;
+    }
     // Clear any pending timers
     if (selectionTimer) {
       clearTimeout(selectionTimer);
@@ -1514,11 +2167,11 @@
           // Add to front with timestamp
           recent.unshift({ word: word, timestamp: Date.now() });
           
-          // Remove entries older than 3 days
-          const threeDaysAgo = Date.now() - (3 * 24 * 60 * 60 * 1000);
+          // Remove entries older than 14 days
+          const fourteenDaysAgo = Date.now() - (14 * 24 * 60 * 60 * 1000);
           recent = recent.filter(item => {
             const timestamp = typeof item === 'string' ? Date.now() : item.timestamp;
-            return timestamp > threeDaysAgo;
+            return timestamp > fourteenDaysAgo;
           });
           
           // Keep only last 50
@@ -1960,11 +2613,17 @@
 
     // Recent News section
     if (personData.newsArticles && personData.newsArticles.length > 0) {
+      // Detect dark mode
+      const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const textColor = isDarkMode ? '#ffffff' : '#1e3a8a';
+      const textSecondary = isDarkMode ? '#e2e8f0' : '#64748b';
+      const textMuted = isDarkMode ? '#cbd5e1' : '#94a3b8';
+      
       const newsSection = document.createElement('div');
       newsSection.style.cssText = 'margin-top: 20px; padding-top: 20px; border-top: 1px solid rgba(226, 232, 240, 0.8);';
       
       const newsTitle = document.createElement('div');
-      newsTitle.style.cssText = 'font-size: 16px; font-weight: 700; color: #1e3a8a; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;';
+      newsTitle.style.cssText = `font-size: 16px; font-weight: 700; color: ${textColor}; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;`;
       newsTitle.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"></path><rect x="11" y="7" width="10" height="5" rx="1"></rect><rect x="11" y="14" width="7" height="5" rx="1"></rect></svg> Recent News';
       newsSection.appendChild(newsTitle);
       
@@ -1988,20 +2647,20 @@
         });
         
         const articleTitle = document.createElement('div');
-        articleTitle.style.cssText = 'font-weight: 600; color: #1e3a8a; font-size: 14px; margin-bottom: 6px; line-height: 1.4;';
+        articleTitle.style.cssText = `font-weight: 600; color: ${textColor}; font-size: 14px; margin-bottom: 6px; line-height: 1.4;`;
         articleTitle.textContent = article.title;
         newsItem.appendChild(articleTitle);
         
         if (article.description) {
           const articleDesc = document.createElement('div');
-          articleDesc.style.cssText = 'font-size: 12px; color: #64748b; line-height: 1.5; margin-bottom: 8px;';
+          articleDesc.style.cssText = `font-size: 12px; color: ${textSecondary}; line-height: 1.5; margin-bottom: 8px;`;
           articleDesc.textContent = article.description;
           newsItem.appendChild(articleDesc);
         }
         
         if (article.date) {
           const articleDate = document.createElement('div');
-          articleDate.style.cssText = 'font-size: 11px; color: #94a3b8; margin-top: 6px;';
+          articleDate.style.cssText = `font-size: 11px; color: ${textMuted}; margin-top: 6px;`;
           // Format date
           try {
             const date = new Date(article.date);

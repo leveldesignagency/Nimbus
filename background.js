@@ -1,52 +1,204 @@
 /* background.js - MV3 service worker
    Receives messages from content script and calls OpenAI.
-   Reads openaiKey and style from chrome.storage.local.
+   API key is stored securely on Vercel server.
    Also fetches synonyms.
 */
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', () => self.clients.claim());
 
+// Listen for Stripe checkout tab updates - close tab and verify subscription
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // Close tab as soon as it tries to load the extension URL (before DNS error)
+  if (changeInfo.status === 'loading' && tab.url) {
+    try {
+      const url = new URL(tab.url);
+      const sessionId = url.searchParams.get('session_id');
+      const success = url.searchParams.get('success');
+      const cancelled = url.searchParams.get('cancelled');
+      
+      // If this is a Stripe redirect to our extension URL, close immediately
+      if ((sessionId || cancelled) && (tab.url.includes('chrome-extension://') || tab.url.includes('popup.html'))) {
+        // Close the tab immediately to prevent DNS error
+        chrome.tabs.remove(tabId).catch(() => {});
+        
+        // If successful payment, verify subscription
+        if (sessionId && success === 'true') {
+          console.log('Background: Processing successful payment, sessionId:', sessionId);
+          
+          // Verify subscription in background
+          (async () => {
+            try {
+              // Get session details
+              const response = await fetch('https://nimbus-api-ten.vercel.app/api/get-session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId }),
+              });
+              
+              console.log('Background: get-session response status:', response.status);
+              
+              if (response.ok) {
+                const data = await response.json();
+                console.log('Background: get-session response data:', data);
+                
+                if (data.valid) {
+                  // Save subscription
+                  await chrome.storage.local.set({
+                    subscriptionId: data.subscriptionId,
+                    subscriptionExpiry: data.expiryDate,
+                    subscriptionActive: true,
+                    userEmail: data.email || '',
+                  });
+                  
+                  console.log('Background: Subscription activated successfully:', data.subscriptionId);
+                  
+                  // Notify all extension pages to reload
+                  chrome.runtime.sendMessage({ action: 'subscriptionActivated' }).catch(() => {});
+                  
+                  // Also try to notify popup directly
+                  chrome.tabs.query({ url: chrome.runtime.getURL('popup.html') }, (tabs) => {
+                    tabs.forEach(t => {
+                      chrome.tabs.reload(t.id).catch(() => {});
+                    });
+                  });
+                } else {
+                  console.error('Background: Subscription not valid:', data.error);
+                }
+              } else {
+                const errorText = await response.text();
+                console.error('Background: get-session failed:', response.status, errorText);
+              }
+            } catch (e) {
+              console.error('Background: Error verifying subscription:', e);
+            }
+          })();
+        }
+      }
+    } catch (e) {
+      // If URL parsing fails, check if it's trying to load extension URL and close anyway
+      if (tab.url && (tab.url.includes('chrome-extension://') || tab.url.includes('popup.html'))) {
+        chrome.tabs.remove(tabId).catch(() => {});
+      }
+    }
+  }
+});
+
+// Vercel API endpoint for OpenAI proxy
+const VERCEL_API_URL = 'https://nimbus-api-ten.vercel.app/api/chat';
+
+// CRITICAL: Set up message listener IMMEDIATELY
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.action === 'openPopup') {
     // Open the extension popup
-    chrome.action.openPopup();
-    sendResponse({ success: true });
+    try {
+      chrome.action.openPopup();
+      sendResponse({ success: true });
+      return true;
+    } catch (err) {
+      console.error('Nimbus Background: Error opening popup:', err);
+      sendResponse({ success: false, error: err.message });
+      return true;
+    }
+  }
+  if (msg && msg.action === 'openPayment') {
+    // Open the extension popup for payment
+    try {
+      chrome.action.openPopup();
+      sendResponse({ success: true });
+      return true;
+    } catch (err) {
+      console.error('Nimbus Background: Error opening popup:', err);
+      sendResponse({ success: false, error: err.message });
+      return true;
+    }
+  }
+  if (msg && msg.type === 'chat') {
+    (async () => {
+      if (VERCEL_API_URL === 'YOUR_VERCEL_URL_HERE/api/chat') {
+        sendResponse({ error: 'Vercel API URL not configured. Please update background.js with your Vercel API URL.' });
+        return;
+      }
+      
+      const cfg = await chrome.storage.local.get(['style', 'model']);
+      const style = cfg.style || 'plain';
+      const model = cfg.model || 'gpt-4o-mini';
+      
+      try {
+        // Build conversation context with usage limits
+        const systemPrompt = `You are a thoughtful, conversational research assistant having a natural discussion with the user. Respond naturally based on what they're asking - be curious about complex topics, helpful with explanations, analytical with concepts, and engaging with ideas. Vary your opening based on the context: acknowledge interesting points, ask clarifying questions, share insights, or dive straight into the topic. Write as if you're genuinely thinking through the question with them, not reciting a formula. Be warm and approachable, but let your personality and response style adapt to what makes sense for each specific question. Keep responses concise (100-150 words) and conversational.
+
+IMPORTANT LIMITATIONS:
+- You CANNOT generate, create, or produce images, pictures, illustrations, or any visual content. If asked, politely explain that image generation is not available.
+- You CANNOT create Word documents, PDFs, or other file formats. If asked, suggest that users can copy your text responses into their document editor.
+- When providing code examples, format them clearly in code blocks with proper syntax highlighting. Keep code examples concise and well-commented.
+- You are a text-based assistant focused on explanations, research, and conversation - not file creation or image generation.`;
+
+        const messages = [
+          { role: 'system', content: systemPrompt },
+          ...msg.conversationHistory.map(msg => ({ role: msg.role, content: msg.content })),
+          { role: 'user', content: msg.message }
+        ];
+        
+        const resp = await fetch(VERCEL_API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model,
+            messages,
+            temperature: 0.8
+          })
+        });
+        
+        if (resp.ok) {
+          const json = await resp.json();
+          const text = json.choices?.[0]?.message?.content?.trim();
+          sendResponse({ explanation: text || 'No response' });
+        } else {
+          const errorData = await resp.json().catch(() => ({ error: `API error: ${resp.status}` }));
+          sendResponse({ error: errorData.error || `API error: ${resp.status}` });
+        }
+      } catch (err) {
+        console.error('Nimbus Background: Chat error:', err);
+        sendResponse({ error: err.message });
+      }
+    })();
     return true;
   }
   if (msg && msg.type === 'explain') {
-    console.log('CursorIQ Background: ========== MESSAGE RECEIVED ==========');
-    console.log('CursorIQ Background: Received explain request for:', msg.word);
-    console.log('CursorIQ Background: Context:', msg.context);
     const isDetailed = msg.detailed || false;
     
-    handleExplain(msg.word, msg.context, isDetailed).then(resp => {
-      console.log('CursorIQ Background: ========== SENDING RESPONSE ==========');
-      console.log('CursorIQ Background: Word:', msg.word);
-      console.log('CursorIQ Background: Explanation:', resp.explanation?.substring(0, 50));
-      console.log('CursorIQ Background: Response synonyms BEFORE fix:', resp.synonyms);
-      console.log('CursorIQ Background: Synonyms type:', typeof resp.synonyms, 'isArray:', Array.isArray(resp.synonyms));
-      console.log('CursorIQ Background: Synonyms length:', resp.synonyms?.length || 0);
-      
-      // FORCE synonyms to be an array - ensure it's never undefined or null
-      if (!Array.isArray(resp.synonyms)) {
-        console.warn('CursorIQ Background: WARNING - synonyms is not an array! Converting...');
-        resp.synonyms = resp.synonyms ? [resp.synonyms] : [];
+    // CRITICAL: Return true to indicate we will send a response asynchronously
+    // Use async IIFE to handle the promise properly
+    (async () => {
+      try {
+        const resp = await handleExplain(msg.word, msg.context, isDetailed);
+        // FORCE synonyms to be an array - ensure it's never undefined or null
+        if (!Array.isArray(resp.synonyms)) {
+          resp.synonyms = resp.synonyms ? [resp.synonyms] : [];
+        }
+        
+        // Double-check it's an array
+        resp.synonyms = Array.isArray(resp.synonyms) ? resp.synonyms : [];
+        
+        sendResponse(resp);
+      } catch (err) {
+        console.error('Nimbus Background: ========== HANDLE EXPLAIN ERROR ==========');
+        console.error('Nimbus Background: Error message:', err.message);
+        console.error('Nimbus Background: Error stack:', err.stack);
+        const errorResponse = { 
+          error: err.message || 'unknown error', 
+          synonyms: [],
+          explanation: null
+        };
+        console.error('Nimbus Background: Sending error response:', errorResponse);
+        sendResponse(errorResponse);
       }
-      
-      // Double-check it's an array
-      resp.synonyms = Array.isArray(resp.synonyms) ? resp.synonyms : [];
-      
-      console.log('CursorIQ Background: Response synonyms AFTER fix:', resp.synonyms);
-      console.log('CursorIQ Background: Response synonyms length:', resp.synonyms.length);
-      console.log('CursorIQ Background: Full response JSON:', JSON.stringify(resp, null, 2));
-      console.log('CursorIQ Background: ======================================');
-      
-      sendResponse(resp);
-    }).catch(err => {
-      console.error('CursorIQ Background: Error', err);
-      sendResponse({ error: err.message || 'unknown error', synonyms: [] });
-    });
+    })();
+    
+    return true; // CRITICAL: Indicates we will send a response asynchronously
     return true; // keep channel open for async
   }
   if (msg && msg.action === 'checkIncognito') {
@@ -69,6 +221,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // Smart routing: Determine if term should use AI or dictionary
 function shouldUseAI(term, context, dictionaryResult) {
+  // For phrases (3+ words), always use AI
+  const wordCount = term.trim().split(/\s+/).filter(w => w.trim().length > 0).length;
+  if (wordCount >= 3) {
+    return true;
+  }
+  
   // Use AI if:
   // 1. Dictionary failed or returned poor result
   if (!dictionaryResult || dictionaryResult.error || !dictionaryResult.explanation) {
@@ -117,16 +275,15 @@ function isCommonWord(term) {
 }
 
 async function handleExplain(term, context, detailed = false) {
-  const cfg = await chrome.storage.local.get(['openaiKey','style','model','useFreeAPI','settings']);
-  // API key: Read from storage (set via extension settings or backend in production)
-  // In production, this would come from a secure backend server
-  const openaiKey = (cfg.openaiKey || '').trim();
+  const cfg = await chrome.storage.local.get(['style','model','useFreeAPI','settings']);
+  
+  // API key is now stored securely on Vercel backend
+  // No need to read from storage
+  
   const style = cfg.style || 'plain';
   const model = cfg.model || 'gpt-4o-mini';
   // Get dictionary language from settings (default to 'en')
-  console.log('CursorIQ Background: Raw settings from storage:', JSON.stringify(cfg.settings));
   const dictionaryLanguage = cfg.settings?.dictionaryLanguage || 'en';
-  console.log('CursorIQ Background: Using dictionary language:', dictionaryLanguage);
 
   // Check if this might be a person, organization, place, or notable entity
   // Look for capitalized words (proper nouns) - more flexible pattern
@@ -164,7 +321,6 @@ async function handleExplain(term, context, detailed = false) {
   });
   
   if (isMedicalTerm) {
-    console.log('Nimbus: Term is medical/anatomical, skipping entity detection, using dictionary:', trimmedTerm);
     // Skip entity detection, fall through to dictionary lookup (modal)
   } else {
     // More flexible pattern: allows hyphens, apostrophes, multiple capitals (e.g., McDonald, O'Brien, Mary-Jane)
@@ -176,21 +332,16 @@ async function handleExplain(term, context, detailed = false) {
                           trimmedTerm.length <= 80; // Increased for organization names
     
     if (isLikelyEntity) {
-    console.log('Nimbus: Term looks like an entity, checking Wikipedia and Wikidata...', trimmedTerm);
     try {
       // First try to fetch from Wikipedia
       const entityData = await fetchEntityFromWikipedia(term);
-      console.log('Nimbus: Wikipedia response:', entityData ? 'Found data' : 'No data', entityData?.isPerson ? 'IS PERSON' : entityData?.isOrganization ? 'IS ORGANIZATION' : entityData?.isPlace ? 'IS PLACE' : 'NOT ENTITY');
       
       if (entityData) {
         if (entityData.isPerson) {
-          console.log('Nimbus: Found person data from Wikipedia:', entityData.name);
           
           // Fetch recent news about the person
           const newsArticles = await fetchPersonNews(term);
-          console.log('Nimbus: Fetched', newsArticles?.length || 0, 'news articles');
           
-          console.log('Nimbus: Returning person data with image:', entityData.image ? 'YES' : 'NO', entityData.image);
           return {
             explanation: entityData.bio,
             synonyms: [],
@@ -212,11 +363,8 @@ async function handleExplain(term, context, detailed = false) {
             }
           };
         } else if (entityData.isOrganization) {
-          console.log('Nimbus: Found organization data from Wikipedia:', entityData.name);
-          
           // Fetch recent news about the organization
           const newsArticles = await fetchPersonNews(term); // Reuse same function
-          console.log('Nimbus: Fetched', newsArticles?.length || 0, 'news articles');
           
           return {
             explanation: entityData.bio,
@@ -240,11 +388,8 @@ async function handleExplain(term, context, detailed = false) {
             }
           };
         } else if (entityData.isPlace) {
-          console.log('Nimbus: Found place data from Wikipedia:', entityData.name);
-          
           // Fetch recent news about the place
           const newsArticles = await fetchPersonNews(term);
-          console.log('Nimbus: Fetched', newsArticles?.length || 0, 'news articles');
           
           return {
             explanation: entityData.bio,
@@ -268,101 +413,200 @@ async function handleExplain(term, context, detailed = false) {
           };
         }
       } else {
-        console.log('Nimbus: Wikipedia returned no data for:', trimmedTerm);
       }
     } catch (err) {
-      console.log('Nimbus: Wikipedia lookup failed, falling back to dictionary:', err.message);
       // Continue to dictionary lookup
     }
     }
   }
 
-  // SMART ROUTING: Try dictionary first for common words, AI for complex terms
-  const isCommon = isCommonWord(term);
+  // SMART ROUTING: ALWAYS try dictionary first, then AI if dictionary fails
   let dictionaryResult = null;
   
-  // Try dictionary first (fast, free) for common words or if no AI key
-  if (isCommon || !openaiKey) {
+  // For statements (3+ words), skip dictionary and go straight to AI
+  const wordCount = term.trim().split(/\s+/).filter(w => w.trim().length > 0).length;
+  const isStatement = wordCount >= 3;
+  
+  // ALWAYS try dictionary first (fast, free) for ALL words, EXCEPT statements
+  if (!isStatement) {
     try {
-      console.log('Nimbus: Trying dictionary API first for:', term);
       dictionaryResult = await fetchFreeDictionary(term, dictionaryLanguage);
-      
-      // Fix synonyms array
-      if (!dictionaryResult.synonyms) {
-        dictionaryResult.synonyms = [];
-      } else if (!Array.isArray(dictionaryResult.synonyms)) {
-        dictionaryResult.synonyms = [dictionaryResult.synonyms];
-      }
-      dictionaryResult.synonyms = Array.isArray(dictionaryResult.synonyms) ? dictionaryResult.synonyms : [];
-      
-      // If dictionary succeeded and term is common, return it
-      if (dictionaryResult && !dictionaryResult.error && dictionaryResult.explanation && isCommon) {
-        console.log('Nimbus: Dictionary result good for common word, returning');
+    
+    // Fix synonyms array
+    if (!dictionaryResult.synonyms) {
+      dictionaryResult.synonyms = [];
+    } else if (!Array.isArray(dictionaryResult.synonyms)) {
+      dictionaryResult.synonyms = [dictionaryResult.synonyms];
+    }
+    dictionaryResult.synonyms = Array.isArray(dictionaryResult.synonyms) ? dictionaryResult.synonyms : [];
+    
+      // If dictionary succeeded with good result, return it
+      if (dictionaryResult && !dictionaryResult.error && dictionaryResult.explanation && 
+          dictionaryResult.explanation.length > 20 && 
+          !dictionaryResult.explanation.toLowerCase().includes('not found') &&
+          !dictionaryResult.explanation.toLowerCase().includes('no definition')) {
         return dictionaryResult;
       }
     } catch (err) {
-      console.log('Nimbus: Dictionary lookup failed:', err.message);
       dictionaryResult = { error: err.message };
     }
+  } else {
   }
   
-  // Check if we should use AI (complex term, dictionary failed, or needs enhancement)
-  const useAI = openaiKey && shouldUseAI(term, context, dictionaryResult);
+  // If dictionary failed or result is poor, use AI (if available)
+  // For statements, always use AI
+  const useAI = VERCEL_API_URL !== 'YOUR_VERCEL_URL_HERE/api/chat' && (isStatement || shouldUseAI(term, context, dictionaryResult));
+  
+  if (VERCEL_API_URL === 'YOUR_VERCEL_URL_HERE/api/chat') {
+    return {
+      error: 'Vercel API not configured. Using free dictionary only.',
+      explanation: null,
+      synonyms: [],
+      examples: []
+    };
+  }
   
   if (useAI) {
-    console.log('Nimbus: Using AI for complex term or failed dictionary');
+    if (VERCEL_API_URL === 'YOUR_VERCEL_URL_HERE/api/chat') {
+      throw new Error('Vercel API not configured. Please update background.js with your Vercel API URL.');
+    }
+    
     try {
       const prompt = buildPrompt(term, context, style);
+      
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, wordCount >= 3 ? 30000 : 20000); // Longer timeout for statements
       
-      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${openaiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'user', content: prompt }],
-          max_tokens: 280,
-          temperature: 0.2
-        }),
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
+      let resp;
+      try {
+        resp = await fetch(VERCEL_API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: wordCount >= 3 ? 0.8 : 0.7
+          }),
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        throw fetchError;
+      }
       
       if (resp.ok) {
         const json = await resp.json();
+        
         const text = json.choices?.[0]?.message?.content?.trim();
-        const synonyms = await extractSynonyms(term, openaiKey, model);
+        
+        if (!text || text.length === 0) {
+          throw new Error('AI returned empty response');
+        }
+        
+        const synonyms = await extractSynonyms(term, model);
+        
+        // For statements (3+ words), fetch relevant news/articles
+        let newsArticles = [];
+        if (wordCount >= 3) {
+          try {
+            newsArticles = await fetchPersonNews(term); // Reuse news function for any topic
+          } catch (err) {
+            // News fetch failed, continue without news
+          }
+        }
         
         const aiResult = {
-          explanation: text || 'No explanation returned.',
+          explanation: text,
           synonyms: synonyms || [],
           pronunciation: dictionaryResult?.pronunciation || null,
-          examples: detailed ? await generateExamples(term, openaiKey, model) : []
+          examples: detailed ? await generateExamples(term, model) : [],
+          newsArticles: newsArticles || [] // Add news articles for statements
         };
         
-        console.log('Nimbus: AI result successful');
         return aiResult;
       } else {
-        console.log('Nimbus: AI request failed, falling back to dictionary');
+        const errorText = await resp.text();
+        console.error('Nimbus: ========== AI REQUEST FAILED ==========');
+        console.error('Nimbus: Status:', resp.status);
+        console.error('Nimbus: Status text:', resp.statusText);
+        console.error('Nimbus: Error response:', errorText);
+        
+        // Parse error to give better message
+        let errorMessage = `AI request failed: ${resp.status} ${resp.statusText}`;
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.error) {
+            errorMessage = errorJson.error.message || errorJson.error.code || errorMessage;
+            console.error('Nimbus: Parsed error:', errorJson.error);
+          }
+        } catch (e) {
+          // Not JSON, use raw text
+        }
+        
+        // Throw error so it can be caught and returned properly
+        throw new Error(errorMessage);
       }
     } catch (err) {
-      console.log('Nimbus: AI request error:', err.message);
-      // Fall through to dictionary result
+      console.error('Nimbus: ========== AI REQUEST ERROR ==========');
+      console.error('Nimbus: Error message:', err.message);
+      console.error('Nimbus: Error stack:', err.stack);
+      
+      // If it's an abort error, return a timeout message
+      if (err.name === 'AbortError') {
+        throw new Error('AI request timed out. Please try again.');
+      }
+      
+      // Check for specific API errors
+      if (err.message && err.message.includes('401')) {
+        throw new Error('Invalid API key. Please check your OpenAI API key in settings.');
+      }
+      if (err.message && err.message.includes('429')) {
+        throw new Error('API rate limit exceeded. Please try again later.');
+      }
+      if (err.message && err.message.includes('insufficient_quota')) {
+        throw new Error('API quota exceeded. Please check your OpenAI account billing.');
+      }
+      
+      // Re-throw to be caught by outer handler
+      throw err;
     }
+  }
+  
+  // If we got here and dictionary failed, return error result for statements
+  if (wordCount >= 3 && (!dictionaryResult || dictionaryResult.error)) {
+    console.error('Nimbus: Statement search failed - no AI result and no dictionary result');
+    console.error('Nimbus: useAI was:', useAI, 'Vercel API configured:', VERCEL_API_URL !== 'YOUR_VERCEL_URL_HERE/api/chat');
+    if (VERCEL_API_URL === 'YOUR_VERCEL_URL_HERE/api/chat') {
+      return {
+        explanation: 'Vercel API not configured. Using free dictionary only.',
+        synonyms: [],
+        pronunciation: null,
+        examples: [],
+        error: 'API not configured'
+      };
+    }
+    return {
+      explanation: 'Unable to find information about this statement. Please try again or check your connection.',
+      synonyms: [],
+      pronunciation: null,
+      examples: [],
+      error: 'Search failed'
+    };
   }
   
   // Return dictionary result (or enhanced with AI if available)
   if (dictionaryResult && !dictionaryResult.error) {
     // Enhance dictionary result with AI examples if available and detailed
-    if (detailed && openaiKey && dictionaryResult.explanation) {
+    if (detailed && VERCEL_API_URL !== 'YOUR_VERCEL_URL_HERE/api/chat' && dictionaryResult.explanation) {
       if (!dictionaryResult.examples || dictionaryResult.examples.length === 0) {
         try {
-          const generatedExamples = await generateExamples(term, openaiKey, model);
+          const generatedExamples = await generateExamples(term, model);
           if (generatedExamples && generatedExamples.length > 0) {
             dictionaryResult.examples = generatedExamples.filter(ex => 
               !ex.toLowerCase().includes(`the word "${term}"`) &&
@@ -371,7 +615,6 @@ async function handleExplain(term, context, detailed = false) {
             );
           }
         } catch (err) {
-          console.log('Nimbus: Failed to generate examples:', err.message);
         }
       }
     }
@@ -386,15 +629,14 @@ async function handleExplain(term, context, detailed = false) {
       dictionaryResult.examples = translatedExamples;
     }
     
-    console.log('Nimbus: Returning dictionary result');
     return dictionaryResult;
   }
   
   // Last resort: return error
   return {
-    error: openaiKey 
+    error: VERCEL_API_URL !== 'YOUR_VERCEL_URL_HERE/api/chat'
       ? 'Unable to find definition. Please try again.' 
-      : 'Free dictionary API failed. AI enhancement requires API key.',
+      : 'Free dictionary API failed. AI enhancement requires Vercel API configuration.',
     synonyms: []
   };
 
@@ -403,7 +645,6 @@ async function handleExplain(term, context, detailed = false) {
 async function fetchFreeDictionary(term, language = 'en') {
   // Free Dictionary API - no key required
   // language: language code (en, es, fr, de, etc.)
-  console.log(`Nimbus: fetchFreeDictionary called with term="${term}", language="${language}"`);
   
   try {
     // Preserve original case for proper nouns and capitalized words, but lowercase for common words
@@ -447,31 +688,26 @@ async function fetchFreeDictionary(term, language = 'en') {
       const timeoutId = setTimeout(() => controller.abort(), 8000);
       
       const url = `https://api.dictionaryapi.dev/api/v2/entries/${language}/${encodeURIComponent(attempt.term)}`;
-      console.log(`Nimbus: Trying dictionary lookup: ${url} (${attempt.desc})`);
       
       try {
         resp = await fetch(url, { signal: controller.signal });
         clearTimeout(timeoutId);
         
         if (resp.ok) {
-          console.log(`Nimbus: Success with ${attempt.desc}`);
           break; // Success, exit loop
         } else if (resp.status !== 404) {
           // Non-404 error, don't try other variations
           lastError = `Dictionary API error: ${resp.status}`;
           break;
         } else {
-          console.log(`Nimbus: 404 with ${attempt.desc}, trying next variation...`);
           lastError = 'Word not found';
         }
       } catch (err) {
         clearTimeout(timeoutId);
         if (err.name === 'AbortError') {
           lastError = 'Request timeout';
-          console.log(`Nimbus: Timeout with ${attempt.desc}`);
         } else {
           lastError = err.message;
-          console.log(`Nimbus: Error with ${attempt.desc}:`, err.message);
         }
         // Continue to next attempt
       }
@@ -479,14 +715,11 @@ async function fetchFreeDictionary(term, language = 'en') {
     
     if (!resp || !resp.ok) {
       if (resp && resp.status === 404) {
-        console.log('Nimbus: Dictionary API returned 404, trying alternative sources...');
         
         // For German, try Wiktionary API as fallback
         if (language === 'de') {
-          console.log('Nimbus: Trying Wiktionary for German word...');
           const wiktionaryResult = await tryWiktionary(term, language);
           if (wiktionaryResult) {
-            console.log('Nimbus: Found in Wiktionary');
             return wiktionaryResult;
           }
         }
@@ -497,16 +730,13 @@ async function fetchFreeDictionary(term, language = 'en') {
                                 /^(oesophago|gastro|cardio|neuro|derm|endo|hemo|osteo|patho|psycho|pulmo|thrombo)/i.test(term) ||
                                 /(gastric|oesophageal|esophageal|intestinal|hepatic|renal|cardiac|pulmonary|neural|dermal)/i.test(term);
         if (isLikelyMedical) {
-          console.log('Nimbus: Term looks medical, trying medical dictionaries...');
           const medicalResult = await tryMedicalDictionaries(term);
           if (medicalResult) {
-            console.log('Nimbus: Found in medical dictionary');
             return medicalResult;
           }
           
           // For hyphenated medical terms, try splitting and explaining the parts
           if (term.includes('-')) {
-            console.log('Nimbus: Trying to explain hyphenated medical term by parts...');
             const parts = term.split('-').filter(p => p.length > 0);
             if (parts.length >= 2) {
               // Try to get definitions for each part
@@ -534,7 +764,6 @@ async function fetchFreeDictionary(term, language = 'en') {
             }
           }
         } else {
-          console.log('Nimbus: Skipping medical dictionary for common term:', term);
         }
         
         // For German compound words that weren't found, try to break them down
@@ -544,7 +773,6 @@ async function fetchFreeDictionary(term, language = 'en') {
           for (const ending of commonEndings) {
             if (term.toLowerCase().endsWith(ending) && term.length > ending.length + 3) {
               const baseWord = term.slice(0, -ending.length);
-              console.log(`Nimbus: Trying to find base word "${baseWord}" for compound "${term}"`);
               const baseResult = await tryWiktionary(baseWord, language);
               if (baseResult) {
                 const compoundMessages = {
@@ -627,7 +855,6 @@ async function fetchFreeDictionary(term, language = 'en') {
     }
     
     const data = await resp.json();
-    console.log('CursorIQ Background: Full API response:', JSON.stringify(data, null, 2));
     if (!data || !Array.isArray(data) || data.length === 0) {
       const errorMessages = {
         'en': `No definition found for "${term}".`,
@@ -941,15 +1168,22 @@ async function translateText(text, targetLang) {
     }
     
     // Fallback to MyMemory Translation API
-    const myMemoryUrl = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${targetCode}`;
-    const myMemoryResp = await fetch(myMemoryUrl, { signal: controller.signal });
-    
-    if (myMemoryResp.ok) {
-      const myMemoryData = await myMemoryResp.json();
-      if (myMemoryData && myMemoryData.responseData && myMemoryData.responseData.translatedText) {
-        console.log(`Nimbus: Translated via MyMemory to ${targetLang}`);
-        return myMemoryData.responseData.translatedText;
+    try {
+      const myMemoryUrl = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${targetCode}`;
+      const myMemoryController = new AbortController();
+      const myMemoryTimeoutId = setTimeout(() => myMemoryController.abort(), 5000);
+      const myMemoryResp = await fetch(myMemoryUrl, { signal: myMemoryController.signal });
+      clearTimeout(myMemoryTimeoutId);
+      
+      if (myMemoryResp.ok) {
+        const myMemoryData = await myMemoryResp.json();
+        if (myMemoryData && myMemoryData.responseData && myMemoryData.responseData.translatedText) {
+          console.log(`Nimbus: Translated via MyMemory to ${targetLang}`);
+          return myMemoryData.responseData.translatedText;
+        }
       }
+    } catch (err) {
+      console.log('Nimbus: MyMemory translation failed:', err.message);
     }
     
     return text; // Return original if translation fails
@@ -1227,15 +1461,37 @@ async function parseWikipediaPersonData(data, originalName) {
     return null;
   }
   
-  // More comprehensive person detection
+  // Exclude abstract concepts, fields of study, etc.
+  const abstractConcepts = [
+    'philosophy', 'science', 'mathematics', 'history', 'literature', 'art', 'music',
+    'religion', 'politics', 'economics', 'sociology', 'psychology', 'biology', 'chemistry',
+    'physics', 'astronomy', 'geography', 'medicine', 'law', 'education', 'engineering',
+    'theory', 'concept', 'principle', 'method', 'practice', 'discipline', 'field',
+    'study of', 'branch of', 'area of', 'systematic study', 'rational inquiry'
+  ];
+  
+  const titleLower = title.toLowerCase();
+  const isAbstractConcept = abstractConcepts.some(concept => 
+    titleLower === concept || 
+    titleLower.includes(concept + ' ') ||
+    contentLower.includes('systematic study') ||
+    contentLower.includes('field of study') ||
+    contentLower.includes('branch of knowledge')
+  );
+  
+  if (isAbstractConcept) {
+    console.log('Nimbus: Rejecting - abstract concept/field of study, not a person:', title);
+    return null;
+  }
+  
+  // More comprehensive person detection - require STRONG indicators
   const personIndicators = [
-    content.toLowerCase().includes('born'),
-    content.toLowerCase().includes('birth'),
-    content.toLowerCase().includes('died'),
-    content.toLowerCase().includes('death'),
-    /^\d{4}/.test(content), // Starts with year
-    /born\s+\d{4}/i.test(content),
-    /died\s+\d{4}/i.test(content),
+    /born\s+\d{1,2}\s+\w+\s+\d{4}/i.test(content), // "born 15 January 1990"
+    /born\s+\w+\s+\d{1,2},?\s+\d{4}/i.test(content), // "born January 15, 1990"
+    /born\s+\d{4}/i.test(content), // "born 1990"
+    /died\s+\d{1,2}\s+\w+\s+\d{4}/i.test(content), // "died 15 January 1990"
+    /died\s+\w+\s+\d{1,2},?\s+\d{4}/i.test(content), // "died January 15, 1990"
+    /died\s+\d{4}/i.test(content), // "died 1990"
     title.includes('(person)'),
     title.includes('(actor)'),
     title.includes('(actress)'),
@@ -1249,10 +1505,8 @@ async function parseWikipediaPersonData(data, originalName) {
     title.includes('(athlete)'),
     title.includes('(footballer)'),
     title.includes('(basketball)'),
-    content.toLowerCase().includes('is an'),
-    content.toLowerCase().includes('was an'),
-    content.toLowerCase().includes('is a'),
-    content.toLowerCase().includes('was a')
+    /is\s+(?:a|an)\s+\w+\s+(?:born|died|who|which)/i.test(content), // "is a writer born..."
+    /was\s+(?:a|an)\s+\w+\s+(?:born|died|who|which)/i.test(content) // "was a writer born..."
   ];
   
   // Check if any person indicator matches
@@ -1263,7 +1517,7 @@ async function parseWikipediaPersonData(data, originalName) {
   // If we have strong person indicators, treat it as a person even if type is not 'standard'
   // Only exclude if it's explicitly a disambiguation page
   const isDisambiguation = type === 'disambiguation';
-  const isPerson = hasPersonIndicator && !isDisambiguation && !looksMedical;
+  const isPerson = hasPersonIndicator && !isDisambiguation && !looksMedical && !isAbstractConcept;
   
   console.log('Nimbus: Person detection - hasPersonIndicator:', hasPersonIndicator, 'type:', type, 'isDisambiguation:', isDisambiguation, 'looksMedical:', looksMedical, 'isPerson:', isPerson);
   
@@ -2028,8 +2282,12 @@ async function fetchPersonNews(personName) {
         const dateMatch = itemContent.match(/<pubDate>(.*?)<\/pubDate>/i);
         const pubDate = dateMatch ? dateMatch[1].trim() : '';
         
-        // Clean up description (remove HTML tags)
-        description = description.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+        // Clean up description (remove HTML tags, links, and URLs)
+        description = description.replace(/<[^>]*>/g, ''); // Remove HTML tags
+        description = description.replace(/https?:\/\/[^\s]+/g, ''); // Remove URLs
+        description = description.replace(/href=["'][^"']*["']/gi, ''); // Remove href attributes
+        description = description.replace(/<a\s+[^>]*>/gi, ''); // Remove anchor tags
+        description = description.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
         
         // Google News links need to be decoded
         if (link && link.startsWith('https://news.google.com/')) {
@@ -2162,20 +2420,20 @@ async function fetchMedicalTermsAPI(term) {
   return null;
 }
 
-async function extractSynonyms(term, openaiKey, model) {
+async function extractSynonyms(term, model) {
+  if (VERCEL_API_URL === 'YOUR_VERCEL_URL_HERE/api/chat') return [];
+  
   try {
     const synonymPrompt = `Provide 5-8 synonyms for the word "${term}". Return only a comma-separated list of words, no explanations, no numbers, no bullets. Example: word1, word2, word3`;
     
-    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    const resp = await fetch(VERCEL_API_URL, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${openaiKey}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: synonymPrompt }],
-        max_tokens: 50,
         temperature: 0.3
       })
     });
@@ -2195,25 +2453,22 @@ async function extractSynonyms(term, openaiKey, model) {
   }
 }
 
-async function generateExamples(term, openaiKey, model) {
-  if (!openaiKey) {
-    // Don't return meta-text fallback - return empty array instead
+async function generateExamples(term, model) {
+  if (VERCEL_API_URL === 'YOUR_VERCEL_URL_HERE/api/chat') {
     return [];
   }
   
   try {
     const prompt = `Provide 2-3 real example sentences that actually USE the word "${term}" in natural contexts. Each sentence must contain the word "${term}" and demonstrate its meaning. Return only the sentences, one per line, no numbering, no bullets, no explanations. Do NOT say "The word X is..." or "X is commonly used" - just provide actual example sentences.`;
     
-    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    const resp = await fetch(VERCEL_API_URL, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${openaiKey}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         model,
         messages: [{ role: 'user', content: prompt }],
-        max_tokens: 150,
         temperature: 0.5
       })
     });
@@ -2270,7 +2525,7 @@ async function handleSendContactEmail(data) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        to: 'charles@leveldesignagency.com',
+        to: 'leveldesignagency@gmail.com',
         from: data.email,
         subject: `[Nimbus Extension] ${data.subject}`,
         name: data.name,
@@ -2292,18 +2547,52 @@ async function handleSendContactEmail(data) {
 
 function buildPrompt(term, context, style) {
   const shortContext = (context || '').replace(/\s+/g,' ').slice(0,800);
-  return `You are a helpful explainer. Provide a concise, plain-English, real-world explanation of the term/phrase exactly as used on the page.
+  const wordCount = term.trim().split(/\s+/).length;
+  
+  // For statements/phrases (3+ words), provide a more expansive explanation
+  if (wordCount >= 3) {
+    return `You are a thoughtful, conversational research assistant discussing a statement or idea someone has highlighted. Respond naturally based on what they've selected - adapt your tone and approach to fit the topic.
+
+Statement/Topic: "${term}"
+Context from page: "${shortContext}"
+
+Your approach:
+- Read the statement and context carefully - understand what they're actually asking about or trying to learn
+- Respond in a way that makes sense for this specific topic: be analytical for complex concepts, curious for interesting ideas, helpful for explanations, or thoughtful for philosophical questions
+- Start naturally - acknowledge what's interesting about it, dive into the key points, ask a thoughtful question, or share an insight - whatever fits the content best
+- Write as if you're genuinely thinking through this with them, not following a script
+- Explore the meaning, context, and implications in a conversational way
+- Keep it concise - aim for 100-150 words maximum
+- Be accurate and factual, but present it naturally
+- End with something that invites further exploration or discussion
+
+Important:
+- NEVER mention that it's a "misspelling," "not found," or "proper noun" - this is a discussion, not a dictionary lookup
+- Focus on what the statement means and why it matters
+- Write naturally, as if speaking to someone - avoid phrases like "As an AI" or "I don't have personal feelings"
+- Vary your responses - don't use the same opening phrase every time
+- Let your response style match the content - serious topics deserve thoughtful responses, interesting ideas deserve curiosity, complex concepts deserve clarity
+
+Respond only with the explanation text (no markdown, no formatting, just plain text).`;
+  }
+  
+  // For single words or 2-word phrases, use a conversational prompt
+  return `You are a thoughtful assistant helping someone understand a word or phrase they've highlighted. Respond naturally based on the word and context - adapt your approach to what makes sense.
 
 Term or phrase: "${term}"
 Context: "${shortContext}"
 
-Requirements:
-- No dictionary-style definition; focus on practical meaning.
-- One short explanation sentence + 1-2 real-world examples or use-cases.
-- Keep under 120 words.
-- If multiple meanings, pick the most likely based on context.
-- Tone: ${style}.
+Your approach:
+- Understand what they're likely trying to learn - is it a technical term? A common word used in a specific way? An unfamiliar concept?
+- Respond naturally: dive into the explanation, share an interesting aspect, provide context, or clarify the meaning - whatever fits best
+- Explain the practical meaning conversationally, like you're helping a friend understand something
+- Provide 1-2 real-world examples or use-cases naturally woven into your explanation
+- Keep it under 120 words
+- If multiple meanings, pick the most likely based on context
+- Write naturally - avoid formal dictionary-style language
+- Vary your responses - don't use the same opening every time
+- Let the word itself guide your response style
 
-Respond only with the explanation.`;
+Respond only with the explanation (no markdown, no formatting, just plain text).`;
 }
 
