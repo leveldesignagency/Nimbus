@@ -32,7 +32,7 @@
           return;
         }
         
-        // Try to get from Chrome identity
+        // Try to get from Chrome identity (works in production Chrome Web Store)
         chrome.identity.getProfileUserInfo((userInfo) => {
           if (userInfo && userInfo.email) {
             userEmail = userInfo.email;
@@ -40,10 +40,10 @@
             chrome.storage.local.set({ userEmail: userInfo.email });
             resolve(userInfo.email);
           } else {
-            // If getProfileUserInfo doesn't work, try getAuthToken
+            // If getProfileUserInfo doesn't work, try getAuthToken (non-interactive first)
             chrome.identity.getAuthToken({ interactive: false }, (token) => {
-              if (chrome.runtime.lastError) {
-                // User needs to sign in
+              if (chrome.runtime.lastError || !token) {
+                // User needs to sign in interactively
                 resolve(null);
               } else if (token) {
                 // Get user info from token
@@ -61,8 +61,6 @@
                   }
                 })
                 .catch(() => resolve(null));
-              } else {
-                resolve(null);
               }
             });
           }
