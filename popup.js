@@ -170,25 +170,56 @@
 
   // Check subscription status via our API (Stripe backend)
   async function checkSubscription() {
-    // NO BYPASS - Test actual payment flow even in development
+    // NO BYPASS - Strict subscription check for production
     try {
-      // Get subscription ID from storage
+      // Get subscription ID and email from storage
       const result = await new Promise((resolve) => {
-        chrome.storage.local.get(['subscriptionId', 'subscriptionExpiry'], resolve);
+        chrome.storage.local.get(['subscriptionId', 'subscriptionExpiry', 'userEmail', 'subscriptionActive'], resolve);
       });
 
       const subscriptionId = result.subscriptionId;
       const expiry = result.subscriptionExpiry;
+      const userEmail = result.userEmail;
+      const cachedActive = result.subscriptionActive;
+
+      // If no subscription ID, check by email as fallback
+      if (!subscriptionId && userEmail) {
+        // Try to verify by email
+        try {
+          const response = await fetch(`${API_BASE_URL}/verify-license`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ licenseKey: userEmail }),
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (data.valid) {
+              // Save subscription ID for future checks
+              await chrome.storage.local.set({
+                subscriptionId: data.subscriptionId,
+                subscriptionExpiry: data.expiryDate,
+                subscriptionActive: true,
+              });
+              subscriptionActive = true;
+              return true;
+            }
+          }
+        } catch (e) {
+          console.error('Email verification failed:', e);
+        }
+      }
 
       if (!subscriptionId) {
         subscriptionActive = false;
+        chrome.storage.local.set({ subscriptionActive: false });
         return false;
       }
 
       // Check if expired locally
       if (expiry && new Date(expiry) < new Date()) {
         subscriptionActive = false;
-        chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry']);
+        chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
         return false;
       }
 
@@ -202,36 +233,40 @@
 
         if (!response.ok) {
           subscriptionActive = false;
+          chrome.storage.local.set({ subscriptionActive: false });
           return false;
         }
 
         const data = await response.json();
         if (data.valid) {
           subscriptionActive = true;
-          if (data.expiryDate) {
-            chrome.storage.local.set({
-              subscriptionExpiry: data.expiryDate,
-              subscriptionId: subscriptionId,
-            });
-          }
+          // Update storage with latest info
+          chrome.storage.local.set({
+            subscriptionExpiry: data.expiryDate,
+            subscriptionId: subscriptionId,
+            subscriptionActive: true,
+          });
           return true;
         } else {
           subscriptionActive = false;
-          chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry']);
+          chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
           return false;
         }
       } catch (apiError) {
-        // If API fails but expiry is still valid, allow access
-        if (expiry && new Date(expiry) > new Date()) {
+        console.error('API verification error:', apiError);
+        // If API fails but expiry is still valid and we have cached active status, allow access
+        if (expiry && new Date(expiry) > new Date() && cachedActive === true) {
           subscriptionActive = true;
           return true;
         }
         subscriptionActive = false;
+        chrome.storage.local.set({ subscriptionActive: false });
         return false;
       }
     } catch (e) {
       console.error('Nimbus: Error checking subscription:', e);
       subscriptionActive = false;
+      chrome.storage.local.set({ subscriptionActive: false });
       return false;
     }
   }
