@@ -515,18 +515,8 @@
                 const error = chrome.runtime.lastError.message;
                 console.error('OAuth error:', error);
                 
-                // If OAuth fails, try getProfileUserInfo as last resort
-                chrome.identity.getProfileUserInfo((profileInfo) => {
-                  if (profileInfo && profileInfo.email) {
-                    chrome.storage.local.set({ userEmail: profileInfo.email });
-                    showNotification('Signed in!', 'success');
-                    location.reload();
-                  } else {
-                    signinBtn.disabled = false;
-                    signinBtn.innerHTML = 'Sign in with Google';
-                    showNotification('Please sign in to Chrome with your Google account', 'error');
-                  }
-                });
+                // If OAuth fails, show email input for testing (unpacked mode)
+                showEmailInputFallback();
                 return;
               }
               
