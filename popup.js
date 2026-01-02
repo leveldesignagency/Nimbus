@@ -318,8 +318,10 @@
     
     // Set up button handlers
     setTimeout(() => {
+      console.log('Setting up button handlers, email:', email);
       const subscribeBtn = document.getElementById('subscribe-btn');
       const signinBtn = document.getElementById('signin-btn');
+      console.log('Buttons found - subscribeBtn:', !!subscribeBtn, 'signinBtn:', !!signinBtn);
       
       if (subscribeBtn && email) {
         subscribeBtn.addEventListener('click', async () => {
