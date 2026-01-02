@@ -551,6 +551,67 @@
         };
       }
       
+      // Email input fallback for unpacked mode testing
+      function showEmailInputFallback() {
+        const signinBtn = document.getElementById('signin-btn');
+        if (!signinBtn) return;
+        
+        // Hide Google sign-in button
+        signinBtn.style.display = 'none';
+        
+        // Show email input
+        const emailSection = document.createElement('div');
+        emailSection.id = 'email-input-section';
+        emailSection.style.marginBottom = '20px';
+        emailSection.innerHTML = `
+          <label style="display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600; color: #ffffff; text-align: left;">Email Address</label>
+          <input type="email" id="email-input" placeholder="your.email@example.com" style="width: 100%; padding: 12px; border: 2px solid rgba(255,255,255,0.3); border-radius: 8px; background: rgba(255,255,255,0.95); color: #1e293b; font-size: 14px; box-sizing: border-box; margin-bottom: 12px;" autocomplete="email">
+          <button id="email-submit" style="width: 100%; background: #ffffff; color: #1e3a8a; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
+            Continue
+          </button>
+        `;
+        
+        signinBtn.parentNode.insertBefore(emailSection, signinBtn.nextSibling);
+        
+        const emailInput = document.getElementById('email-input');
+        const submitBtn = document.getElementById('email-submit');
+        
+        if (emailInput) {
+          emailInput.focus();
+          emailInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && submitBtn) {
+              submitBtn.click();
+            }
+          });
+        }
+        
+        if (submitBtn) {
+          submitBtn.addEventListener('click', () => {
+            const emailValue = emailInput ? emailInput.value.trim() : '';
+            
+            if (!emailValue || !emailValue.includes('@') || !emailValue.includes('.')) {
+              showNotification('Please enter a valid email address', 'error');
+              if (emailInput) {
+                emailInput.focus();
+                emailInput.style.borderColor = '#dc2626';
+                setTimeout(() => {
+                  if (emailInput) emailInput.style.borderColor = 'rgba(255,255,255,0.3)';
+                }, 2000);
+              }
+              return;
+            }
+            
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Saving...';
+            
+            chrome.storage.local.set({ userEmail: emailValue.toLowerCase() }, () => {
+              showNotification('Email saved!', 'success');
+              location.reload();
+            });
+          });
+        }
+      }
+      
       // Verify subscription button handler
       const verifyBtn = document.getElementById('verify-subscription-btn');
       if (verifyBtn && email) {
