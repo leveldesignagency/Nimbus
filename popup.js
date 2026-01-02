@@ -487,15 +487,22 @@
       }
       
       if (signinBtn) {
-        signinBtn.addEventListener('click', async () => {
+        console.log('Sign-in button found, attaching click handler');
+        signinBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          console.log('Sign-in button clicked');
+          
           signinBtn.disabled = true;
           signinBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none" opacity="0.3"/><path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Opening Google sign-in...';
           
+          console.log('Calling chrome.identity.getAuthToken...');
           // Use proper Google OAuth flow - this will open Google's sign-in page
           chrome.identity.getAuthToken({ 
             interactive: true,
             scopes: ['https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile']
           }, async (token) => {
+            console.log('getAuthToken callback called, token:', token ? 'received' : 'none', 'error:', chrome.runtime.lastError?.message);
             // Reset button state
             signinBtn.disabled = false;
             
@@ -690,9 +697,6 @@
         emailSection.id = 'test-email-section';
         emailSection.style.marginBottom = '20px';
         emailSection.innerHTML = `
-          <div style="background: rgba(255,255,255,0.1); padding: 12px; border-radius: 8px; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.2);">
-            <p style="margin: 0; color: #cbd5e1; font-size: 12px; text-align: center;">Test Mode: Enter email to test payment flow</p>
-          </div>
           <label style="display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600; color: #ffffff; text-align: left;">Email Address</label>
           <input type="email" id="test-email-input" placeholder="your.email@example.com" style="width: 100%; padding: 12px; border: 2px solid rgba(255,255,255,0.3); border-radius: 8px; background: rgba(255,255,255,0.95); color: #1e293b; font-size: 14px; box-sizing: border-box; margin-bottom: 12px;" autocomplete="email">
           <button id="test-email-submit" style="width: 100%; background: #ffffff; color: #1e3a8a; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
