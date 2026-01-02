@@ -496,44 +496,67 @@
           signinBtn.disabled = true;
           signinBtn.innerHTML = 'Opening Google sign-in...';
           
-          // Simple Google OAuth - opens Google sign-in page
-          chrome.identity.getAuthToken({ 
-            interactive: true,
-            scopes: ['https://www.googleapis.com/auth/userinfo.email']
-          }, async (token) => {
-            if (chrome.runtime.lastError) {
-              signinBtn.disabled = false;
-              signinBtn.innerHTML = 'Sign in with Google';
-              showNotification('Sign-in cancelled or failed', 'error');
+          // Try getProfileUserInfo first (works in unpacked mode)
+          chrome.identity.getProfileUserInfo((userInfo) => {
+            if (userInfo && userInfo.email) {
+              // Got email directly
+              chrome.storage.local.set({ userEmail: userInfo.email });
+              showNotification('Signed in!', 'success');
+              location.reload();
               return;
             }
             
-            if (!token) {
-              signinBtn.disabled = false;
-              signinBtn.innerHTML = 'Sign in with Google';
-              return;
-            }
-            
-            // Get email from Google
-            try {
-              const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-                headers: { 'Authorization': `Bearer ${token}` }
-              });
-              
-              if (response.ok) {
-                const userInfo = await response.json();
-                if (userInfo.email) {
-                  // Save email and reload
-                  await chrome.storage.local.set({ userEmail: userInfo.email });
-                  showNotification('Signed in!', 'success');
-                  location.reload();
-                }
+            // Fallback to OAuth token flow
+            chrome.identity.getAuthToken({ 
+              interactive: true,
+              scopes: ['https://www.googleapis.com/auth/userinfo.email']
+            }, async (token) => {
+              if (chrome.runtime.lastError) {
+                const error = chrome.runtime.lastError.message;
+                console.error('OAuth error:', error);
+                
+                // If OAuth fails, try getProfileUserInfo as last resort
+                chrome.identity.getProfileUserInfo((profileInfo) => {
+                  if (profileInfo && profileInfo.email) {
+                    chrome.storage.local.set({ userEmail: profileInfo.email });
+                    showNotification('Signed in!', 'success');
+                    location.reload();
+                  } else {
+                    signinBtn.disabled = false;
+                    signinBtn.innerHTML = 'Sign in with Google';
+                    showNotification('Please sign in to Chrome with your Google account', 'error');
+                  }
+                });
+                return;
               }
-            } catch (error) {
-              signinBtn.disabled = false;
-              signinBtn.innerHTML = 'Sign in with Google';
-              showNotification('Sign-in failed', 'error');
-            }
+              
+              if (!token) {
+                signinBtn.disabled = false;
+                signinBtn.innerHTML = 'Sign in with Google';
+                return;
+              }
+              
+              // Get email from Google
+              try {
+                const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                  headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (response.ok) {
+                  const userInfo = await response.json();
+                  if (userInfo.email) {
+                    // Save email and reload
+                    await chrome.storage.local.set({ userEmail: userInfo.email });
+                    showNotification('Signed in!', 'success');
+                    location.reload();
+                  }
+                }
+              } catch (error) {
+                signinBtn.disabled = false;
+                signinBtn.innerHTML = 'Sign in with Google';
+                showNotification('Sign-in failed', 'error');
+              }
+            });
           });
         };
       }
