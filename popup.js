@@ -4131,20 +4131,18 @@
         // Don't show "environment" error - just show generic error
         showNotification('Error opening subscription management. Please try again.', 'error');
       } finally {
-        newBtn.disabled = false;
+        manageSubscriptionBtn.disabled = false;
         const currentLang = window.currentUILanguage || 'en';
         const t = translations[currentLang] || translations.en;
-        newBtn.textContent = t.manageSubscription || 'Manage Subscription';
+        manageSubscriptionBtn.textContent = t.manageSubscription || 'Manage Subscription';
       }
     });
     
     console.log('Manage subscription button handler attached');
   }
   
-  // Set up immediately
+  // Set up immediately - this will also be called when subscription tab opens
   setupManageSubscriptionButton();
-  
-  // Also set up when subscription tab is opened (already handled above, so this is just a backup)
 
   // Cancel subscription button
   const popupCancelBtn = document.getElementById('popup-cancel-btn');
