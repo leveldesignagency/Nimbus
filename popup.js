@@ -323,7 +323,7 @@
     
     const upgradeHtml = `
       <div style="text-align: center; padding: 20px 30px; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%); border-radius: 16px; margin: 5px 20px; max-width: 500px; margin-left: auto; margin-right: auto; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
-        <img src="${chrome.runtime.getURL('NimbusLogo.svg')}" alt="Nimbus" style="height: 40px; margin-bottom: 15px; filter: brightness(0) invert(1);" onerror="this.style.display='none'">
+        <img src="${chrome.runtime.getURL('NimbusLogo.svg')}" alt="Nimbus" style="height: 40px; margin-bottom: 15px; filter: brightness(0) invert(1);" onerror="this.onerror=null; this.src='${chrome.runtime.getURL('Nimbus Logo-02.svg')}'; this.onerror=function(){this.onerror=null; this.src='${chrome.runtime.getURL('Nimbus Logo-01.svg')}'; this.onerror=function(){this.style.display='none';};};">
         <h2 style="margin: 0 0 10px 0; color: #ffffff; font-size: 28px; font-weight: 700;">Subscribe to Nimbus</h2>
         <p style="margin: 0 0 12px 0; color: #e2e8f0; font-size: 16px; line-height: 1.5;">Unlock unlimited word definitions, AI explanations, and context</p>
         <div style="background: rgba(255,255,255,0.2); padding: 10px 16px; border-radius: 8px; margin: 0 auto 25px auto; display: inline-block;">
@@ -1153,12 +1153,59 @@
   function setLogo() {
     try {
       const logoImg = document.getElementById('nimbusTitle');
-      if (logoImg && logoImg.tagName === 'IMG') {
-        logoImg.src = chrome.runtime.getURL('NimbusLogo.svg');
+      if (!logoImg) return;
+      
+      // List of logo files to try in order (with fallbacks)
+      const logoFiles = [
+        'NimbusLogo.svg',
+        'Nimbus Logo-02.svg',
+        'Nimbus Logo-01.svg'
+      ];
+      
+      let currentIndex = 0;
+      
+      const tryNextLogo = () => {
+        if (currentIndex >= logoFiles.length) {
+          // All logos failed - show text fallback
+          console.warn('All logo files failed to load, using text fallback');
+          if (logoImg.tagName === 'IMG') {
+            const parent = logoImg.parentElement;
+            if (parent) {
+              logoImg.style.display = 'none';
+              // Create text fallback if it doesn't exist
+              let textFallback = parent.querySelector('.logo-text-fallback');
+              if (!textFallback) {
+                textFallback = document.createElement('span');
+                textFallback.className = 'logo-text-fallback';
+                textFallback.textContent = 'Nimbus';
+                textFallback.style.cssText = 'font-size: 20px; font-weight: 700; color: #ffffff; letter-spacing: 0.5px;';
+                parent.insertBefore(textFallback, logoImg);
+              }
+              textFallback.style.display = 'block';
+            }
+          }
+          return;
+        }
+        
+        const logoFile = logoFiles[currentIndex];
+        logoImg.src = chrome.runtime.getURL(logoFile);
         logoImg.onerror = () => {
-          console.error('Logo failed to load:', logoImg.src);
+          console.warn(`Logo failed to load: ${logoFile}, trying next...`);
+          currentIndex++;
+          tryNextLogo();
         };
-      }
+        
+        // If image loads successfully, hide text fallback if it exists
+        logoImg.onload = () => {
+          const textFallback = logoImg.parentElement?.querySelector('.logo-text-fallback');
+          if (textFallback) {
+            textFallback.style.display = 'none';
+          }
+          logoImg.style.display = '';
+        };
+      };
+      
+      tryNextLogo();
     } catch (e) {
       console.error('Failed to set logo:', e);
     }

@@ -34,7 +34,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["Nimbus Favicon.png", "ai.svg", "Nimbus Logo-02.svg", "NimbusLogo.svg"],
+      "resources": ["Nimbus Favicon.png", "ai.svg", "Nimbus Logo-02.svg", "Nimbus Logo-01.svg", "NimbusLogo.svg"],
       "matches": ["<all_urls>"]
     }
   ]
