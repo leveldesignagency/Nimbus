@@ -1372,11 +1372,42 @@
       }
     }
     
-    // Check subscription status
-    const isActive = await checkSubscription();
+    // Check subscription status - with retry if not found
+    let isActive = await checkSubscription();
     
+    // If not active, try checking by email as fallback (in case subscription was just activated)
     if (!isActive) {
-      // Show payment screen immediately - don't load any content
+      const email = await getUserEmail();
+      if (email) {
+        console.log('Popup: Subscription not found by ID, checking by email:', email);
+        try {
+          const verifyResponse = await fetch(`${API_BASE_URL}/verify-license`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ licenseKey: email }),
+          });
+          
+          if (verifyResponse.ok) {
+            const verifyData = await verifyResponse.json();
+            if (verifyData.valid) {
+              // Save subscription data
+              await chrome.storage.local.set({
+                subscriptionId: verifyData.subscriptionId,
+                subscriptionExpiry: verifyData.expiryDate,
+                subscriptionActive: true,
+                userEmail: email,
+              });
+              console.log('Popup: Found subscription by email, reloading');
+              location.reload();
+              return;
+            }
+          }
+        } catch (e) {
+          console.error('Popup: Error checking by email:', e);
+        }
+      }
+      
+      // Still not active - show payment screen
       showUpgradePromptInPopup();
       return; // Stop here - don't load anything else
     }
