@@ -182,6 +182,22 @@
       const userEmail = result.userEmail;
       const cachedActive = result.subscriptionActive;
 
+      // CRITICAL FIX: Check cached active status FIRST - if it's true and expiry is valid, return immediately
+      // This ensures the popup shows the hub immediately after payment verification
+      if (cachedActive === true) {
+        // Verify expiry is still valid
+        if (expiry && new Date(expiry) > new Date()) {
+          subscriptionActive = true;
+          console.log('Popup: Using cached subscription status (active)');
+          return true;
+        } else if (!expiry) {
+          // If no expiry but cached is active, still trust it (might be a new subscription)
+          subscriptionActive = true;
+          console.log('Popup: Using cached subscription status (active, no expiry yet)');
+          return true;
+        }
+      }
+
       // If no subscription ID, check by email as fallback
       if (!subscriptionId && userEmail) {
         // Try to verify by email
@@ -1331,6 +1347,8 @@
               await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
               
               console.log('Popup: Subscription verified, reloading');
+              // Small delay to ensure storage is fully written
+              await new Promise(resolve => setTimeout(resolve, 100));
               location.reload();
               return;
             }
@@ -1363,6 +1381,8 @@
             await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
             
             console.log('Popup: Subscription verified by email, reloading');
+            // Small delay to ensure storage is fully written
+            await new Promise(resolve => setTimeout(resolve, 100));
             location.reload();
             return;
           }
@@ -1398,6 +1418,8 @@
                 userEmail: email,
               });
               console.log('Popup: Found subscription by email, reloading');
+              // Small delay to ensure storage is fully written
+              await new Promise(resolve => setTimeout(resolve, 100));
               location.reload();
               return;
             }

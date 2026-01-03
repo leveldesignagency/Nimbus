@@ -53,6 +53,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
                   
                   console.log('Background: Subscription activated successfully:', data.subscriptionId);
                   
+                  // Small delay to ensure storage is fully written before notifying
+                  await new Promise(resolve => setTimeout(resolve, 200));
+                  
                   // Notify all extension pages to reload
                   chrome.runtime.sendMessage({ action: 'subscriptionActivated' }).catch(() => {});
                   
