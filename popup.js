@@ -3917,6 +3917,11 @@
         }
 
         // Show appropriate buttons
+        const manageBtn = document.getElementById('popup-manage-subscription-btn');
+        if (manageBtn) {
+          manageBtn.style.display = 'inline-block';
+        }
+        
         if (isCancelled) {
           cancelBtn.style.display = 'none';
           resubscribeBtn.style.display = 'inline-block';
@@ -3942,6 +3947,10 @@
         cancelBtn.style.display = 'none';
         resubscribeBtn.style.display = 'none';
         refundBtn.style.display = 'none';
+        const manageBtn = document.getElementById('popup-manage-subscription-btn');
+        if (manageBtn) {
+          manageBtn.style.display = 'none';
+        }
       }
     } catch (error) {
       console.error('Error loading subscription:', error);
@@ -3993,6 +4002,59 @@
           resolve(false);
         }
       });
+    });
+  }
+
+  // Manage subscription button - opens Stripe customer portal
+  const manageSubscriptionBtn = document.getElementById('popup-manage-subscription-btn');
+  if (manageSubscriptionBtn) {
+    manageSubscriptionBtn.addEventListener('click', async () => {
+      manageSubscriptionBtn.disabled = true;
+      manageSubscriptionBtn.textContent = 'Opening...';
+      
+      try {
+        const result = await chrome.storage.local.get(['subscriptionId', 'userEmail']);
+        const email = result.userEmail;
+        const subscriptionId = result.subscriptionId;
+        
+        if (!email && !subscriptionId) {
+          showNotification('No subscription found', 'error');
+          manageSubscriptionBtn.disabled = false;
+          const currentLang = window.currentUILanguage || 'en';
+          const t = translations[currentLang] || translations.en;
+          manageSubscriptionBtn.textContent = t.manageSubscription || 'Manage Subscription';
+          return;
+        }
+        
+        // Create customer portal session
+        const response = await fetch(`${API_BASE_URL}/create-portal-session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: email,
+            subscriptionId: subscriptionId,
+            returnUrl: chrome.runtime.getURL('popup.html')
+          }),
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.url) {
+          // Open Stripe customer portal in new tab
+          chrome.tabs.create({ url: data.url });
+          showNotification('Opening subscription management...', 'success');
+        } else {
+          showNotification(data.error || 'Failed to open subscription management', 'error');
+        }
+      } catch (error) {
+        console.error('Error opening customer portal:', error);
+        showNotification('Error opening subscription management', 'error');
+      } finally {
+        manageSubscriptionBtn.disabled = false;
+        const currentLang = window.currentUILanguage || 'en';
+        const t = translations[currentLang] || translations.en;
+        manageSubscriptionBtn.textContent = t.manageSubscription || 'Manage Subscription';
+      }
     });
   }
 
