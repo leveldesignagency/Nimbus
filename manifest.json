@@ -3,7 +3,7 @@
   "name": "Nimbus",
   "short_name": "Nimbus",
   "description": "Select any word, phrase, or name for instant definitions, AI explanations, and context. Your intelligent learning companion.",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "permissions": ["storage", "identity", "tabs"],
   "host_permissions": ["https://api.dictionaryapi.dev/*", "https://en.wiktionary.org/*", "https://libretranslate.de/*", "https://api.mymemory.translated.net/*", "https://en.wikipedia.org/*", "https://news.google.com/*", "https://nimbus-api-ten.vercel.app/*", "https://www.googleapis.com/*"],
   "background": {
