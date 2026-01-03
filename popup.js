@@ -1188,7 +1188,11 @@
         }
         
         const logoFile = logoFiles[currentIndex];
-        logoImg.src = chrome.runtime.getURL(logoFile);
+        const logoUrl = chrome.runtime.getURL(logoFile);
+        logoImg.src = logoUrl;
+        logoImg.style.display = ''; // Make sure it's visible
+        logoImg.style.visibility = 'visible';
+        
         logoImg.onerror = () => {
           console.warn(`Logo failed to load: ${logoFile}, trying next...`);
           currentIndex++;
@@ -1197,11 +1201,13 @@
         
         // If image loads successfully, hide text fallback if it exists
         logoImg.onload = () => {
+          console.log('Logo loaded successfully:', logoFile);
           const textFallback = logoImg.parentElement?.querySelector('.logo-text-fallback');
           if (textFallback) {
             textFallback.style.display = 'none';
           }
           logoImg.style.display = '';
+          logoImg.style.visibility = 'visible';
         };
       };
       
@@ -1211,6 +1217,9 @@
     }
   }
   
+  // Set logo immediately and multiple times to ensure it loads
+  setLogo();
+  
   // Set logo when DOM is ready
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', setLogo);
@@ -1218,8 +1227,10 @@
     setLogo();
   }
   
-  // Also try after a short delay in case the element isn't ready yet
-  setTimeout(setLogo, 100);
+  // Also try after short delays in case the element isn't ready yet
+  setTimeout(setLogo, 50);
+  setTimeout(setLogo, 200);
+  setTimeout(setLogo, 500);
 
   // Load all data on popup open
   // Load settings and translate UI on initial load (after translations object is defined)
@@ -6484,29 +6495,13 @@
     const currentLang = window.currentUILanguage || 'en';
     const loadingText = translations[currentLang]?.loadingWordOfDay || translations.en.loadingWordOfDay;
     
-    // Only show loading if div is empty or showing error
-    if (!wordOfDayDiv.innerHTML || wordOfDayDiv.innerHTML.includes('Error') || wordOfDayDiv.innerHTML.includes('Loading')) {
-      wordOfDayDiv.innerHTML = `<div class="loading">${loadingText}</div>`;
-    }
+    // Always show loading immediately
+    wordOfDayDiv.innerHTML = `<div class="loading">${loadingText}</div>`;
+    wordOfDayDiv.style.display = 'block'; // Ensure it's visible
 
     try {
-      // First, try to use cached word of the day if it's for today
-      const today = new Date().toDateString();
-      const cached = await new Promise(resolve => {
-        chrome.storage.local.get(['wordOfDay'], (result) => {
-          resolve(result.wordOfDay);
-        });
-      });
-      
-      let word = null;
-      if (cached && cached.date === today && cached.word) {
-        // Use cached word if it's for today
-        word = cached.word;
-        console.log('Nimbus: Using cached word of the day:', word);
-      } else {
-        // Get a random word from a list or generate one
-        word = await getRandomWord();
-      }
+      // Always get a fresh random word - no caching for infinite variety
+      const word = await getRandomWord();
       
       if (!word) {
         throw new Error('No word generated');
@@ -6717,20 +6712,10 @@
       // Get word list for current language, fallback to English
       const words = wordLists[language] || wordLists.en;
       
-      // Check if we have a stored word of the day for today in this language
-      const today = new Date().toDateString(); // Use toDateString() for consistency
-      const stored = await getStorage('wordOfDay');
-      
-      // Only use stored word if it's for today AND the same language
-      if (stored && stored.date === today && stored.word && stored.language === language) {
-        return stored.word;
-      }
-      
-      // Pick random word from language-specific list
-      const word = words[Math.floor(Math.random() * words.length)];
-      
-      // Store for today with language
-      await setStorage({ wordOfDay: { date: today, word, language } });
+      // Always pick a random word - no caching for infinite variety
+      // Use timestamp + random to ensure different word each time
+      const randomIndex = Math.floor(Math.random() * words.length);
+      const word = words[randomIndex];
       
       return word;
     } catch (e) {
