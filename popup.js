@@ -6656,7 +6656,7 @@
       const words = wordLists[language] || wordLists.en;
       
       // Check if we have a stored word of the day for today in this language
-      const today = new Date().toISOString().slice(0, 10);
+      const today = new Date().toDateString(); // Use toDateString() for consistency
       const stored = await getStorage('wordOfDay');
       
       // Only use stored word if it's for today AND the same language
@@ -6667,9 +6667,8 @@
       // Pick random word from language-specific list
       const word = words[Math.floor(Math.random() * words.length)];
       
-      // Store for today with language (use toDateString() for consistency)
-      const todayString = new Date().toDateString();
-      await setStorage({ wordOfDay: { date: todayString, word, language } });
+      // Store for today with language
+      await setStorage({ wordOfDay: { date: today, word, language } });
       
       return word;
     } catch (e) {
