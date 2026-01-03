@@ -1217,7 +1217,58 @@
     }
   }
   
-  // Set logo immediately and multiple times to ensure it loads
+  // Set logo immediately - run as early as possible
+  (function initLogo() {
+    const logoImg = document.getElementById('nimbusTitle');
+    if (logoImg) {
+      // Try to set logo immediately
+      const logoFiles = ['NimbusLogo.svg', 'Nimbus Logo-02.svg', 'Nimbus Logo-01.svg'];
+      let currentIndex = 0;
+      
+      const tryLogo = () => {
+        if (currentIndex >= logoFiles.length) {
+          // All failed - show text
+          if (logoImg.parentElement && !logoImg.parentElement.querySelector('.logo-text-fallback')) {
+            const textFallback = document.createElement('span');
+            textFallback.className = 'logo-text-fallback';
+            textFallback.textContent = 'Nimbus';
+            textFallback.style.cssText = 'font-size: 20px; font-weight: 700; color: #ffffff; letter-spacing: 0.5px;';
+            logoImg.parentElement.insertBefore(textFallback, logoImg);
+            logoImg.style.display = 'none';
+          }
+          return;
+        }
+        
+        const logoFile = logoFiles[currentIndex];
+        try {
+          const logoUrl = chrome.runtime.getURL(logoFile);
+          logoImg.src = logoUrl;
+          logoImg.style.display = '';
+          logoImg.style.visibility = 'visible';
+          
+          logoImg.onload = () => {
+            console.log('Logo loaded:', logoFile);
+            const textFallback = logoImg.parentElement?.querySelector('.logo-text-fallback');
+            if (textFallback) textFallback.style.display = 'none';
+            logoImg.style.display = '';
+          };
+          
+          logoImg.onerror = () => {
+            currentIndex++;
+            tryLogo();
+          };
+        } catch (e) {
+          console.error('Error setting logo:', e);
+          currentIndex++;
+          tryLogo();
+        }
+      };
+      
+      tryLogo();
+    }
+  })();
+  
+  // Also use the setLogo function as backup
   setLogo();
   
   // Set logo when DOM is ready
@@ -4080,13 +4131,20 @@
         // Don't show "environment" error - just show generic error
         showNotification('Error opening subscription management. Please try again.', 'error');
       } finally {
-        manageSubscriptionBtn.disabled = false;
+        newBtn.disabled = false;
         const currentLang = window.currentUILanguage || 'en';
         const t = translations[currentLang] || translations.en;
-        manageSubscriptionBtn.textContent = t.manageSubscription || 'Manage Subscription';
+        newBtn.textContent = t.manageSubscription || 'Manage Subscription';
       }
     });
+    
+    console.log('Manage subscription button handler attached');
   }
+  
+  // Set up immediately
+  setupManageSubscriptionButton();
+  
+  // Also set up when subscription tab is opened (already handled above, so this is just a backup)
 
   // Cancel subscription button
   const popupCancelBtn = document.getElementById('popup-cancel-btn');
