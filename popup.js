@@ -1495,20 +1495,13 @@
         section.style.display = 'block';
       });
       
+      // Load word of day FIRST and immediately (don't wait for other content)
+      loadWordOfDay();
+      
+      // Load other content in parallel
       loadConversations();
       loadFavorites();
       loadRecent();
-      loadWordOfDay();
-      
-      // Ensure all sections are visible
-      document.querySelectorAll('.section').forEach(section => {
-        section.style.display = 'block';
-      });
-      
-      loadConversations();
-      loadFavorites();
-      loadRecent();
-      loadWordOfDay();
       
       // Conversations expand/collapse
       const conversationsHeader = document.getElementById('conversationsHeader');
@@ -6363,9 +6356,6 @@
       
       const listHTML = `
         <div class="recent-table-container">
-          <div class="recent-table-header">
-            <span style="color: rgba(255, 255, 255, 0.8);">${t.recentSearches}</span>
-          </div>
           <div class="recent-table">
             ${first10.map((item, index) => {
               const word = typeof item === 'string' ? item : item.word;
@@ -6422,7 +6412,7 @@
     return 'Just now';
   }
 
-  async function loadWordOfDay() {
+  async function loadWordOfDay(retryCount = 0) {
     // Safety check
     if (!wordOfDayDiv) {
       console.error('Nimbus: wordOfDayDiv not found');
@@ -6431,19 +6421,43 @@
     
     const currentLang = window.currentUILanguage || 'en';
     const loadingText = translations[currentLang]?.loadingWordOfDay || translations.en.loadingWordOfDay;
-    wordOfDayDiv.innerHTML = `<div class="loading">${loadingText}</div>`;
+    
+    // Only show loading if div is empty or showing error
+    if (!wordOfDayDiv.innerHTML || wordOfDayDiv.innerHTML.includes('Error') || wordOfDayDiv.innerHTML.includes('Loading')) {
+      wordOfDayDiv.innerHTML = `<div class="loading">${loadingText}</div>`;
+    }
 
     try {
+      // First, try to use cached word of the day if it's for today
+      const today = new Date().toDateString();
+      const cached = await new Promise(resolve => {
+        chrome.storage.local.get(['wordOfDay'], (result) => {
+          resolve(result.wordOfDay);
+        });
+      });
       
-      // Get a random word from a list or generate one
-      const word = await getRandomWord();
+      let word = null;
+      if (cached && cached.date === today && cached.word) {
+        // Use cached word if it's for today
+        word = cached.word;
+        console.log('Nimbus: Using cached word of the day:', word);
+      } else {
+        // Get a random word from a list or generate one
+        word = await getRandomWord();
+      }
       
       if (!word) {
         throw new Error('No word generated');
       }
       
       // Get detailed explanation with pronunciation and examples
-      const details = await getWordOfDayDetails(word);
+      // Use timeout to prevent hanging
+      const detailsPromise = getWordOfDayDetails(word);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Word of day details timeout')), 10000)
+      );
+      
+      const details = await Promise.race([detailsPromise, timeoutPromise]);
       
       // Check if wordOfDayDiv still exists (might have been removed)
       if (!wordOfDayDiv || !wordOfDayDiv.parentNode) {
@@ -6474,7 +6488,16 @@
       }
     } catch (e) {
       console.error('Nimbus: Error loading word of day:', e);
-      console.error('Nimbus: Error stack:', e.stack);
+      
+      // Retry up to 2 times with exponential backoff
+      if (retryCount < 2) {
+        const delay = Math.pow(2, retryCount) * 1000; // 1s, 2s
+        console.log(`Nimbus: Retrying word of day in ${delay}ms (attempt ${retryCount + 1}/2)`);
+        setTimeout(() => {
+          loadWordOfDay(retryCount + 1);
+        }, delay);
+        return;
+      }
       
       // Check if wordOfDayDiv still exists before updating
       if (!wordOfDayDiv || !wordOfDayDiv.parentNode) {
@@ -6644,8 +6667,9 @@
       // Pick random word from language-specific list
       const word = words[Math.floor(Math.random() * words.length)];
       
-      // Store for today with language
-      await setStorage({ wordOfDay: { date: today, word, language } });
+      // Store for today with language (use toDateString() for consistency)
+      const todayString = new Date().toDateString();
+      await setStorage({ wordOfDay: { date: todayString, word, language } });
       
       return word;
     } catch (e) {
