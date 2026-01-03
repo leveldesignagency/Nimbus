@@ -3834,7 +3834,12 @@
       const data = await response.json();
 
       if (data.valid) {
-        const expiry = new Date(data.expiryDate);
+        // Get expiry date - use expiryDate from API or fallback to currentPeriodEnd
+        const expiryDateStr = data.expiryDate || data.currentPeriodEnd;
+        if (!expiryDateStr) {
+          console.error('No expiry date in subscription data:', data);
+        }
+        const expiry = expiryDateStr ? new Date(expiryDateStr) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // Fallback to 1 year from now
         const now = new Date();
         const daysRemaining = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
         const isCancelled = data.cancelAtPeriodEnd === true;
@@ -3887,10 +3892,12 @@
               <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Your card will be charged automatically when the trial ends</div>
             </div>
             ` : ''}
+            ${expiry && !isNaN(expiry.getTime()) ? `
             <div style="margin-bottom: 16px;">
               <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Subscription Expires</div>
               <div style="font-size: 14px; font-weight: 600; color: var(--text-primary);">${expiry.toLocaleDateString()} (${daysRemaining} day${daysRemaining !== 1 ? 's' : ''} remaining)</div>
             </div>
+            ` : ''}
             <div style="margin-bottom: 16px;">
               <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Subscription ID</div>
               <div style="display: flex; align-items: center; justify-content: center; gap: 8px;">
@@ -4038,6 +4045,7 @@
         }
         
         // Create customer portal session
+        console.log('Creating portal session with:', { email, subscriptionId, API_BASE_URL });
         const response = await fetch(`${API_BASE_URL}/create-portal-session`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4048,14 +4056,18 @@
           }),
         });
         
+        console.log('Portal session response status:', response.status);
         const data = await response.json();
+        console.log('Portal session response data:', data);
         
         if (response.ok && data.url) {
           // Open Stripe customer portal in new tab
           chrome.tabs.create({ url: data.url });
           showNotification('Opening subscription management...', 'success');
         } else {
-          showNotification(data.error || 'Failed to open subscription management', 'error');
+          const errorMsg = data.error || data.message || 'Failed to open subscription management. Please check the console for details.';
+          console.error('Portal session error:', errorMsg, data);
+          showNotification(errorMsg, 'error');
         }
       } catch (error) {
         console.error('Error opening customer portal:', error);
