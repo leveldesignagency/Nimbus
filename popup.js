@@ -4031,6 +4031,11 @@
       manageSubscriptionBtn.textContent = 'Opening...';
       
       try {
+        // Check if extension context is valid
+        if (!chrome || !chrome.runtime || !chrome.runtime.id) {
+          throw new Error('Extension context not available');
+        }
+        
         const result = await chrome.storage.local.get(['subscriptionId', 'userEmail']);
         const email = result.userEmail;
         const subscriptionId = result.subscriptionId;
@@ -4046,13 +4051,14 @@
         
         // Create customer portal session
         console.log('Creating portal session with:', { email, subscriptionId, API_BASE_URL });
+        const returnUrl = chrome.runtime.getURL('popup.html');
         const response = await fetch(`${API_BASE_URL}/create-portal-session`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             email: email,
             subscriptionId: subscriptionId,
-            returnUrl: chrome.runtime.getURL('popup.html')
+            returnUrl: returnUrl
           }),
         });
         
@@ -4071,7 +4077,8 @@
         }
       } catch (error) {
         console.error('Error opening customer portal:', error);
-        showNotification('Error opening subscription management', 'error');
+        // Don't show "environment" error - just show generic error
+        showNotification('Error opening subscription management. Please try again.', 'error');
       } finally {
         manageSubscriptionBtn.disabled = false;
         const currentLang = window.currentUILanguage || 'en';
