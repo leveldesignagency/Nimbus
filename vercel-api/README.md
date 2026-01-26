@@ -75,3 +75,8 @@ zip -r nimbus-extension-submission.zip manifest.json background.js contentScript
 - Set up billing alerts in OpenAI dashboard
 - Consider rate limiting if needed
 
+
+
+
+
+

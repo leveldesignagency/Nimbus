@@ -3,142 +3,27 @@
 <head>
   <meta charset="utf-8">
   <title>Nimbus Hub</title>
-  <link rel="icon" type="image/png" href="Nimbus Favicon.png">
+  <link rel="icon" type="image/png" href="favicon_nimbus.png">
   <script src="https://js.stripe.com/v3/"></script>
   <style>
-    /* CSS Variables for Light/Dark Theme */
+    /* CSS Variables - Dark theme only */
     :root {
-      /* Light Mode (default) - Blue gradient theme */
-      --bg-primary: #ffffff;
-      --bg-secondary: #f8fafc;
-      --bg-header: linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%);
-      --bg-hub: linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%);
-      --text-primary: #1e3a8a;
-      --text-secondary: #475569;
-      --text-muted: #64748b;
-      --text-inverse: #ffffff;
-      --border-color: rgba(30, 58, 138, 0.2);
-      --border-strong: rgba(30, 58, 138, 0.4);
-      --card-bg: #ffffff;
-      --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-      --card-shadow-inner: inset 0 2px 4px rgba(0, 0, 0, 0.06);
-      --accent-blue: #1e3a8a;
-      --accent-blue-light: #1e40af;
-    }
-    
-    @media (prefers-color-scheme: dark) {
-      :root {
-        /* Dark Mode - Black & Blue Gradient Theme */
-        --bg-primary: #0a0e1a;
-        --bg-secondary: #1a1f2e;
-        --bg-header: linear-gradient(135deg, #0a0e1a 0%, #1a1f2e 50%, #0f172a 100%);
-        --bg-hub: linear-gradient(135deg, #0a0e1a 0%, #1a1f2e 50%, #0f172a 100%);
-        --text-primary: #ffffff;
-        --text-secondary: #e2e8f0;
-        --text-muted: #cbd5e1;
-        --text-inverse: #ffffff;
-        --border-color: rgba(59, 130, 246, 0.3);
-        --border-strong: rgba(59, 130, 246, 0.5);
-        --card-bg: rgba(15, 23, 42, 0.8);
-        --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-        --card-shadow-inner: inset 0 2px 4px rgba(0, 0, 0, 0.4);
-        --accent-blue: #3b82f6;
-        --accent-blue-light: #60a5fa;
-      }
-    }
-    
-    /* Force light theme */
-    body.force-light {
-      --bg-primary: #ffffff;
-      --bg-secondary: #f8fafc;
-      --bg-header: linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%);
-      --bg-hub: linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%);
-      --text-primary: #1e3a8a;
-      --text-secondary: #475569;
-      --text-muted: #64748b;
-      --text-inverse: #ffffff;
-      --border-color: rgba(30, 58, 138, 0.2);
-      --border-strong: rgba(30, 58, 138, 0.4);
-      --card-bg: #ffffff;
-      --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-      --card-shadow-inner: inset 0 2px 4px rgba(0, 0, 0, 0.06);
-      --accent-blue: #1e3a8a;
-      --accent-blue-light: #1e40af;
-    }
-    
-    body.force-light {
-      background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%);
-      background-attachment: fixed;
-    }
-    
-    body.force-light.hub-search-mode {
-      background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%);
-      background-attachment: fixed;
-    }
-    
-    body.force-light .header {
-      background: transparent;
-    }
-    
-    body.force-light.hub-search-mode .header {
-      background: transparent;
-    }
-    
-    body.force-light.hub-search-mode .content {
-      background: transparent;
-    }
-    
-    /* Force dark theme */
-    body.force-dark {
-      --bg-primary: #0a0e1a;
-      --bg-secondary: #1a1f2e;
-      --bg-header: linear-gradient(135deg, #0a0e1a 0%, #1a1f2e 50%, #0f172a 100%);
-      --bg-hub: linear-gradient(135deg, #0a0e1a 0%, #1a1f2e 50%, #0f172a 100%);
+      --bg-primary: #0d0d3a;
+      --bg-secondary: #0d0d3a;
+      --bg-gradient: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a;
+      --bg-header: var(--bg-gradient);
+      --bg-hub: var(--bg-gradient);
       --text-primary: #ffffff;
       --text-secondary: #e2e8f0;
       --text-muted: #cbd5e1;
       --text-inverse: #ffffff;
-      --border-color: rgba(59, 130, 246, 0.3);
-      --border-strong: rgba(59, 130, 246, 0.5);
-      --card-bg: rgba(15, 23, 42, 0.8);
+      --border-color: rgba(31, 127, 255, 0.35);
+      --border-strong: rgba(31, 127, 255, 0.5);
+      --card-bg: rgba(44, 60, 160, 0.58);
       --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
       --card-shadow-inner: inset 0 2px 4px rgba(0, 0, 0, 0.4);
-      --accent-blue: #3b82f6;
-      --accent-blue-light: #60a5fa;
-    }
-    
-    body.force-dark {
-      background: linear-gradient(135deg, #0a0e1a 0%, #1a1f2e 30%, #0f172a 60%, #1e293b 100%);
-      background-attachment: fixed;
-    }
-    
-    body.force-dark.hub-search-mode {
-      background: linear-gradient(135deg, #0a0e1a 0%, #1a1f2e 30%, #0f172a 60%, #1e293b 100%);
-      background-attachment: fixed;
-    }
-    
-    body.force-dark .header {
-      background: transparent;
-    }
-    
-    body.force-dark.hub-search-mode .header {
-      background: transparent;
-    }
-    
-    body.force-dark .content {
-      background: transparent;
-    }
-    
-    body.force-dark.hub-search-mode .content {
-      background: transparent;
-    }
-    
-    body.force-dark .word-of-day-top {
-      background: transparent;
-    }
-    
-    body.force-dark .section {
-      background: transparent;
+      --accent-blue: #1f7fff;
+      --accent-blue-light: #4d9aff;
     }
     
     * {
@@ -160,27 +45,11 @@
       transition: background 0.3s ease, color 0.3s ease;
     }
     
-    @media (prefers-color-scheme: dark) {
-      body {
-        background: linear-gradient(135deg, #0a0e1a 0%, #1a1f2e 30%, #0f172a 60%, #1e293b 100%);
-        background-attachment: fixed;
-      }
-      
-      .content {
-        background: transparent !important;
-      }
-      
-      .word-of-day-top {
-        background: transparent !important;
-      }
-      
-      .section {
-        background: transparent !important;
-      }
-      
-      .word-list {
-        background: transparent !important;
-      }
+    .content,
+    .word-of-day-top,
+    .section,
+    .word-list {
+      background: transparent !important;
     }
     
     body.hub-search-mode {
@@ -196,6 +65,10 @@
       background: transparent;
     }
     
+    body.entity-card-view .content {
+      display: none !important;
+    }
+    
     .header {
       background: transparent;
       color: var(--text-inverse);
@@ -204,20 +77,6 @@
       align-items: center;
       gap: 12px;
       transition: background 0.3s ease, color 0.3s ease;
-    }
-    
-    @media (prefers-color-scheme: dark) {
-      .header {
-        background: transparent;
-      }
-    }
-    
-    body.force-dark .header {
-      background: transparent;
-    }
-    
-    body.force-light .header {
-      background: transparent;
     }
     
     .header-content {
@@ -257,7 +116,7 @@
     }
     
     .refresh-btn {
-      right: 32px; /* Position to the left of settings button */
+      right: 32px;
     }
     
     .settings-btn {
@@ -412,8 +271,13 @@
     }
     
     .section {
-      margin-bottom: 24px;
+      margin-bottom: 0;
+      padding-bottom: 16px;
+      margin-top: 0;
+      padding-top: 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
     }
+    .section:last-child { border-bottom: none; padding-bottom: 16px; }
     
     .section-title {
       font-size: 16px;
@@ -433,6 +297,13 @@
     .section-title svg {
       width: 18px;
       height: 18px;
+    }
+    .section-title .section-arrow {
+      width: 16px;
+      height: 16px;
+      margin-left: auto;
+      transition: transform 0.2s;
+      flex-shrink: 0;
     }
     
     .word-list {
@@ -490,10 +361,13 @@
       border: none;
       color: #94a3b8;
       cursor: pointer;
-      padding: 4px 8px;
+      padding: 6px;
       border-radius: 6px;
       font-size: 12px;
       transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     
     .word-item .remove-btn:hover {
@@ -501,11 +375,77 @@
       color: #dc2626;
     }
     
+    .saved-item {
+      padding: 10px 14px;
+      background: var(--card-bg);
+      border-radius: 12px;
+      border: 2px solid var(--border-color);
+      transition: all 0.2s ease;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      box-shadow: var(--card-shadow-inner), var(--card-shadow);
+      margin-bottom: 8px;
+    }
+    .saved-item:last-child { margin-bottom: 0; }
+    .saved-item:hover { border-color: var(--accent-blue); }
+    .saved-item-main {
+      flex: 1;
+      min-width: 0;
+      cursor: pointer;
+    }
+    .saved-item-title {
+      font-weight: 700;
+      color: var(--text-primary);
+      font-size: 14px;
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .saved-item-snippet {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 2px;
+    }
+    .saved-item-remove {
+      background: none;
+      border: none;
+      color: #94a3b8;
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 6px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .saved-item-remove:hover {
+      background: #fee2e2;
+      color: #dc2626;
+    }
+    
     .word-of-day-top {
-      padding: 0 20px 20px 20px;
+      padding: 16px 20px 20px 20px;
       background: transparent;
       border: none;
       box-shadow: none;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    }
+    .word-of-day-top .section-title {
+      color: var(--text-inverse);
+    }
+    
+    body.hub-search-mode .word-of-day-top .section-title {
+      color: var(--text-primary);
+    }
+    body.hub-search-mode #wordOfDayHeader {
+      display: none;
     }
     
     .word-of-day-top .word-card-modal {
@@ -519,40 +459,27 @@
       box-shadow: none;
     }
     
-    .word-of-day-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 16px;
-    }
-    
-    .word-of-day-title {
-      font-size: 16px;
-      font-weight: 700;
-      color: var(--text-primary);
-    }
-    
     .back-btn {
-      background: rgba(30, 58, 138, 0.1);
-      border: 1px solid rgba(30, 58, 138, 0.3);
+      background: rgba(31, 127, 255, 0.12);
+      border: 1px solid rgba(31, 127, 255, 0.35);
       border-radius: 8px;
       padding: 6px 12px;
       font-size: 12px;
       cursor: pointer;
-      color: #1e3a8a;
+      color: #1f7fff;
       transition: all 0.2s;
       font-weight: 600;
     }
     
     .back-btn:hover {
-      background: rgba(30, 58, 138, 0.15);
-      border-color: rgba(30, 58, 138, 0.4);
+      background: rgba(31, 127, 255, 0.18);
+      border-color: rgba(31, 127, 255, 0.5);
     }
     
     .wotd-word {
       font-size: 24px;
       font-weight: 700;
-      color: #0f172a;
+      color: #05007f;
       margin-bottom: 8px;
     }
     
@@ -681,16 +608,9 @@
     }
     
     .clear-all-btn:hover {
-      background: rgba(254, 226, 226, 0.8);
-      border-color: #dc2626;
+      background: rgba(127, 29, 29, 0.3);
+      border-color: #f87171;
       box-shadow: var(--card-shadow-inner), 0 0 20px rgba(220, 38, 38, 0.4), 0 0 40px rgba(220, 38, 38, 0.2);
-    }
-    
-    @media (prefers-color-scheme: dark) {
-      .clear-all-btn:hover {
-        background: rgba(127, 29, 29, 0.3);
-        border-color: #f87171;
-      }
     }
     
     .recent-table {
@@ -797,8 +717,8 @@
     }
     
     .recent-remove-btn:hover {
-      background: #fee2e2;
-      color: #dc2626;
+      background: rgba(127, 29, 29, 0.3);
+      color: #f87171;
     }
     
     
@@ -827,6 +747,30 @@
     
     .word-card-modal:hover::before {
       opacity: 0.1;
+    }
+    
+    /* AI chat (statement) – full-height chat, fixed input at bottom, no news/links */
+    .word-card-modal.statement-chat {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .word-card-modal.statement-chat .ai-chat-container {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 320px;
+      height: calc(100vh - 200px);
+    }
+    .word-card-modal.statement-chat .ai-chat-messages {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+    }
+    .word-card-modal.statement-chat .ai-chat-input-container {
+      flex-shrink: 0;
+      border-top: 1px solid var(--border-color);
+      background: var(--card-bg);
     }
     
     .word-card-header {
@@ -859,7 +803,7 @@
     .word-card-word {
       font-size: 26px;
       font-weight: 800;
-      color: var(--accent-blue);
+      color: #ffffff !important;
       letter-spacing: -0.03em;
     }
     
@@ -867,20 +811,6 @@
       font-size: 18px;
       font-weight: 600;
       line-height: 1.4;
-    }
-    
-    @media (prefers-color-scheme: dark) {
-      .word-card-word {
-        color: #ffffff !important;
-      }
-    }
-    
-    body.force-dark .word-card-word {
-      color: #ffffff !important;
-    }
-    
-    body.force-light .word-card-word {
-      color: #1e3a8a !important;
     }
     
     .word-card-phonetic {
@@ -922,7 +852,7 @@
     }
     
     .word-card-explanation {
-      padding: 20px 20px 20px;
+      padding: 24px 20px 20px;
       color: var(--text-secondary);
       font-weight: 500;
       font-size: 14px;
@@ -1125,7 +1055,7 @@
     }
     
     .person-bio {
-      padding: 0 20px 18px;
+      padding: 18px 20px 18px;
       color: var(--text-secondary);
       font-size: 14px;
       line-height: 1.7;
@@ -1203,7 +1133,7 @@
     
     .person-news-date {
       font-size: 11px;
-      color: #94a3b8;
+      color: var(--text-muted);
     }
     
     .person-wiki-link {
@@ -1220,6 +1150,43 @@
     }
     
     .person-wiki-link a:hover {
+      color: var(--accent-blue-light);
+      border-bottom-color: var(--accent-blue-light);
+    }
+    
+    .person-social {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 18px 12px;
+    }
+    .person-social-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent-blue);
+      opacity: 0.9;
+      transition: opacity 0.2s, transform 0.2s;
+    }
+    .person-social-icon:hover {
+      opacity: 1;
+      transform: scale(1.1);
+    }
+    .person-social-icon svg { display: block; }
+    .entity-sources {
+      padding: 0 18px 16px;
+      font-size: 14px;
+    }
+    
+    .entity-sources a {
+      color: var(--accent-blue);
+      text-decoration: none;
+      font-weight: 700;
+      border-bottom: 2px solid var(--accent-blue);
+      transition: all 0.2s;
+    }
+    
+    .entity-sources a:hover {
       color: var(--accent-blue-light);
       border-bottom-color: var(--accent-blue-light);
     }
@@ -1260,14 +1227,35 @@
       background-color: var(--card-bg) !important;
     }
     
+    /* Dark mode: Recent News and wiki links — white for contrast */
+    .person-news-title,
+.person-news-title-text { color: #ffffff !important; }
+.person-news-item a { color: #ffffff !important; }
+.person-wiki-link a { color: #ffffff !important; border-bottom-color: rgba(255,255,255,0.7); }
+.person-wiki-link a:hover { color: #93c5fd !important; border-bottom-color: #93c5fd; }
+.entity-sources a { color: #ffffff !important; border-bottom-color: rgba(255,255,255,0.7); }
+.entity-sources a:hover { color: #93c5fd !important; border-bottom-color: #93c5fd; }
+.person-social-icon { color: #ffffff !important; }
+.person-social-icon:hover { color: #93c5fd !important; }
+.word-card-news-item { color: #ffffff !important; }
+    
+    
     /* Settings Page Styles */
+    body.settings-open .header,
+    body.settings-open .word-of-day-top,
+    body.settings-open .content {
+      display: none !important;
+    }
+    body.settings-open {
+      overflow: hidden;
+    }
     .settings-page {
       position: absolute;
       top: 0;
       left: 0;
       right: 0;
       bottom: 0;
-      background: var(--bg-primary);
+      background: var(--bg-gradient);
       display: flex;
       flex-direction: column;
       z-index: 2000;
@@ -1277,7 +1265,7 @@
     .settings-header {
       padding: 20px 24px;
       border-bottom: 2px solid var(--border-color);
-      background: var(--bg-primary);
+      background: transparent;
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -1309,6 +1297,110 @@
     .language-selector .custom-dropdown-arrow {
       padding-right: 0;
       margin-left: 4px;
+    }
+    
+    /* Language dropdown: use modal instead of inline; hide built-in options */
+    #languageDropdown .custom-dropdown-options {
+      display: none !important;
+    }
+    
+    /* Language modal - full-screen overlay with blur, no layout push */
+    .language-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 3000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    .language-modal.open {
+      display: flex;
+    }
+    .language-modal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    .language-modal-content {
+      position: relative;
+      z-index: 1;
+      background: var(--card-bg);
+      border-radius: 20px;
+      padding: 20px 24px 24px;
+      max-width: 360px;
+      width: 100%;
+      box-shadow: var(--card-shadow-inner), var(--card-shadow), 0 24px 56px rgba(0, 0, 0, 0.45);
+      border: 1px solid var(--border-color);
+    }
+    .language-modal-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin: 0 48px 16px 0;
+      color: var(--text-primary);
+      text-align: left;
+    }
+    .language-modal-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+    .language-modal-option {
+      min-height: 48px;
+      padding: 0;
+      border: 2px solid var(--border-color);
+      border-radius: 12px;
+      background: var(--card-bg);
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s, color 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .language-modal-option .flag {
+      font-size: 26px;
+      line-height: 1;
+    }
+    .language-modal-option:hover {
+      border-color: var(--accent-blue);
+      background: var(--bg-secondary);
+      color: var(--accent-blue);
+    }
+    .language-modal-option.selected {
+      border-color: var(--accent-blue);
+      background: rgba(31, 127, 255, 0.12);
+      color: var(--accent-blue);
+    }
+    .language-modal-option.selected:hover {
+      background: rgba(31, 127, 255, 0.18);
+    }
+    .language-modal-close {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      font-size: 18px;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 0;
+      line-height: 1;
+      transition: color 0.2s, background 0.2s, border-color 0.2s;
+    }
+    .language-modal-close:hover {
+      color: var(--text-primary);
+      background: var(--bg-primary);
+      border-color: var(--accent-blue);
     }
     
     .settings-header h2 {
@@ -1398,7 +1490,7 @@
       max-height: 0;
       overflow: hidden;
       transition: max-height 0.3s ease-out;
-      background: rgba(30, 58, 138, 0.02);
+      background: rgba(31, 127, 255, 0.04);
       position: relative;
     }
     
@@ -1504,7 +1596,7 @@
     .custom-dropdown.active .custom-dropdown-selected {
       border-color: var(--accent-blue);
       background: var(--bg-secondary);
-      box-shadow: var(--card-shadow-inner), 0 0 0 3px rgba(30, 58, 138, 0.1);
+      box-shadow: var(--card-shadow-inner), 0 0 0 3px rgba(31, 127, 255, 0.12);
     }
     
     .custom-dropdown-text {
@@ -1665,7 +1757,7 @@
       padding: 12px;
       background: rgba(30, 58, 138, 0.05);
       border-radius: 8px;
-      color: #1e3a8a;
+      color: var(--text-primary);
       font-size: 14px;
     }
     
@@ -1679,11 +1771,11 @@
       bottom: 20px;
       left: 50%;
       transform: translateX(-50%) translateY(100px);
-      background: white;
-      border: 1px solid rgba(30, 58, 138, 0.2);
+      background: var(--card-bg);
+      border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 12px;
       padding: 16px 24px;
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+      box-shadow: var(--card-shadow-inner), 0 8px 24px rgba(0, 0, 0, 0.3);
       z-index: 10000;
       opacity: 0;
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -1698,15 +1790,21 @@
     }
     
     .notification-toast.success {
-      border-color: var(--accent-blue, #1e3a8a);
+      border-color: var(--accent-blue, #1f7fff);
       background: var(--card-bg);
-      box-shadow: var(--card-shadow-inner), 0 8px 24px rgba(30, 58, 138, 0.2);
+      box-shadow: var(--card-shadow-inner), 0 8px 24px rgba(31, 127, 255, 0.25);
+    }
+    .notification-toast.success .notification-content {
+      color: var(--text-primary, #ffffff);
     }
     
     .notification-toast.error {
-      border-color: #dc2626;
+      border-color: #f87171;
       background: var(--card-bg);
-      box-shadow: var(--card-shadow-inner), 0 8px 24px rgba(220, 38, 38, 0.2);
+      box-shadow: var(--card-shadow-inner), 0 8px 24px rgba(248, 113, 113, 0.25);
+    }
+    .notification-toast.error .notification-content {
+      color: #dc2626;
     }
     
     .notification-content {
@@ -1716,30 +1814,6 @@
       color: var(--text-primary);
       font-size: 14px;
       font-weight: 500;
-    }
-    
-    .notification-toast.success .notification-content {
-      color: var(--accent-blue, #1e3a8a);
-    }
-    
-    .notification-toast.error .notification-content {
-      color: #dc2626;
-    }
-    
-    @media (prefers-color-scheme: dark) {
-      .notification-toast.success {
-        border-color: var(--accent-blue, #3b82f6);
-        background: var(--card-bg);
-      }
-      
-      .notification-toast.error {
-        border-color: #f87171;
-        background: var(--card-bg);
-      }
-      
-      .notification-toast.success .notification-content {
-        color: var(--text-primary, #ffffff);
-      }
     }
     
     .notification-content::before {
@@ -1753,13 +1827,7 @@
     }
     
     .notification-toast.success .notification-content::before {
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%231e3a8a' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6L9 17l-5-5'/%3E%3C/svg%3E");
-    }
-    
-    @media (prefers-color-scheme: dark) {
-      .notification-toast.success .notification-content::before {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6L9 17l-5-5'/%3E%3C/svg%3E");
-      }
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6L9 17l-5-5'/%3E%3C/svg%3E");
     }
     
     .notification-toast.error .notification-content::before {
@@ -1797,7 +1865,7 @@
       width: 100%;
       height: 16px;
       margin-bottom: 12px;
-      background: linear-gradient(90deg, rgba(241, 245, 249, 0.6) 25%, rgba(226, 232, 240, 0.8) 50%, rgba(241, 245, 249, 0.6) 75%);
+      background: linear-gradient(90deg, rgba(20, 25, 70, 0.6) 25%, rgba(40, 50, 110, 0.8) 50%, rgba(20, 25, 70, 0.6) 75%);
       background-size: 200% 100%;
       animation: shimmer 1.5s infinite;
       border-radius: 6px;
@@ -1814,7 +1882,7 @@
   <div class="header">
     <div class="header-content">
       <div class="header-top-row">
-        <img src="" alt="Nimbus" class="header-logo" id="nimbusTitle">
+        <img src="" alt="Nimbus" class="header-logo" id="nimbusTitle" style="display: block !important; visibility: visible !important; opacity: 1 !important;">
       <button class="refresh-btn" id="refreshBtn" title="Refresh">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
@@ -1841,9 +1909,23 @@
     </div>
   </div>
   
-  <!-- Word of the Day - Outside content section at top -->
-  <div class="word-of-day-top" id="wordOfDay">
-    <div class="loading">Loading word of the day...</div>
+  <!-- Word of the Day - Title outside card, like other sections -->
+  <div class="word-of-day-top">
+    <div class="section-title" id="wordOfDayHeader">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+        <line x1="8" y1="7" x2="16" y2="7"/>
+        <line x1="8" y1="11" x2="16" y2="11"/>
+      </svg>
+      <span data-i18n="wordOfDay">Word of the Day</span>
+      <svg class="section-arrow" id="wordOfDayArrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M6 9l6 6 6-6"/>
+      </svg>
+    </div>
+    <div id="wordOfDay" class="word-of-day-content" style="display: none;">
+      <div class="loading">Loading word of the day...</div>
+    </div>
   </div>
   
   <div class="content" id="mainContent">
@@ -1854,7 +1936,7 @@
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
         </svg>
         <span data-i18n="conversations">Conversations</span>
-        <svg class="section-arrow" id="conversationsArrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; height: 16px; transition: transform 0.2s; margin-left: auto;">
+        <svg class="section-arrow" id="conversationsArrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M6 9l6 6 6-6"/>
         </svg>
       </div>
@@ -1865,26 +1947,48 @@
     
     <!-- Favorites -->
     <div class="section">
-      <div class="section-title">
+      <div class="section-title" id="favoritesHeader">
         <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2">
           <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
         </svg>
         <span data-i18n="favorites">Favorites</span>
+        <svg class="section-arrow" id="favoritesArrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M6 9l6 6 6-6"/>
+        </svg>
       </div>
-      <div id="favorites" class="word-list">
+      <div id="favorites" class="word-list" style="display: none;">
         <div class="loading">Loading favorites...</div>
+      </div>
+    </div>
+    
+    <!-- Saved for later -->
+    <div class="section">
+      <div class="section-title" id="savedHeader">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+        </svg>
+        <span data-i18n="saved">Saved</span>
+        <svg class="section-arrow" id="savedArrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M6 9l6 6 6-6"/>
+        </svg>
+      </div>
+      <div id="saved" class="word-list" style="display: none;">
+        <div class="loading">Loading saved...</div>
       </div>
     </div>
     
     <!-- Recent Searches -->
     <div class="section">
-      <div class="section-title">
+      <div class="section-title" id="recentHeader">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/>
         </svg>
         <span data-i18n="recentSearches">Recent Searches</span>
+        <svg class="section-arrow" id="recentArrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M6 9l6 6 6-6"/>
+        </svg>
       </div>
-      <div id="recent" class="word-list">
+      <div id="recent" class="word-list" style="display: none;">
         <div class="loading">Loading recent searches...</div>
       </div>
     </div>
@@ -1939,7 +2043,7 @@
         <div class="settings-tab-content" id="tab-subscription">
           <div class="settings-section">
             <div class="settings-item">
-              <div id="popup-subscription-info" style="margin-bottom: 20px; padding: 20px; background: linear-gradient(135deg, rgba(30, 58, 138, 0.1) 0%, rgba(30, 64, 175, 0.08) 100%); border: 1px solid rgba(30, 58, 138, 0.2); border-radius: 12px; font-size: 14px; color: var(--text-primary);">
+              <div id="popup-subscription-info" style="margin-bottom: 20px; padding: 20px; background: linear-gradient(135deg, rgba(5, 0, 127, 0.12) 0%, rgba(0, 0, 235, 0.08) 100%); border: 1px solid rgba(31, 127, 255, 0.25); border-radius: 12px; font-size: 14px; color: var(--text-primary);">
                 <div class="loading" style="text-align: center; color: var(--text-muted);">Loading subscription info...</div>
               </div>
             </div>
@@ -1948,10 +2052,10 @@
               <p id="popup-cancel-hint" style="display: none; margin: 8px 0 0 0; font-size: 12px; color: var(--text-muted);">Your subscription will be cancelled at the end of the current billing period. You'll retain access until then.</p>
             </div>
             <div class="settings-item">
-              <button class="settings-action-btn" id="popup-manage-subscription-btn" style="display: none; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 4px rgba(30, 58, 138, 0.3);" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 4px 8px rgba(30, 58, 138, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 2px 4px rgba(30, 58, 138, 0.3)'" data-i18n="manageSubscription">Manage Subscription</button>
+              <button class="settings-action-btn" id="popup-manage-subscription-btn" style="display: none; background: linear-gradient(135deg, #05007f 0%, #1f7fff 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 4px rgba(5, 0, 127, 0.35);" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 4px 8px rgba(31, 127, 255, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 2px 4px rgba(5, 0, 127, 0.35)'" data-i18n="manageSubscription">Manage Subscription</button>
             </div>
             <div class="settings-item">
-              <button class="settings-action-btn" id="popup-resubscribe-btn" style="display: none; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 4px rgba(30, 58, 138, 0.3);" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 4px 8px rgba(30, 58, 138, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 2px 4px rgba(30, 58, 138, 0.3)'">Resubscribe</button>
+              <button class="settings-action-btn" id="popup-resubscribe-btn" style="display: none; background: linear-gradient(135deg, #05007f 0%, #1f7fff 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 4px rgba(5, 0, 127, 0.35);" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 4px 8px rgba(31, 127, 255, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 2px 4px rgba(5, 0, 127, 0.35)'">Resubscribe</button>
             </div>
             <div class="settings-item">
               <button class="settings-action-btn" id="popup-refund-btn" style="display: none; background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 4px rgba(220, 38, 38, 0.3);" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 4px 8px rgba(220, 38, 38, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 2px 4px rgba(220, 38, 38, 0.3)'">Request Refund</button>
@@ -2005,39 +2109,6 @@
         </div>
       </div>
       
-      <!-- API Settings Tab -->
-      <div class="settings-tab-item">
-        <button class="settings-tab-header" data-tab="api">
-          <span data-i18n="apiSettings">API Settings</span>
-          <svg class="tab-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M6 9l6 6 6-6"/>
-          </svg>
-        </button>
-        <div class="settings-tab-content" id="tab-api">
-          <div class="settings-section">
-            <div class="settings-item">
-              <label>Explanation Style:</label>
-              <div class="custom-dropdown" id="explanationStyleDropdown">
-                <input type="hidden" id="explanationStyle" value="plain">
-                <div class="custom-dropdown-selected">
-                  <span class="custom-dropdown-text">Plain English</span>
-                  <svg class="custom-dropdown-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                    <path d="M6 9l6 6 6-6"/>
-                  </svg>
-                </div>
-                <div class="custom-dropdown-options">
-                  <div class="custom-dropdown-option" data-value="plain">Plain English</div>
-                  <div class="custom-dropdown-option" data-value="technical">Technical</div>
-                  <div class="custom-dropdown-option" data-value="simple">Simple (ELI12)</div>
-                </div>
-              </div>
-            </div>
-            <div class="settings-item">
-            </div>
-          </div>
-        </div>
-      </div>
-      
       <!-- General Tab -->
       <div class="settings-tab-item">
         <button class="settings-tab-header" data-tab="general">
@@ -2066,6 +2137,24 @@
                 <input type="checkbox" id="showExamples">
                 <span data-i18n="showExamplesLabel">Show example sentences</span>
               </label>
+            </div>
+            <div class="settings-item">
+              <label data-i18n="explanationStyleLabel">Explanation Style:</label>
+              <div class="custom-dropdown" id="explanationStyleDropdown">
+                <input type="hidden" id="explanationStyle" value="plain">
+                <div class="custom-dropdown-selected">
+                  <span class="custom-dropdown-text">Plain English</span>
+                  <svg class="custom-dropdown-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M6 9l6 6 6-6"/>
+                  </svg>
+                </div>
+                <div class="custom-dropdown-options">
+                  <div class="custom-dropdown-option" data-value="plain">Plain English</div>
+                  <div class="custom-dropdown-option" data-value="technical">Technical</div>
+                  <div class="custom-dropdown-option" data-value="simple">Simple (ELI12)</div>
+                </div>
+              </div>
+              <p class="settings-description">Choose how the AI explains words and concepts</p>
             </div>
             <div class="settings-item">
               <button class="settings-action-btn danger" id="clearAllDataBtn" data-i18n="clearAllData">Clear All Data</button>
@@ -2155,6 +2244,33 @@
       <div class="confirm-dialog-actions">
         <button class="confirm-dialog-btn confirm-dialog-btn-cancel" id="confirmDialogCancel">Cancel</button>
         <button class="confirm-dialog-btn confirm-dialog-btn-confirm" id="confirmDialogConfirm">Confirm</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Language modal: full-screen overlay with blur (replaces dropdown for language selector) -->
+  <div id="languageModal" class="language-modal" aria-hidden="true">
+    <div class="language-modal-backdrop" id="languageModalBackdrop"></div>
+    <div class="language-modal-content">
+      <button type="button" class="language-modal-close" id="languageModalClose" aria-label="Close">×</button>
+      <h3 class="language-modal-title" data-i18n="chooseLanguage">Choose Language</h3>
+      <div class="language-modal-grid">
+        <button type="button" class="language-modal-option" data-value="en" data-flag="🇬🇧" title="English"><span class="flag">🇬🇧</span></button>
+        <button type="button" class="language-modal-option" data-value="es" data-flag="🇪🇸" title="Español"><span class="flag">🇪🇸</span></button>
+        <button type="button" class="language-modal-option" data-value="fr" data-flag="🇫🇷" title="Français"><span class="flag">🇫🇷</span></button>
+        <button type="button" class="language-modal-option" data-value="de" data-flag="🇩🇪" title="Deutsch"><span class="flag">🇩🇪</span></button>
+        <button type="button" class="language-modal-option" data-value="it" data-flag="🇮🇹" title="Italiano"><span class="flag">🇮🇹</span></button>
+        <button type="button" class="language-modal-option" data-value="pt" data-flag="🇵🇹" title="Português"><span class="flag">🇵🇹</span></button>
+        <button type="button" class="language-modal-option" data-value="ru" data-flag="🇷🇺" title="Русский"><span class="flag">🇷🇺</span></button>
+        <button type="button" class="language-modal-option" data-value="ja" data-flag="🇯🇵" title="日本語"><span class="flag">🇯🇵</span></button>
+        <button type="button" class="language-modal-option" data-value="zh" data-flag="🇨🇳" title="中文"><span class="flag">🇨🇳</span></button>
+        <button type="button" class="language-modal-option" data-value="ko" data-flag="🇰🇷" title="한국어"><span class="flag">🇰🇷</span></button>
+        <button type="button" class="language-modal-option" data-value="ar" data-flag="🇸🇦" title="العربية"><span class="flag">🇸🇦</span></button>
+        <button type="button" class="language-modal-option" data-value="hi" data-flag="🇮🇳" title="हिन्दी"><span class="flag">🇮🇳</span></button>
+        <button type="button" class="language-modal-option" data-value="nl" data-flag="🇳🇱" title="Nederlands"><span class="flag">🇳🇱</span></button>
+        <button type="button" class="language-modal-option" data-value="sv" data-flag="🇸🇪" title="Svenska"><span class="flag">🇸🇪</span></button>
+        <button type="button" class="language-modal-option" data-value="pl" data-flag="🇵🇱" title="Polski"><span class="flag">🇵🇱</span></button>
+        <button type="button" class="language-modal-option" data-value="tr" data-flag="🇹🇷" title="Türkçe"><span class="flag">🇹🇷</span></button>
       </div>
     </div>
   </div>

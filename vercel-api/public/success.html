@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment Successful - Nimbus</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 16px;
+      padding: 50px 40px;
+      max-width: 500px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    }
+    h1 {
+      color: #1e3a8a;
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 20px;
+    }
+    p {
+      color: #64748b;
+      font-size: 16px;
+      line-height: 1.6;
+      margin-bottom: 30px;
+    }
+    .button {
+      background: #1e3a8a;
+      color: white;
+      border: none;
+      padding: 14px 28px;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .button:hover {
+      background: #1e40af;
+    }
+    .info {
+      color: #94a3b8;
+      font-size: 14px;
+      margin-top: 25px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Payment Successful</h1>
+    <p>Your subscription has been activated. Please return to the Nimbus extension and reload your browser to start using all features.</p>
+    <button class="button" onclick="window.close()">Close This Window</button>
+    <p class="info">This window will close automatically in 5 seconds</p>
+  </div>
+  <script>
+    // Auto-close after 5 seconds
+    setTimeout(() => {
+      window.close();
+    }, 5000);
+    
+    // Also try to close if user clicks anywhere
+    document.addEventListener('click', () => {
+      window.close();
+    });
+  </script>
+</body>
+</html>

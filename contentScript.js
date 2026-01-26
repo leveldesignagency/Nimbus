@@ -11,8 +11,7 @@
   let currentSynonyms = [];
   let lastSelection = '';
   let manuallyClosed = false; // Track if user manually closed the tooltip
-  let savedRange = null; // Store the selection range to maintain highlight
-  let highlightOverlay = null; // Custom highlight overlay element
+  let savedRange = null; // Store the selection range for tooltip positioning
   let modalSettings = {
     placement: 'intuitive',
     draggable: true,
@@ -20,6 +19,12 @@
     showExamples: true
   };
   let isDragging = false;
+  let isSelecting = false; // Track if user is actively selecting (mouse down + moving)
+  let selectionStartTime = 0; // Track when selection started
+  let iconModalTimer = null; // Timer for delayed icon-only modal
+  let currentUtterance = null; // Current speech synthesis utterance
+  let audioState = 'idle'; // 'idle', 'playing', 'paused'
+  let pausedText = ''; // Text that was paused (for resume)
 
   // Function to find the best available voice for TTS
   function getBestVoice(lang = 'en-US') {
@@ -86,6 +91,167 @@
     return matchingVoices[0] || voices[0];
   }
 
+  // Translate modal: from/to languages (matches background + Turkish)
+  const TRANSLATE_LANGS = [
+    { v: 'auto', l: 'Auto-detect' },
+    { v: 'en', l: 'English' }, { v: 'es', l: 'Español' }, { v: 'fr', l: 'Français' }, { v: 'de', l: 'Deutsch' },
+    { v: 'it', l: 'Italiano' }, { v: 'pt', l: 'Português' }, { v: 'ru', l: 'Русский' }, { v: 'ja', l: '日本語' },
+    { v: 'zh', l: '中文' }, { v: 'ko', l: '한국어' }, { v: 'ar', l: 'العربية' }, { v: 'hi', l: 'हिन्दी' },
+    { v: 'nl', l: 'Nederlands' }, { v: 'sv', l: 'Svenska' }, { v: 'pl', l: 'Polski' }, { v: 'tr', l: 'Türkçe' }
+  ];
+  const TRANSLATE_LANGS_TO = TRANSLATE_LANGS.filter((x) => x.v !== 'auto');
+
+  function createTranslateModal(opts) {
+    const { onTranslate, onCancel, defaultFrom = 'auto', defaultTo = 'en' } = opts || {};
+    const wrap = document.createElement('div');
+    wrap.className = 'cursoriq-translate-modal';
+
+    const fromLbl = TRANSLATE_LANGS.find((x) => x.v === defaultFrom)?.l || 'Auto-detect';
+    const toLbl = TRANSLATE_LANGS_TO.find((x) => x.v === defaultTo)?.l || 'English';
+
+    const row1 = document.createElement('div');
+    row1.className = 'cursoriq-translate-row';
+    const label1 = document.createElement('label');
+    label1.className = 'cursoriq-translate-label';
+    label1.textContent = 'From';
+    const fromDd = document.createElement('div');
+    fromDd.className = 'cursoriq-translate-dropdown';
+    fromDd.dataset.value = defaultFrom;
+    const fromSel = document.createElement('div');
+    fromSel.className = 'cursoriq-translate-dropdown-selected';
+    const fromText = document.createElement('span');
+    fromText.className = 'cursoriq-translate-dropdown-text';
+    fromText.textContent = fromLbl;
+    const fromArrow = document.createElement('span');
+    fromArrow.className = 'cursoriq-translate-dropdown-arrow';
+    fromArrow.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>';
+    fromSel.appendChild(fromText);
+    fromSel.appendChild(fromArrow);
+    fromDd.appendChild(fromSel);
+    const fromOpts = document.createElement('div');
+    fromOpts.className = 'cursoriq-translate-dropdown-options';
+    TRANSLATE_LANGS.forEach((o) => {
+      const opt = document.createElement('div');
+      opt.className = 'cursoriq-translate-dropdown-option';
+      opt.dataset.value = o.v;
+      opt.textContent = o.l;
+      fromOpts.appendChild(opt);
+    });
+    fromDd.appendChild(fromOpts);
+
+    const row2 = document.createElement('div');
+    row2.className = 'cursoriq-translate-row';
+    const label2 = document.createElement('label');
+    label2.className = 'cursoriq-translate-label';
+    label2.textContent = 'To';
+    const toDd = document.createElement('div');
+    toDd.className = 'cursoriq-translate-dropdown';
+    toDd.dataset.role = 'to-dd';
+    toDd.dataset.value = defaultTo;
+    const toSel = document.createElement('div');
+    toSel.className = 'cursoriq-translate-dropdown-selected';
+    const toText = document.createElement('span');
+    toText.className = 'cursoriq-translate-dropdown-text';
+    toText.textContent = toLbl;
+    const toArrow = document.createElement('span');
+    toArrow.className = 'cursoriq-translate-dropdown-arrow';
+    toArrow.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>';
+    toSel.appendChild(toText);
+    toSel.appendChild(toArrow);
+    toDd.appendChild(toSel);
+    const toOpts = document.createElement('div');
+    toOpts.className = 'cursoriq-translate-dropdown-options';
+    TRANSLATE_LANGS_TO.forEach((o) => {
+      const opt = document.createElement('div');
+      opt.className = 'cursoriq-translate-dropdown-option';
+      opt.dataset.value = o.v;
+      opt.textContent = o.l;
+      toOpts.appendChild(opt);
+    });
+    toDd.appendChild(toOpts);
+
+    fromSel.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toDd.classList.remove('active');
+      fromDd.classList.toggle('active');
+    });
+    toSel.addEventListener('click', (e) => {
+      e.stopPropagation();
+      fromDd.classList.remove('active');
+      toDd.classList.toggle('active');
+    });
+    fromOpts.querySelectorAll('.cursoriq-translate-dropdown-option').forEach((opt) => {
+      opt.addEventListener('click', (e) => {
+        e.stopPropagation();
+        fromDd.dataset.value = opt.dataset.value;
+        fromText.textContent = opt.textContent;
+        fromDd.classList.remove('active');
+        toDd.classList.remove('active');
+      });
+    });
+    toOpts.querySelectorAll('.cursoriq-translate-dropdown-option').forEach((opt) => {
+      opt.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toDd.dataset.value = opt.dataset.value;
+        toText.textContent = opt.textContent;
+        fromDd.classList.remove('active');
+        toDd.classList.remove('active');
+      });
+    });
+
+    row1.appendChild(label1);
+    row1.appendChild(fromDd);
+    row2.appendChild(label2);
+    row2.appendChild(toDd);
+
+    const actions = document.createElement('div');
+    actions.className = 'cursoriq-translate-actions';
+    const btnDo = document.createElement('button');
+    btnDo.type = 'button';
+    btnDo.className = 'cursoriq-translate-btn-do';
+    btnDo.textContent = 'Translate';
+    const btnCancel = document.createElement('button');
+    btnCancel.type = 'button';
+    btnCancel.className = 'cursoriq-translate-btn-cancel';
+    btnCancel.textContent = 'Cancel';
+
+    btnDo.addEventListener('click', () => {
+      const src = fromDd.dataset.value || 'auto';
+      const tgt = toDd.dataset.value || 'en';
+      if (src === tgt && src !== 'auto') return;
+      if (onTranslate) onTranslate(src, tgt);
+    });
+    btnCancel.addEventListener('click', () => { if (onCancel) onCancel(); });
+
+    actions.appendChild(btnDo);
+    actions.appendChild(btnCancel);
+    wrap.appendChild(row1);
+    wrap.appendChild(row2);
+    wrap.appendChild(actions);
+
+    return wrap;
+  }
+
+  // If text is 500+ chars (or API returns query length error), open Google Translate in a new tab instead.
+  function openInGoogleTranslate(text, source, target, onRestore) {
+    const sl = source === 'auto' ? 'auto' : source;
+    const tl = target || 'en';
+    const encoded = encodeURIComponent(text);
+    let url = 'https://translate.google.com/#view=home&op=translate&sl=' + sl + '&tl=' + tl + '&text=' + encoded;
+    if (url.length <= 2000) {
+      chrome.runtime.sendMessage({ type: 'openTab', url: url }, () => {});
+    } else {
+      navigator.clipboard.writeText(text).catch(() => {});
+      url = 'https://translate.google.com/';
+      chrome.runtime.sendMessage({ type: 'openTab', url: url }, () => {});
+    }
+    if (onRestore) onRestore();
+  }
+
+  function isQueryLengthError(err) {
+    return err && (String(err).includes('QUERY LENGTH') || String(err).toUpperCase().includes('500 CHARS'));
+  }
+
   // Initialize subscription status
   let subscriptionActive = false;
   const SUBSCRIPTION_ID = 'nimbus_yearly_subscription';
@@ -109,9 +275,48 @@
     }
   }
   
-  // Check subscription status via our API (Stripe backend)
+  // When in an iframe, append tooltips to the top document to avoid clipping by iframe overflow/size.
+  // Returns { body, inIframe, frameOffset: { left, top }, viewport: { w, h } }.
+  function getTooltipRoot() {
+    let body = document.body;
+    let inIframe = false;
+    let frameOffset = { left: 0, top: 0 };
+    let viewport = { w: window.innerWidth, h: window.innerHeight };
+    try {
+      if (window.self !== window.top) {
+        const topWin = window.top;
+        const fe = window.frameElement;
+        if (fe && topWin.document && topWin.document.body) {
+          body = topWin.document.body;
+          inIframe = true;
+          const r = fe.getBoundingClientRect();
+          frameOffset = { left: r.left, top: r.top };
+          viewport = { w: topWin.innerWidth, h: topWin.innerHeight };
+        }
+      }
+    } catch (e) {
+      // cross-origin or other: keep defaults
+    }
+    return { body, inIframe, frameOffset, viewport };
+  }
+
+  // Load unpacked gets a different runtime ID; Chrome Web Store install uses this fixed ID.
+  const STORE_EXTENSION_ID = 'abmihilkdbamlelkmpfegjfimcjpcihh';
+  function isDeveloperMode() {
+    try {
+      return chrome.runtime.id !== STORE_EXTENSION_ID;
+    } catch (e) {
+      return false;
+    }
+  }
+  
   async function checkSubscription() {
-    // NO BYPASS - Test actual payment flow even in development
+    try {
+      if (isDeveloperMode()) {
+        subscriptionActive = true;
+        return true;
+      }
+    } catch (e) { /* fall through to normal check */ }
     try {
       // First check if subscriptionActive is set in storage (set by popup/background)
       const storageResult = await new Promise((resolve) => {
@@ -227,12 +432,17 @@
             console.log('Nimbus: Subscription storage changed, re-checking...', changes);
             checkSubscription().then((isActive) => {
               console.log('Nimbus: Subscription re-check result:', isActive);
-              // If subscription just became active, close any upgrade prompts
-              if (isActive && tooltipEl) {
+              // If subscription just became active, close any upgrade prompts and reset modal counter
+              if (isActive) {
+                chrome.storage.local.set({ subscriptionModalShowCount: 0 }, () => {
+                  console.log('Nimbus: Subscription activated, resetting modal show count');
+                });
+                if (tooltipEl) {
                 const upgradePrompt = tooltipEl.querySelector('[style*="Subscribe to Unlock"]');
                 if (upgradePrompt) {
                   console.log('Nimbus: Subscription activated, closing upgrade prompt');
                   hideTooltip();
+                  }
                 }
               }
             });
@@ -251,11 +461,16 @@
         if (msg && msg.action === 'subscriptionActivated') {
           console.log('Nimbus: Received subscription activation message');
           checkSubscription().then((isActive) => {
-            if (isActive && tooltipEl) {
+            if (isActive) {
+              chrome.storage.local.set({ subscriptionModalShowCount: 0 }, () => {
+                console.log('Nimbus: Subscription activated via message, resetting modal show count');
+              });
+              if (tooltipEl) {
               const upgradePrompt = tooltipEl.querySelector('[style*="Subscribe to Unlock"]');
               if (upgradePrompt) {
                 console.log('Nimbus: Subscription activated via message, closing upgrade prompt');
                 hideTooltip();
+                }
               }
             }
           });
@@ -280,10 +495,60 @@
 
   console.log('Nimbus: Content script loaded on', window.location.href);
 
-  // Listen for text selection
-  document.addEventListener('mouseup', handleSelection);
-  // Don't use selectionchange - it fires too often and causes issues
-  // document.addEventListener('selectionchange', handleSelection);
+  // Track when user starts selecting (mousedown)
+  document.addEventListener('mousedown', (e) => {
+    // Check if Shift key is held (allows extending selection while scrolling)
+    if (e.shiftKey) {
+      isSelecting = true;
+      selectionStartTime = Date.now();
+    } else {
+      // Regular selection - check if it's a text selection (not a click)
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount > 0) {
+        isSelecting = true;
+        selectionStartTime = Date.now();
+      }
+    }
+  });
+  
+  // Track mouse movement during selection
+  document.addEventListener('mousemove', (e) => {
+    if (isSelecting) {
+      // User is actively selecting, keep flag true
+      isSelecting = true;
+    }
+  });
+  
+  // Listen for text selection (mouseup)
+  document.addEventListener('mouseup', (e) => {
+    // Small delay to check if selection is complete
+    setTimeout(() => {
+      isSelecting = false;
+      handleSelection(e);
+    }, 100);
+  });
+  
+  // Update tooltip position on scroll if tooltip is visible
+  document.addEventListener('scroll', () => {
+    if (tooltipEl && savedRange) {
+      try {
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount > 0) {
+          const range = selection.getRangeAt(0);
+          if (!range.collapsed) {
+            savedRange = range.cloneRange();
+            // Reposition tooltip based on current selection
+            const rect = savedRange.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0 && currentWord) {
+              positionTooltip({ range: savedRange, word: currentWord });
+            }
+          }
+        }
+      } catch (e) {
+        // Ignore errors during scroll
+      }
+    }
+  }, { passive: true });
   
   // Add keyboard shortcut for testing (Ctrl+Shift+E)
   document.addEventListener('keydown', (e) => {
@@ -330,31 +595,21 @@
       if (tooltipEl && (tooltipEl === clickedElement || tooltipEl.contains(clickedElement))) {
         return; // Clicked on tooltip, ignore selection
       }
-      // Check if click is on highlight overlay
-      if (highlightOverlay && (highlightOverlay === clickedElement || highlightOverlay.contains(clickedElement))) {
-        return; // Clicked on highlight overlay, ignore selection
-      }
     }
     
-    // QUICK CHECK: If user is typing in an input field, ignore immediately
+    // QUICK CHECK: only skip when focus is clearly in a form field (input/textarea by tag)
+    // contenteditable and role=textbox are handled later by isInsideInput for the selection range
     const activeEl = document.activeElement;
     if (activeEl) {
-      const tagName = activeEl.tagName?.toLowerCase();
-      if (tagName === 'input' || tagName === 'textarea') {
-        return; // User is typing in input, ignore selection
-      }
-      if (activeEl.contentEditable === 'true' || activeEl.isContentEditable) {
-        return; // User is typing in contenteditable, ignore selection
-      }
-      const role = activeEl.getAttribute?.('role');
-      if (role === 'textbox' || role === 'searchbox' || role === 'combobox' || role === 'search') {
-        return; // User is in a search/textbox, ignore selection
+      const tag = activeEl.tagName && activeEl.tagName.toLowerCase();
+      if (tag === 'input' || tag === 'textarea') {
+        return;
       }
     }
     
     // If tooltip is currently visible, don't process new selections
-    if (tooltipEl && document.body.contains(tooltipEl)) {
-      return; // Tooltip is visible, ignore new selections
+    if (tooltipEl && document.body && document.body.contains(tooltipEl)) {
+      return;
     }
     
     // Check extension context FIRST before doing anything
@@ -403,6 +658,13 @@
       try {
         if (selection.rangeCount > 0) {
           range = selection.getRangeAt(0);
+          
+          // Validate that this is a valid text selection (not images, links, etc.)
+          if (!isValidTextSelection(selection, range)) {
+            // Not a valid text selection - let Chrome handle it normally
+            return;
+          }
+          
           // Clone and save the range to maintain highlight
           savedRange = range.cloneRange();
         }
@@ -418,6 +680,8 @@
         showEmailModal(selectedText, range);
         return;
       }
+
+      // Don't return early for locations - let the word tooltip show but with location buttons
 
       // Check if selection is inside an input, textarea, or search field - DO THIS FIRST
       // Helper function to check if a node is inside an input/textarea
@@ -555,17 +819,38 @@
       // Check word count - split and filter
       const words = selectedText.split(/\s+/).filter(w => w.trim().length > 0);
       
-      // Anything OVER 2 words (3+ words) - show icon-only modal immediately, skip all dictionary/AI processing
+      // Anything OVER 2 words (3+ words) - show icon-only modal with delay to allow scrolling
       if (words.length > 2) {
-        console.log('CursorIQ: 3+ words selected, showing icon-only modal:', selectedText);
-        // Clear any existing timers to prevent dictionary lookup
+        console.log('CursorIQ: 3+ words selected, scheduling icon-only modal:', selectedText);
+        // Clear any existing timers
         if (selectionTimer) {
           clearTimeout(selectionTimer);
           selectionTimer = null;
         }
-        // Clear lastSelection to allow re-showing
+        if (iconModalTimer) {
+          clearTimeout(iconModalTimer);
+          iconModalTimer = null;
+        }
+        
+        // Don't show modal if user is actively selecting (mouse might still be down)
+        // Wait a bit to see if selection is complete
+        iconModalTimer = setTimeout(() => {
+          // Check if user is still actively selecting
+          if (isSelecting) {
+            // User is still selecting, wait a bit more
+            iconModalTimer = setTimeout(() => {
+              if (!isSelecting) {
+                console.log('CursorIQ: Selection complete, showing icon-only modal');
         lastSelection = '';
         showIconOnlyModal(selectedText, range);
+              }
+            }, 300);
+          } else {
+            console.log('CursorIQ: Showing icon-only modal after delay');
+            lastSelection = '';
+            showIconOnlyModal(selectedText, range);
+          }
+        }, 500); // Delay to allow scrolling while selecting
         return;
       }
 
@@ -635,6 +920,19 @@
   function triggerExplain(wordInfo) {
     if (!wordInfo.word || wordInfo.word.length < MIN_WORD_LEN) return;
 
+    // Check if a location tooltip is currently showing - if so, don't show word tooltip
+    if (tooltipEl && tooltipEl.classList.contains('cursoriq-location-tooltip')) {
+      return; // Location tooltip is showing, don't show word tooltip
+    }
+
+    // Check if this is an address (not a place name) - addresses should show tooltip with map buttons
+    // Place names (like "Sydney", "London") will be detected as entities by background script and go to hub
+    const selectedText = wordInfo.word || '';
+    const isAddress = detectLocation(selectedText);
+    
+    // If it's an address (has postcode, street name, etc.), we'll handle it after getting the response
+    // Don't block here - let it flow through to check if it's a place name entity first
+
     // Check if extension context is still valid BEFORE doing anything
     try {
       if (!chrome || !chrome.runtime || !chrome.runtime.id) {
@@ -674,7 +972,7 @@
         console.log('Nimbus: chrome.runtime exists:', !!chrome.runtime);
         console.log('Nimbus: chrome.runtime.id:', chrome.runtime?.id);
         
-        chrome.runtime.sendMessage({ type: 'explain', word: wordInfo.word, context: wordInfo.context }, (resp) => {
+        chrome.runtime.sendMessage({ type: 'explain', word: wordInfo.word, context: wordInfo.context, detailed: true }, (resp) => {
         console.log('CursorIQ: ========== CALLBACK FIRED ==========');
         console.log('CursorIQ: Callback executed!');
         console.log('CursorIQ: Response received:', resp);
@@ -738,17 +1036,21 @@
         console.log('CursorIQ: About to call showTooltip with synonyms:', synonyms);
         console.log('CursorIQ: =======================================');
         
-        // Check if this is person, organization, or place data
+        // Person/place/org: open hub only. One explain fetch, one display — no tooltip (avoids duplicate and extra UI).
         if (resp.isPerson && resp.personData) {
-          // Open hub and pass person data
-          openHubWithPersonData(resp.personData, wordInfo.word);
+          removeTooltip();
+          openHubWithEntityData(resp.personData, wordInfo.word, 'person');
         } else if (resp.isOrganization && resp.organizationData) {
-          // Open hub and pass organization data
-          openHubWithPersonData(resp.organizationData, wordInfo.word);
+          removeTooltip();
+          openHubWithEntityData(resp.organizationData, wordInfo.word, 'organization');
         } else if (resp.isPlace && resp.placeData) {
-          // Open hub and pass place data
-          openHubWithPersonData(resp.placeData, wordInfo.word);
+          removeTooltip();
+          openHubWithEntityData(resp.placeData, wordInfo.word, 'place');
+        } else if (isAddress) {
+          // It's an address (not a place name entity) - show tooltip with map/search buttons
+          showTooltip(wordInfo, resp.explanation || selectedText, false, synonyms, resp.pronunciation, resp.examples || [], false, true);
         } else {
+          // Normal word definition
           showTooltip(wordInfo, resp.explanation || "No explanation returned.", false, synonyms, resp.pronunciation, resp.examples || []);
         }
         });
@@ -765,14 +1067,33 @@
           showTooltip(wordInfo, "Error: " + err.message, true);
         }
       }
+    }).catch((e) => {
+      console.error('Nimbus: checkSubscription failed', e);
+      showTooltip(wordInfo, "Error checking subscription. Please try again.", true);
     });
   }
 
   // Show upgrade prompt when subscription is not active - Branded subscribe tooltip with blue background
   function showUpgradePrompt(wordInfo) {
+    if (isDeveloperMode()) return;
+    // Check if we've shown the modal 3 times already
+    chrome.storage.local.get(['subscriptionModalShowCount'], (result) => {
+      const showCount = result.subscriptionModalShowCount || 0;
+      
+      // If already shown 3 times, don't show again
+      if (showCount >= 3) {
+        console.log('Nimbus: Subscription modal already shown 3 times, not showing again');
+        return;
+      }
+      
+      // Increment the counter
+      chrome.storage.local.set({ subscriptionModalShowCount: showCount + 1 }, () => {
+        console.log('Nimbus: Subscription modal show count:', showCount + 1);
+      });
+      
     // Create a proper branded subscribe tooltip with blue gradient background
     const tooltipContent = `
-      <div style="text-align: center; padding: 30px 25px; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%); border-radius: 12px;">
+        <div style="text-align: center; padding: 30px 25px; background: linear-gradient(135deg, #05007f 0%, #0a0a9e 30%, #1f7fff 60%, #4d9aff 100%); border-radius: 12px; position: relative;">
         <img src="${chrome.runtime.getURL('NimbusLogo.svg')}" alt="Nimbus" style="height: 36px; margin-bottom: 18px; filter: brightness(0) invert(1);" onerror="this.style.display='none'">
         <h3 style="margin: 0 0 12px 0; color: #ffffff; font-size: 20px; font-weight: 700;">Subscribe to Unlock</h3>
         <p style="margin: 0 0 8px 0; color: #e2e8f0; font-size: 14px; line-height: 1.6;">Get instant definitions, AI explanations, and context for any word or phrase</p>
@@ -780,10 +1101,10 @@
           <span style="color: #ffffff; font-size: 13px; font-weight: 600;">✨ 3-Day Free Trial</span>
         </div>
         <div style="background: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 18px; border-radius: 10px; margin-bottom: 22px; border: 1px solid rgba(255,255,255,0.2);">
-          <div style="font-size: 32px; font-weight: 700; color: #ffffff; margin-bottom: 5px;">£4.99</div>
+            <div style="font-size: 32px; font-weight: 700; color: #ffffff; margin-bottom: 5px;">£2.99</div>
           <div style="font-size: 13px; color: #cbd5e1;">per year</div>
         </div>
-        <button id="nimbus-upgrade-btn" style="background: #ffffff; color: #1e3a8a; border: none; padding: 14px 28px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600; width: 100%; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+        <button id="nimbus-upgrade-btn" style="background: #ffffff; color: #05007f; border: none; padding: 14px 28px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600; width: 100%; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
           Start Free Trial
         </button>
         <p style="margin: 18px 0 0 0; color: #94a3b8; font-size: 11px;">Click to open payment in extension</p>
@@ -819,16 +1140,31 @@
         });
       }
     }, 100);
+    });
   }
 
-  function showTooltip(wordInfo, text, isWarning=false, synonyms=[], pronunciation=null, examples=[], isHtml=false) {
+  function showTooltip(wordInfo, text, isWarning=false, synonyms=[], pronunciation=null, examples=[], isHtml=false, isLocation=false) {
     // Reset manually closed flag when showing new tooltip
     manuallyClosed = false;
+    stopAllAudio(); // Stop any playing audio when new tooltip appears
     removeTooltip();
     currentSynonyms = synonyms;
     
-    // Maintain the text selection highlight
-    maintainSelectionHighlight();
+    // Check if this is a location - if so, we'll show location buttons instead of word buttons
+    const detectedAsLocation = detectLocation(wordInfo.word || text || '');
+    
+    // Store the range for positioning (but don't clear selection yet - preserve native highlighting)
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      // Store the range for positioning if we have it
+      if (wordInfo.range) {
+        savedRange = wordInfo.range.cloneRange();
+      } else {
+        savedRange = selection.getRangeAt(0).cloneRange();
+      }
+      // Only clear visual selection AFTER tooltip is created and positioned
+      // This preserves native highlighting for normal use cases
+    }
     
     // Load settings (refresh in case they changed)
     loadModalSettings();
@@ -863,11 +1199,14 @@
       
       // Make modal draggable by clicking anywhere on it (but not on interactive elements)
       tooltipEl.addEventListener('mousedown', (e) => {
-        // Don't start drag if clicking on buttons, links, or interactive elements
+        // Don't start drag if clicking on buttons, links, selects, inputs, translate modal, or interactive elements
         if (e.target.tagName === 'BUTTON' || 
             e.target.tagName === 'A' || 
             e.target.closest('button') || 
             e.target.closest('a') ||
+            e.target.closest('select') ||
+            e.target.closest('input') ||
+            e.target.closest('.cursoriq-translate-modal') ||
             e.target.closest('.cursoriq-synonym-tag') ||
             e.target.closest('.cursoriq-explanation') ||
             e.target.closest('.cursoriq-example-item') ||
@@ -996,7 +1335,7 @@
     
     wordContainer.appendChild(wordWrapper);
     
-    // Button container for TTS and Copy buttons - stack them together
+    // Button container for TTS, Copy, and Location buttons
     const buttonContainer = document.createElement('div');
     buttonContainer.style.display = 'flex';
     buttonContainer.style.alignItems = 'center';
@@ -1004,22 +1343,22 @@
     buttonContainer.style.flexShrink = '0';
     buttonContainer.style.marginLeft = 'auto';
     
-    // Text-to-speech button
+    // Text-to-speech button (always show)
     const ttsBtn = document.createElement('button');
     ttsBtn.className = 'cursoriq-tts-btn';
     ttsBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"></path></svg>';
     ttsBtn.setAttribute('aria-label', 'Pronounce word');
     ttsBtn.setAttribute('title', 'Pronounce word');
-    ttsBtn.style.cssText = 'width: 28px; height: 28px; padding: 0; background: transparent; border: none; color: #64748b; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.7; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); flex-shrink: 0;';
+    ttsBtn.style.cssText = 'width: 28px; height: 28px; padding: 0; background: transparent; border: none; color: #94a3b8; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.9; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); flex-shrink: 0;';
     ttsBtn.addEventListener('mouseenter', () => {
       ttsBtn.style.opacity = '1';
-      ttsBtn.style.color = '#475569';
+      ttsBtn.style.color = '#e2e8f0';
       ttsBtn.style.transform = 'scale(1.1)';
     });
     ttsBtn.addEventListener('mouseleave', () => {
-      if (!ttsBtn.classList.contains('playing')) {
-        ttsBtn.style.opacity = '0.7';
-        ttsBtn.style.color = '#64748b';
+      if (!ttsBtn.classList.contains('playing') && !ttsBtn.classList.contains('paused')) {
+        ttsBtn.style.opacity = '0.9';
+        ttsBtn.style.color = '#94a3b8';
         ttsBtn.style.transform = 'scale(1)';
       }
     });
@@ -1027,24 +1366,38 @@
       e.stopPropagation();
       e.preventDefault();
       
-      if (ttsBtn.classList.contains('playing')) {
-        if (window.speechSynthesis) {
-          window.speechSynthesis.cancel();
-        }
+      if (!('speechSynthesis' in window)) {
+        console.warn('CursorIQ: Text-to-speech not supported');
+        return;
+      }
+      
+      // If playing, pause it (stop and show play icon)
+      if (audioState === 'playing') {
+        const wordToSpeak = currentWord || wordInfo.word;
+        window.speechSynthesis.cancel();
+        audioState = 'paused';
+        pausedText = wordToSpeak;
+        updateSoundButtonIcon(ttsBtn, 'paused');
         ttsBtn.classList.remove('playing');
-        ttsBtn.style.color = '#64748b';
+        ttsBtn.classList.add('paused');
+        ttsBtn.style.color = '#94a3b8';
+        ttsBtn.style.opacity = '0.9';
         ttsBtn.style.transform = 'scale(1)';
         return;
       }
       
+      // If paused, restart from beginning
+      if (audioState === 'paused' && pausedText) {
+        const wordToSpeak = pausedText;
+        pausedText = '';
+        
+        audioState = 'playing';
+        updateSoundButtonIcon(ttsBtn, 'playing');
       ttsBtn.classList.add('playing');
-      ttsBtn.style.color = '#1e3a8a';
+      ttsBtn.style.color = '#60a5fa';
       ttsBtn.style.opacity = '1';
       ttsBtn.style.transform = 'scale(1.15)';
       
-      const wordToSpeak = currentWord || wordInfo.word;
-      
-      if ('speechSynthesis' in window) {
         chrome.storage.local.get(['settings'], (result) => {
           const lang = result.settings?.dictionaryLanguage || 'en';
           const langMap = {
@@ -1054,55 +1407,93 @@
           };
           const langCode = langMap[lang] || 'en-US';
           
-          // Ensure voices are loaded before creating utterance
           const speakWithBestVoice = () => {
             const utterance = new SpeechSynthesisUtterance(wordToSpeak);
             utterance.lang = langCode;
-            
-            // Get the best available voice
             const bestVoice = getBestVoice(langCode);
             if (bestVoice) {
               utterance.voice = bestVoice;
-              utterance.lang = bestVoice.lang; // Use voice's native language
+              utterance.lang = bestVoice.lang;
             }
-            
-            // Optimize for smooth, lifelike speech
-            utterance.rate = 0.95; // Slightly slower for clarity and naturalness
-            utterance.pitch = 1.0; // Natural pitch
-            utterance.volume = 1.0; // Full volume
+            utterance.rate = 0.95;
+            utterance.pitch = 1.0;
+            utterance.volume = 1.0;
             
             utterance.onend = () => {
-              ttsBtn.classList.remove('playing');
-              ttsBtn.style.color = '#64748b';
-              ttsBtn.style.opacity = '0.7';
-              ttsBtn.style.transform = 'scale(1)';
+              stopAllAudio();
+              updateSoundButtonIcon(ttsBtn, 'idle');
             };
             
             utterance.onerror = () => {
-              ttsBtn.classList.remove('playing');
-              ttsBtn.style.color = '#64748b';
-              ttsBtn.style.opacity = '0.7';
-              ttsBtn.style.transform = 'scale(1)';
+              stopAllAudio();
+              updateSoundButtonIcon(ttsBtn, 'idle');
             };
             
+            currentUtterance = utterance;
             window.speechSynthesis.speak(utterance);
           };
           
-          // Load voices if needed
           if (window.speechSynthesis.getVoices().length === 0) {
             window.speechSynthesis.addEventListener('voiceschanged', speakWithBestVoice, { once: true });
-            // Trigger voices loading
             window.speechSynthesis.getVoices();
           } else {
             speakWithBestVoice();
           }
         });
-      } else {
-        console.warn('CursorIQ: Text-to-speech not supported');
-        ttsBtn.classList.remove('playing');
-        ttsBtn.style.color = '#64748b';
-        ttsBtn.style.transform = 'scale(1)';
+        return;
       }
+      
+      // Start playing
+      const wordToSpeak = currentWord || wordInfo.word;
+      audioState = 'playing';
+      updateSoundButtonIcon(ttsBtn, 'playing');
+      ttsBtn.classList.add('playing');
+      ttsBtn.style.color = '#60a5fa';
+      ttsBtn.style.opacity = '1';
+      ttsBtn.style.transform = 'scale(1.15)';
+      
+      chrome.storage.local.get(['settings'], (result) => {
+        const lang = result.settings?.dictionaryLanguage || 'en';
+        const langMap = {
+          'en': 'en-US', 'es': 'es-ES', 'fr': 'fr-FR', 'de': 'de-DE', 'it': 'it-IT',
+          'pt': 'pt-PT', 'ru': 'ru-RU', 'ja': 'ja-JP', 'zh': 'zh-CN', 'ko': 'ko-KR',
+          'ar': 'ar-SA', 'hi': 'hi-IN', 'nl': 'nl-NL', 'sv': 'sv-SE', 'pl': 'pl-PL'
+        };
+        const langCode = langMap[lang] || 'en-US';
+        
+        const speakWithBestVoice = () => {
+          const utterance = new SpeechSynthesisUtterance(wordToSpeak);
+          utterance.lang = langCode;
+          const bestVoice = getBestVoice(langCode);
+          if (bestVoice) {
+            utterance.voice = bestVoice;
+            utterance.lang = bestVoice.lang;
+          }
+          utterance.rate = 0.95;
+          utterance.pitch = 1.0;
+          utterance.volume = 1.0;
+          
+          utterance.onend = () => {
+            stopAllAudio();
+            updateSoundButtonIcon(ttsBtn, 'idle');
+          };
+          
+          utterance.onerror = () => {
+            stopAllAudio();
+            updateSoundButtonIcon(ttsBtn, 'idle');
+          };
+          
+          currentUtterance = utterance;
+          window.speechSynthesis.speak(utterance);
+        };
+        
+        if (window.speechSynthesis.getVoices().length === 0) {
+          window.speechSynthesis.addEventListener('voiceschanged', speakWithBestVoice, { once: true });
+          window.speechSynthesis.getVoices();
+      } else {
+          speakWithBestVoice();
+      }
+      });
     });
     buttonContainer.appendChild(ttsBtn);
     
@@ -1150,13 +1541,129 @@
     });
     buttonContainer.appendChild(copyBtn);
     
+    // Translate button (replaces Save for later; Favorites used for words)
+    const translateBtn = document.createElement('button');
+    translateBtn.className = 'cursoriq-translate-btn';
+    translateBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>';
+    translateBtn.setAttribute('aria-label', 'Translate');
+    translateBtn.setAttribute('title', 'Translate');
+    translateBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const expl = tooltipEl.querySelector('.cursoriq-explanation');
+      if (!expl) return;
+      const cont = expl.parentElement;
+      const toHide = tooltipEl.querySelectorAll('.cursoriq-examples-container, .cursoriq-synonyms-container, .cursoriq-actions');
+      const contOriginal = cont.innerHTML;
+      toHide.forEach((el) => { el.style.display = 'none'; });
+      const modalEl = createTranslateModal({
+        defaultFrom: 'auto',
+        defaultTo: 'en',
+        onCancel: () => {
+          cont.innerHTML = contOriginal;
+          toHide.forEach((el) => { el.style.display = ''; });
+        },
+        onTranslate: (src, tgt) => {
+          const text = (currentWord || wordInfo.word || '').trim();
+          if (text.length >= 500) {
+            openInGoogleTranslate(text, src, tgt, () => {
+              cont.innerHTML = contOriginal;
+              toHide.forEach((el) => { el.style.display = ''; });
+            });
+            return;
+          }
+          cont.removeChild(modalEl);
+          const loading = document.createElement('div');
+          loading.className = 'cursoriq-summary-loading';
+          loading.textContent = 'Translating…';
+          cont.appendChild(loading);
+          chrome.runtime.sendMessage({ type: 'translate', text, source: src, target: tgt }, (resp) => {
+            if (resp && resp.error && isQueryLengthError(resp.error)) {
+              openInGoogleTranslate(text, src, tgt, () => {
+                cont.removeChild(loading);
+                cont.innerHTML = contOriginal;
+                toHide.forEach((el) => { el.style.display = ''; });
+              });
+              return;
+            }
+            if (chrome.runtime.lastError) {
+              loading.textContent = 'Error: ' + (chrome.runtime.lastError.message || 'Connection error');
+              return;
+            }
+            if (resp && resp.error) {
+              loading.textContent = 'Error: ' + resp.error;
+              return;
+            }
+            const tr = (resp && resp.translation != null) ? resp.translation : (currentWord || wordInfo.word || '');
+            cont.removeChild(loading);
+            const wrap = document.createElement('div');
+            wrap.className = 'cursoriq-summary-wrap';
+            const resultText = document.createElement('div');
+            resultText.className = 'cursoriq-summary-text';
+            resultText.textContent = tr;
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'cursoriq-summary-copy';
+            copyBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+            copyBtn.setAttribute('aria-label', 'Copy');
+            copyBtn.setAttribute('title', 'Copy');
+            copyBtn.addEventListener('click', () => {
+              navigator.clipboard.writeText(tr).catch(() => {});
+              copyBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+              copyBtn.setAttribute('aria-label', 'Copied');
+              setTimeout(() => {
+                copyBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+                copyBtn.setAttribute('aria-label', 'Copy');
+              }, 800);
+            });
+            wrap.appendChild(resultText);
+            wrap.appendChild(copyBtn);
+            cont.appendChild(wrap);
+          });
+        }
+      });
+      cont.innerHTML = '';
+      cont.appendChild(modalEl);
+      chrome.storage.local.get(['settings'], (r) => {
+        const to = r.settings?.dictionaryLanguage || 'en';
+        const toDd = modalEl.querySelector('[data-role="to-dd"]');
+        if (toDd) {
+          toDd.dataset.value = to;
+          const t = toDd.querySelector('.cursoriq-translate-dropdown-text');
+          if (t) t.textContent = TRANSLATE_LANGS_TO.find((x) => x.v === to)?.l || 'English';
+        }
+      });
+    });
+    buttonContainer.appendChild(translateBtn);
+    
+    // If it's a specific location (address), add map button only (map = Google Maps; copy already in row)
+    if (detectedAsLocation) {
+      const mapBtn = document.createElement('button');
+      mapBtn.className = 'cursoriq-map-btn';
+      mapBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>';
+      mapBtn.setAttribute('aria-label', 'View on Google Maps');
+      mapBtn.setAttribute('title', 'View on Google Maps');
+      mapBtn.style.cssText = 'width: 28px; height: 28px; padding: 0; background: transparent; border: none; color: #60a5fa; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.9; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); flex-shrink: 0;';
+      mapBtn.addEventListener('mouseenter', () => { mapBtn.style.opacity = '1'; mapBtn.style.transform = 'scale(1.1)'; });
+      mapBtn.addEventListener('mouseleave', () => { mapBtn.style.opacity = '0.7'; mapBtn.style.transform = 'scale(1)'; });
+      mapBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(currentWord || wordInfo.word)}`;
+        chrome.runtime.sendMessage({ type: 'openTab', url: mapsUrl }, () => {});
+        removeTooltip();
+        const sel = window.getSelection();
+        if (sel) sel.removeAllRanges();
+      });
+      buttonContainer.appendChild(mapBtn);
+    }
+    
     wordContainer.appendChild(buttonContainer);
     
     // For HTML content (subscribe prompt), don't show header - just show the content with blue background
     if (isHtml) {
       // Skip header for subscribe prompts - show content directly
       // Override tooltip background to blue gradient for subscribe prompts
-      tooltipEl.style.background = 'linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%) !important';
+      tooltipEl.style.background = 'radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a !important';
       tooltipEl.style.border = 'none !important';
       tooltipEl.style.boxShadow = '0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1) !important';
       
@@ -1165,15 +1672,48 @@
       contentDiv.style.padding = '0';
       contentDiv.style.margin = '0';
       tooltipEl.appendChild(contentDiv);
+      
+      // Add close button for subscription modal
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'cursoriq-close-btn';
+      closeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+      closeBtn.setAttribute('aria-label', 'Close');
+      closeBtn.style.cssText = 'position: absolute; top: 12px; right: 12px; width: 32px; height: 32px; padding: 0; background: rgba(255, 255, 255, 0.2); border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 8px; color: #ffffff; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.8; transition: all 0.2s ease; z-index: 1000;';
+      closeBtn.addEventListener('mouseenter', () => {
+        closeBtn.style.opacity = '1';
+        closeBtn.style.background = 'rgba(255, 255, 255, 0.3)';
+        closeBtn.style.transform = 'scale(1.1)';
+      });
+      closeBtn.addEventListener('mouseleave', () => {
+        closeBtn.style.opacity = '0.8';
+        closeBtn.style.background = 'rgba(255, 255, 255, 0.2)';
+        closeBtn.style.transform = 'scale(1)';
+      });
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        manuallyClosed = true;
+        if (selectionTimer) {
+          clearTimeout(selectionTimer);
+          selectionTimer = null;
+        }
+        removeTooltip();
+        const selection = window.getSelection();
+        if (selection) {
+          selection.removeAllRanges();
+        }
+      });
+      tooltipEl.appendChild(closeBtn);
     } else {
       // Normal tooltip - show header and explanation
       header.appendChild(wordContainer);
       tooltipEl.appendChild(header);
 
-      // Main explanation text container
+      // Main explanation text container (skip for locations)
+      if (!detectedAsLocation && text) {
       const explanationContainer = document.createElement('div');
       explanationContainer.style.position = 'relative';
-      explanationContainer.style.padding = '0 18px 16px';
+      explanationContainer.style.padding = '16px 18px 16px';
       
       const textDiv = document.createElement('div');
       textDiv.className = 'cursoriq-explanation';
@@ -1183,50 +1723,25 @@
       textDiv.style.mozUserSelect = 'text';
       textDiv.style.msUserSelect = 'text';
       textDiv.style.cursor = 'text';
-      textDiv.style.padding = '0 36px 0 0'; // Add right padding to prevent text from going under copy button
+      textDiv.style.padding = '0 36px 0 0';
       textDiv.style.margin = '0';
       explanationContainer.appendChild(textDiv);
     
-      // Add copy button for explanation text
       const copyExplanationBtn = document.createElement('button');
       copyExplanationBtn.className = 'cursoriq-copy-explanation-btn';
       copyExplanationBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path></svg>';
       copyExplanationBtn.setAttribute('aria-label', 'Copy explanation');
       copyExplanationBtn.setAttribute('title', 'Copy explanation');
-      copyExplanationBtn.style.cssText = 'position: absolute; top: 0; right: 18px; width: 24px; height: 24px; padding: 0; background: rgba(241, 245, 249, 0.8); border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 6px; color: #64748b; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.7; transition: all 0.2s ease; z-index: 10;';
-      copyExplanationBtn.addEventListener('mouseenter', () => {
-        copyExplanationBtn.style.opacity = '1';
-        copyExplanationBtn.style.background = 'rgba(241, 245, 249, 1)';
-        copyExplanationBtn.style.borderColor = '#cbd5e1';
-      });
-      copyExplanationBtn.addEventListener('mouseleave', () => {
-        if (!copyExplanationBtn.classList.contains('copied')) {
-          copyExplanationBtn.style.opacity = '0.7';
-          copyExplanationBtn.style.background = 'rgba(241, 245, 249, 0.8)';
-          copyExplanationBtn.style.borderColor = 'rgba(226, 232, 240, 0.8)';
-        }
-      });
       copyExplanationBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         e.preventDefault();
-        // Only handle if this is our button from our modal
         if (!tooltipEl || !tooltipEl.contains(e.target)) return;
-        
         copyExplanationBtn.classList.add('copied');
-        copyExplanationBtn.style.color = '#10b981';
-        copyExplanationBtn.style.opacity = '1';
-        
-        // Get current text from the explanation div by querying the DOM
         const explanationDivCurrent = tooltipEl.querySelector('.cursoriq-explanation');
         const currentText = explanationDivCurrent ? explanationDivCurrent.textContent.trim() : text;
-        
-        console.log('CursorIQ: Copying explanation text:', currentText.substring(0, 50) + '...');
-        
         try {
           await navigator.clipboard.writeText(currentText);
         } catch (err) {
-          console.error('CursorIQ: Failed to copy explanation', err);
-          // Fallback for older browsers
           const textArea = document.createElement('textarea');
           textArea.value = currentText;
           textArea.style.position = 'fixed';
@@ -1234,22 +1749,14 @@
           textArea.style.pointerEvents = 'none';
           document.body.appendChild(textArea);
           textArea.select();
-          try {
-            document.execCommand('copy');
-          } catch (e) {
-            console.error('CursorIQ: Fallback copy failed', e);
-          }
+          try { document.execCommand('copy'); } catch (_) {}
           document.body.removeChild(textArea);
         }
-        
-        setTimeout(() => {
-          copyExplanationBtn.classList.remove('copied');
-          copyExplanationBtn.style.color = '#64748b';
-          copyExplanationBtn.style.opacity = '0.7';
-        }, 2000);
+        setTimeout(() => copyExplanationBtn.classList.remove('copied'), 2000);
       });
       explanationContainer.appendChild(copyExplanationBtn);
       tooltipEl.appendChild(explanationContainer);
+      }
     }
 
     // Examples section (if available and setting enabled)
@@ -1338,47 +1845,37 @@
       updateFavoriteButtonIcon(favBtn, currentWord || wordInfo.word);
     }
 
-    document.body.appendChild(tooltipEl);
+    setFloatingToolbarVisible(false);
+    getTooltipRoot().body.appendChild(tooltipEl);
 
     // Position tooltip based on settings
     positionTooltip(wordInfo);
+    
+    // Clear selection AFTER tooltip is created and positioned (preserves native highlighting until now)
+    setTimeout(() => {
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount > 0) {
+        selection.removeAllRanges();
+      }
+    }, 50); // Small delay to ensure tooltip is fully rendered
   }
   
   // Show icon-only modal for text selections over 2 words (3+ words)
   function showIconOnlyModal(selectedText, range) {
     manuallyClosed = false;
+    stopAllAudio(); // Stop any playing audio when new modal appears
     removeTooltip();
     
-    // Save the range for visual highlight only (don't restore selection programmatically)
+    // Check if selection is a location - if so, show location tooltip instead
+    const isLocation = detectLocation(selectedText);
+    if (isLocation) {
+      showLocationTooltip(selectedText, range);
+      return;
+    }
+    
+    // Save the range for tooltip positioning (Chrome's native selection handles highlighting)
     if (range) {
       savedRange = range.cloneRange();
-      // Create visual highlight overlay without restoring selection
-      try {
-        const rect = savedRange.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          // Remove any existing overlay first
-          if (highlightOverlay) {
-            highlightOverlay.remove();
-            highlightOverlay = null;
-          }
-          
-          highlightOverlay = document.createElement('div');
-          highlightOverlay.style.position = 'fixed';
-          highlightOverlay.style.left = rect.left + window.scrollX + 'px';
-          highlightOverlay.style.top = rect.top + window.scrollY + 'px';
-          highlightOverlay.style.width = rect.width + 'px';
-          highlightOverlay.style.height = rect.height + 'px';
-          highlightOverlay.style.backgroundColor = 'rgba(59, 130, 246, 0.3)'; // Blue highlight
-          highlightOverlay.style.pointerEvents = 'none'; // Critical: don't block clicks
-          highlightOverlay.style.zIndex = '2147483646'; // Just below tooltip
-          highlightOverlay.style.borderRadius = '2px';
-          highlightOverlay.className = 'cursoriq-highlight-overlay';
-          document.body.appendChild(highlightOverlay);
-        }
-      } catch (err) {
-        // If range is invalid, clear saved range
-        savedRange = null;
-      }
     }
     
     // Load settings for positioning
@@ -1429,7 +1926,7 @@
     // Copy button
     const copyBtn = document.createElement('button');
     copyBtn.className = 'cursoriq-icon-btn cursoriq-copy-icon-btn';
-    copyBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1e3a8a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    copyBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
     copyBtn.setAttribute('aria-label', 'Copy text');
     copyBtn.setAttribute('title', 'Copy text');
     copyBtn.addEventListener('click', async (e) => {
@@ -1464,10 +1961,134 @@
     });
     buttonsContainer.appendChild(copyBtn);
     
+    // Summarize button
+    const sumBtn = document.createElement('button');
+    sumBtn.className = 'cursoriq-icon-btn';
+    sumBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>';
+    sumBtn.setAttribute('aria-label', 'Summarize');
+    sumBtn.setAttribute('title', 'Summarize');
+    sumBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (!tooltipEl || !tooltipEl.contains(e.target)) return;
+      const loadingDiv = document.createElement('div');
+      loadingDiv.className = 'cursoriq-summary-loading';
+      loadingDiv.textContent = 'Summarizing…';
+      tooltipEl.replaceChild(loadingDiv, buttonsContainer);
+      chrome.runtime.sendMessage({ type: 'summarize', text: selectedText }, (resp) => {
+        if (chrome.runtime.lastError) {
+          loadingDiv.textContent = 'Error: ' + (chrome.runtime.lastError.message || 'Connection error');
+          return;
+        }
+        if (resp && resp.error) {
+          loadingDiv.textContent = 'Error: ' + resp.error;
+          return;
+        }
+        const wrap = document.createElement('div');
+        wrap.className = 'cursoriq-summary-wrap';
+        const resultText = document.createElement('div');
+        resultText.className = 'cursoriq-summary-text';
+        resultText.textContent = resp.explanation || 'No summary generated.';
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'cursoriq-summary-copy';
+        copyBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+        copyBtn.setAttribute('aria-label', 'Copy');
+        copyBtn.setAttribute('title', 'Copy');
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(resultText.textContent).catch(() => {});
+          copyBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+          copyBtn.setAttribute('aria-label', 'Copied');
+          setTimeout(() => {
+            copyBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+            copyBtn.setAttribute('aria-label', 'Copy');
+          }, 800);
+        });
+        wrap.appendChild(resultText);
+        wrap.appendChild(copyBtn);
+        tooltipEl.replaceChild(wrap, loadingDiv);
+      });
+    });
+    buttonsContainer.appendChild(sumBtn);
+    
+    // Translate button — opens from/to modal under tooltip, then translates
+    const translateBtn = document.createElement('button');
+    translateBtn.className = 'cursoriq-icon-btn';
+    translateBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>';
+    translateBtn.setAttribute('aria-label', 'Translate');
+    translateBtn.setAttribute('title', 'Translate');
+    translateBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (!tooltipEl || !tooltipEl.contains(e.target)) return;
+      const modalEl = createTranslateModal({
+        defaultFrom: 'auto',
+        defaultTo: 'en',
+        onCancel: () => { tooltipEl.replaceChild(buttonsContainer, modalEl); },
+        onTranslate: (src, tgt) => {
+          const text = selectedText;
+          if (text.length >= 500) {
+            openInGoogleTranslate(text, src, tgt, () => { tooltipEl.replaceChild(buttonsContainer, modalEl); });
+            return;
+          }
+          const loadingDiv = document.createElement('div');
+          loadingDiv.className = 'cursoriq-summary-loading';
+          loadingDiv.textContent = 'Translating…';
+          tooltipEl.replaceChild(loadingDiv, modalEl);
+          chrome.runtime.sendMessage({ type: 'translate', text, source: src, target: tgt }, (resp) => {
+            if (resp && resp.error && isQueryLengthError(resp.error)) {
+              openInGoogleTranslate(text, src, tgt, () => { tooltipEl.replaceChild(buttonsContainer, loadingDiv); });
+              return;
+            }
+            if (chrome.runtime.lastError) {
+              loadingDiv.textContent = 'Error: ' + (chrome.runtime.lastError.message || 'Connection error');
+              return;
+            }
+            if (resp && resp.error) {
+              loadingDiv.textContent = 'Error: ' + resp.error;
+              return;
+            }
+            const wrap = document.createElement('div');
+            wrap.className = 'cursoriq-summary-wrap';
+            const resultText = document.createElement('div');
+            resultText.className = 'cursoriq-summary-text';
+            resultText.textContent = (resp && resp.translation != null) ? resp.translation : selectedText;
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'cursoriq-summary-copy';
+            copyBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+            copyBtn.setAttribute('aria-label', 'Copy');
+            copyBtn.setAttribute('title', 'Copy');
+            copyBtn.addEventListener('click', () => {
+              navigator.clipboard.writeText(resultText.textContent).catch(() => {});
+              copyBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
+              copyBtn.setAttribute('aria-label', 'Copied');
+              setTimeout(() => {
+                copyBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+                copyBtn.setAttribute('aria-label', 'Copy');
+              }, 800);
+            });
+            wrap.appendChild(resultText);
+            wrap.appendChild(copyBtn);
+            tooltipEl.replaceChild(wrap, loadingDiv);
+          });
+        }
+      });
+      tooltipEl.replaceChild(modalEl, buttonsContainer);
+      chrome.storage.local.get(['settings'], (r) => {
+        const to = r.settings?.dictionaryLanguage || 'en';
+        const toDd = modalEl.querySelector('[data-role="to-dd"]');
+        if (toDd) {
+          toDd.dataset.value = to;
+          const t = toDd.querySelector('.cursoriq-translate-dropdown-text');
+          if (t) t.textContent = TRANSLATE_LANGS_TO.find((x) => x.v === to)?.l || 'English';
+        }
+      });
+    });
+    buttonsContainer.appendChild(translateBtn);
+    
     // Sound/TTS button
     const soundBtn = document.createElement('button');
     soundBtn.className = 'cursoriq-icon-btn cursoriq-tts-icon-btn';
-    soundBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1e3a8a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>';
+    soundBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>';
     soundBtn.setAttribute('aria-label', 'Read aloud');
     soundBtn.setAttribute('title', 'Read aloud');
     soundBtn.addEventListener('click', async (e) => {
@@ -1476,56 +2097,108 @@
       // Only handle if this is our button from our modal
       if (!tooltipEl || !tooltipEl.contains(e.target)) return;
       
-      if ('speechSynthesis' in window) {
-        // Stop any current speech
+      if (!('speechSynthesis' in window)) {
+        console.warn('CursorIQ: Text-to-speech not supported');
+        return;
+      }
+      
+      // If playing, pause it (stop and show play icon)
+      if (audioState === 'playing') {
         window.speechSynthesis.cancel();
+        audioState = 'paused';
+        pausedText = selectedText;
+        updateSoundButtonIcon(soundBtn, 'paused');
+        soundBtn.classList.remove('playing');
+        soundBtn.classList.add('paused');
+        soundBtn.style.color = '';
+        soundBtn.style.transform = '';
+        return;
+      }
+      
+      // If paused, restart from beginning
+      if (audioState === 'paused' && pausedText) {
+        const textToSpeak = pausedText;
+        pausedText = '';
         
+        audioState = 'playing';
+        updateSoundButtonIcon(soundBtn, 'playing');
         soundBtn.classList.add('playing');
-        soundBtn.style.color = '#1e3a8a';
+        soundBtn.style.color = '#60a5fa';
         soundBtn.style.transform = 'scale(1.1)';
         
-        // Ensure voices are loaded before creating utterance
         const speakWithBestVoice = () => {
-          const utterance = new SpeechSynthesisUtterance(selectedText);
+          const utterance = new SpeechSynthesisUtterance(textToSpeak);
           utterance.lang = 'en-US';
-          
-          // Get the best available voice
           const bestVoice = getBestVoice('en-US');
           if (bestVoice) {
             utterance.voice = bestVoice;
-            utterance.lang = bestVoice.lang; // Use voice's native language
+            utterance.lang = bestVoice.lang;
           }
-          
-          // Optimize for smooth, lifelike speech
-          utterance.rate = 0.95; // Slightly slower for clarity and naturalness
-          utterance.pitch = 1.0; // Natural pitch
-          utterance.volume = 1.0; // Full volume
+          utterance.rate = 0.95;
+          utterance.pitch = 1.0;
+          utterance.volume = 1.0;
           
           utterance.onend = () => {
-            soundBtn.classList.remove('playing');
-            soundBtn.style.color = '';
-            soundBtn.style.transform = '';
+            stopAllAudio();
+            updateSoundButtonIcon(soundBtn, 'idle');
           };
           
           utterance.onerror = () => {
-            soundBtn.classList.remove('playing');
-            soundBtn.style.color = '';
-            soundBtn.style.transform = '';
+            stopAllAudio();
+            updateSoundButtonIcon(soundBtn, 'idle');
           };
           
+          currentUtterance = utterance;
           window.speechSynthesis.speak(utterance);
         };
         
-        // Load voices if needed
         if (window.speechSynthesis.getVoices().length === 0) {
           window.speechSynthesis.addEventListener('voiceschanged', speakWithBestVoice, { once: true });
-          // Trigger voices loading
           window.speechSynthesis.getVoices();
         } else {
           speakWithBestVoice();
         }
+        return;
+      }
+      
+      // Start playing
+      audioState = 'playing';
+      updateSoundButtonIcon(soundBtn, 'playing');
+      soundBtn.classList.add('playing');
+      soundBtn.style.color = '#60a5fa';
+      soundBtn.style.transform = 'scale(1.1)';
+      
+      const speakWithBestVoice = () => {
+        const utterance = new SpeechSynthesisUtterance(selectedText);
+        utterance.lang = 'en-US';
+        const bestVoice = getBestVoice('en-US');
+        if (bestVoice) {
+          utterance.voice = bestVoice;
+          utterance.lang = bestVoice.lang;
+        }
+        utterance.rate = 0.95;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+        
+        utterance.onend = () => {
+          stopAllAudio();
+          updateSoundButtonIcon(soundBtn, 'idle');
+        };
+        
+        utterance.onerror = () => {
+          stopAllAudio();
+          updateSoundButtonIcon(soundBtn, 'idle');
+        };
+        
+        currentUtterance = utterance;
+        window.speechSynthesis.speak(utterance);
+      };
+      
+      if (window.speechSynthesis.getVoices().length === 0) {
+        window.speechSynthesis.addEventListener('voiceschanged', speakWithBestVoice, { once: true });
+        window.speechSynthesis.getVoices();
       } else {
-        console.warn('CursorIQ: Text-to-speech not supported');
+        speakWithBestVoice();
       }
     });
     buttonsContainer.appendChild(soundBtn);
@@ -1538,7 +2211,7 @@
     aiIconImg.style.width = '20px';
     aiIconImg.style.height = '20px';
     aiIconImg.style.display = 'block';
-    aiIconImg.style.filter = 'none';
+    aiIconImg.style.filter = 'brightness(0) invert(1)';
     aiIconImg.style.margin = 'auto';
     aiIconImg.style.objectFit = 'contain';
     searchBtn.appendChild(aiIconImg);
@@ -1550,39 +2223,105 @@
       // Only handle if this is our button from our modal
       if (!tooltipEl || !tooltipEl.contains(e.target)) return;
       
-      // Store search term and open hub
       const searchTerm = selectedText.trim();
-      console.log('Nimbus: Setting pending search:', searchTerm);
+      
+      // Show thinking/loading until the hub has consumed pendingSearch and is ready
+      const loadingDiv = document.createElement('div');
+      loadingDiv.className = 'cursoriq-summary-loading';
+      loadingDiv.textContent = 'Thinking…';
+      tooltipEl.replaceChild(loadingDiv, buttonsContainer);
+      
+      let cleaned = false;
+      let timeoutId;
+      
+      function cleanup() {
+        if (cleaned) return;
+        cleaned = true;
+        try { chrome.storage.onChanged.removeListener(onStorageChange); } catch (_) {}
+        if (timeoutId) clearTimeout(timeoutId);
+        removeTooltip();
+      }
+      
+      function onStorageChange(changes, areaName) {
+        if (areaName !== 'local' || !changes.pendingSearch) return;
+        // pendingSearch was removed — hub has consumed it and AI page is ready
+        if (changes.pendingSearch.oldValue != null && (changes.pendingSearch.newValue === undefined || changes.pendingSearch.newValue === null)) {
+          cleanup();
+        }
+      }
+      
+      chrome.storage.onChanged.addListener(onStorageChange);
       
       chrome.storage.local.set({
-        pendingSearch: {
-          type: 'search',
-          term: searchTerm
-        }
+        pendingSearch: { type: 'search', term: searchTerm }
       }, () => {
-        console.log('Nimbus: Pending search set, attempting to open popup');
-        // Try to open the popup
-        chrome.runtime.sendMessage({
-          action: 'openPopup'
-        }, (response) => {
-          if (chrome.runtime.lastError) {
-            console.log('Nimbus: Could not open popup automatically, user will need to open manually');
-          } else {
-            console.log('Nimbus: Popup open message sent');
-          }
-        });
+        chrome.runtime.sendMessage({ action: 'openPopup' }, () => {});
       });
       
-      // Close the modal
-      removeTooltip();
+      // Fallback: close after 3s if hub didn't consume (e.g. popup didn't open)
+      timeoutId = setTimeout(cleanup, 3000);
     });
     buttonsContainer.appendChild(searchBtn);
     
     tooltipEl.appendChild(buttonsContainer);
-    document.body.appendChild(tooltipEl);
+    
+    // Make icon-only modal draggable (same as 1–2 word tooltip)
+    if (modalSettings.draggable || modalSettings.placement === 'custom') {
+      tooltipEl.style.cursor = 'move';
+      let startX, startY, initialX, initialY;
+      tooltipEl.addEventListener('mousedown', (e) => {
+        if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A' ||
+            e.target.closest('button') || e.target.closest('a') ||
+            e.target.closest('select') || e.target.closest('input') ||
+            e.target.closest('.cursoriq-translate-modal') ||
+            e.target.closest('.cursoriq-icon-btn') || e.target.closest('.cursoriq-close-btn') ||
+            e.target.closest('.cursoriq-summary-wrap')) return;
+        const sel = window.getSelection();
+        if (sel && sel.toString().length > 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        isDragging = true;
+        tooltipEl.style.cursor = 'grabbing';
+        const rect = tooltipEl.getBoundingClientRect();
+        startX = e.clientX; startY = e.clientY;
+        initialX = rect.left; initialY = rect.top;
+        document.addEventListener('mousemove', onIconModalDrag);
+        document.addEventListener('mouseup', onIconModalStopDrag);
+      });
+      function onIconModalDrag(e) {
+        if (!isDragging || !tooltipEl || !tooltipEl.parentNode) return;
+        e.preventDefault();
+        const dx = e.clientX - startX, dy = e.clientY - startY;
+        let nx = initialX + dx, ny = initialY + dy;
+        const maxX = window.innerWidth - tooltipEl.offsetWidth, maxY = window.innerHeight - tooltipEl.offsetHeight;
+        nx = Math.max(0, Math.min(nx, maxX)); ny = Math.max(0, Math.min(ny, maxY));
+        tooltipEl.style.left = nx + 'px'; tooltipEl.style.top = ny + 'px';
+        tooltipEl.style.position = 'fixed'; tooltipEl.style.transform = 'none'; tooltipEl.style.margin = '0';
+      }
+      function onIconModalStopDrag() {
+        isDragging = false;
+        if (tooltipEl) tooltipEl.style.cursor = 'move';
+        document.removeEventListener('mousemove', onIconModalDrag);
+        document.removeEventListener('mouseup', onIconModalStopDrag);
+        if (tooltipEl && tooltipEl.style.position === 'fixed' && modalSettings.placement === 'custom') {
+          chrome.storage.local.set({ modalPosition: { x: parseInt(tooltipEl.style.left) || 0, y: parseInt(tooltipEl.style.top) || 0 } });
+        }
+      }
+    }
+    
+    setFloatingToolbarVisible(false);
+    getTooltipRoot().body.appendChild(tooltipEl);
     
     // Position tooltip
     positionTooltip({ range: range });
+    
+    // Clear selection AFTER tooltip is created and positioned (preserves native highlighting until now)
+    setTimeout(() => {
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount > 0) {
+        selection.removeAllRanges();
+      }
+    }, 50); // Small delay to ensure tooltip is fully rendered
   }
   
   // Show email modal (simplified version for email addresses)
@@ -1692,21 +2431,40 @@
     
     tooltipEl.appendChild(actionsDiv);
     
-    // Append to body
-    document.body.appendChild(tooltipEl);
+    setFloatingToolbarVisible(false);
+    getTooltipRoot().body.appendChild(tooltipEl);
     
     // Position the email modal
     positionEmailModal(email, range);
+    
+    // Clear selection AFTER tooltip is created and positioned (preserves native highlighting until now)
+    setTimeout(() => {
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount > 0) {
+        selection.removeAllRanges();
+      }
+    }, 50); // Small delay to ensure tooltip is fully rendered
   }
   
   // Position email modal (similar to positionTooltip but simpler)
   function positionEmailModal(email, range) {
     if (!tooltipEl || !range) return;
     
-    const rect = range.getBoundingClientRect();
+    const root = getTooltipRoot();
+    let rect = range.getBoundingClientRect();
+    if (root.inIframe) {
+      rect = {
+        left: rect.left + root.frameOffset.left,
+        top: rect.top + root.frameOffset.top,
+        right: rect.right + root.frameOffset.left,
+        bottom: rect.bottom + root.frameOffset.top,
+        width: rect.width,
+        height: rect.height
+      };
+    }
     const tooltipRect = tooltipEl.getBoundingClientRect();
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
+    const viewportWidth = root.viewport.w;
+    const viewportHeight = root.viewport.h;
     
     let left, top;
     
@@ -1780,20 +2538,31 @@
       }
       
       if (!rect) {
-        rect = { left: 100, top: 100, height: 20, width: 40 };
+        rect = { left: 100, top: 100, height: 20, width: 40, right: 140, bottom: 120 };
       }
       
-      performPlacementPositioning(wordInfo, rect);
+      const root = getTooltipRoot();
+      if (root.inIframe) {
+        rect = {
+          left: rect.left + root.frameOffset.left,
+          top: rect.top + root.frameOffset.top,
+          right: (rect.right != null ? rect.right : rect.left + rect.width) + root.frameOffset.left,
+          bottom: (rect.bottom != null ? rect.bottom : rect.top + rect.height) + root.frameOffset.top,
+          width: rect.width,
+          height: rect.height
+        };
+      }
+      performPlacementPositioning(wordInfo, rect, root.viewport);
     });
   }
   
-  function performPlacementPositioning(wordInfo, rect) {
+  function performPlacementPositioning(wordInfo, rect, viewport) {
     const padding = 12;
     const tooltipWidth = 420; // max-width from CSS
     const tooltipHeight = 250; // estimated height
     
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
+    const viewportWidth = viewport ? viewport.w : window.innerWidth;
+    const viewportHeight = viewport ? viewport.h : window.innerHeight;
     
     let left, top;
     
@@ -1929,78 +2698,72 @@
     });
   }
 
-  // Function to maintain text selection highlight
-  function maintainSelectionHighlight() {
-    // Remove any existing highlight overlay
-    if (highlightOverlay) {
-      highlightOverlay.remove();
-      highlightOverlay = null;
+
+  // Stop all audio playback
+  function stopAllAudio() {
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
     }
+    currentUtterance = null;
+    audioState = 'idle';
+    pausedText = '';
+    // Reset all sound button states
+    const allSoundBtns = document.querySelectorAll('.cursoriq-tts-btn, .cursoriq-tts-icon-btn');
+    allSoundBtns.forEach(btn => {
+      btn.classList.remove('playing', 'paused');
+      btn.style.color = '';
+      btn.style.opacity = '';
+      btn.style.transform = '';
+      updateSoundButtonIcon(btn, 'idle');
+    });
+  }
+
+  // Update sound button icon based on state
+  function updateSoundButtonIcon(btn, state) {
+    if (!btn) return;
     
-    if (!savedRange) return;
+    const isIconOnly = btn.classList.contains('cursoriq-tts-icon-btn');
+    const size = isIconOnly ? '20' : '16';
     
-    try {
-      // Try to restore the selection programmatically
-      const selection = window.getSelection();
-      if (selection && savedRange) {
-        selection.removeAllRanges();
-        selection.addRange(savedRange.cloneRange());
+    if (state === 'playing') {
+      // Show stop icon (square)
+      btn.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect></svg>`;
+      btn.setAttribute('aria-label', 'Stop');
+      btn.setAttribute('title', 'Stop');
+    } else if (state === 'paused') {
+      // Show play icon (triangle)
+      btn.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`;
+      btn.setAttribute('aria-label', 'Resume');
+      btn.setAttribute('title', 'Resume');
+    } else {
+      // Show sound icon (default)
+      if (isIconOnly) {
+        btn.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`;
+      } else {
+        btn.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"></path></svg>`;
       }
-    } catch (e) {
-      // If we can't restore selection, create a visual highlight overlay
-      try {
-        const rect = savedRange.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
-          highlightOverlay = document.createElement('div');
-          highlightOverlay.style.position = 'fixed';
-          highlightOverlay.style.left = rect.left + window.scrollX + 'px';
-          highlightOverlay.style.top = rect.top + window.scrollY + 'px';
-          highlightOverlay.style.width = rect.width + 'px';
-          highlightOverlay.style.height = rect.height + 'px';
-          highlightOverlay.style.backgroundColor = 'rgba(59, 130, 246, 0.3)'; // Blue highlight
-          highlightOverlay.style.pointerEvents = 'none';
-          highlightOverlay.style.zIndex = '2147483646'; // Just below tooltip
-          highlightOverlay.style.borderRadius = '2px';
-          highlightOverlay.className = 'cursoriq-highlight-overlay';
-          document.body.appendChild(highlightOverlay);
-          
-          // Update highlight position on scroll
-          const updateHighlight = () => {
-            if (highlightOverlay && savedRange) {
-              try {
-                const rect = savedRange.getBoundingClientRect();
-                highlightOverlay.style.left = rect.left + window.scrollX + 'px';
-                highlightOverlay.style.top = rect.top + window.scrollY + 'px';
-              } catch (e) {
-                // Range might be invalid, remove overlay
-                if (highlightOverlay) {
-                  highlightOverlay.remove();
-                  highlightOverlay = null;
-                }
-              }
-            }
-          };
-          
-          window.addEventListener('scroll', updateHighlight, { passive: true });
-          window.addEventListener('resize', updateHighlight, { passive: true });
-        }
-      } catch (err) {
-        // If range is invalid, clear saved range
-        savedRange = null;
-      }
+      btn.setAttribute('aria-label', isIconOnly ? 'Read aloud' : 'Pronounce word');
+      btn.setAttribute('title', isIconOnly ? 'Read aloud' : 'Pronounce word');
     }
   }
 
+  function setFloatingToolbarVisible(visible) {
+    const t = document.getElementById('cursoriq-float-toolbar');
+    if (t) t.style.visibility = visible ? 'visible' : 'hidden';
+  }
+
   function removeTooltip() {
-    // Remove highlight overlay when tooltip is removed
-    if (highlightOverlay) {
-      highlightOverlay.remove();
-      highlightOverlay = null;
-    }
+    // Stop all audio when tooltip is removed
+    stopAllAudio();
+    
     // Clear any pending timers
     if (selectionTimer) {
       clearTimeout(selectionTimer);
       selectionTimer = null;
+    }
+    if (iconModalTimer) {
+      clearTimeout(iconModalTimer);
+      iconModalTimer = null;
     }
     
     if (tooltipEl && tooltipEl.parentNode) {
@@ -2010,6 +2773,8 @@
     currentWord = null;
     currentSynonyms = [];
     lastSelection = ''; // Reset so same word can be selected again
+
+    setFloatingToolbarVisible(true);
     
     // Clear text selection AFTER removing tooltip to avoid triggering events
     if (!manuallyClosed) {
@@ -2395,29 +3160,490 @@
   // Load settings on initialization
   loadModalSettings();
 
-  // Open hub with person data
-  function openHubWithPersonData(personData, searchTerm) {
-    console.log('Nimbus: Opening hub with person data for:', searchTerm);
-    console.log('Nimbus: Person data image:', personData.image ? 'YES - ' + personData.image : 'NO IMAGE');
-    console.log('Nimbus: Full personData:', personData);
+  // Floating quick-action toolbar on every page
+  let readerModeOn = false;
+
+  function getPageTextForSummarize() {
+    const el = document.querySelector('article, main, [role="main"], .post-content, .article-body, .entry-content, .content-column, [class*="article"]');
+    const root = el || document.body;
+    return (root.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 12000);
+  }
+
+  function createFloatingToolbar() {
+    if (document.getElementById('cursoriq-float-toolbar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'cursoriq-float-toolbar';
+    bar.className = 'cursoriq-float-toolbar';
+
+    function btn(svg, title, onClick) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'cursoriq-float-btn';
+      b.innerHTML = svg;
+      b.title = title;
+      b.setAttribute('aria-label', title);
+      b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onClick(); });
+      return b;
+    }
+
+    function removePopover() {
+      const p = document.getElementById('cursoriq-float-popover');
+      if (p) p.remove();
+    }
+
+    function showPopoverWith(loadingHtml, onResp) {
+      removePopover();
+      const pop = document.createElement('div');
+      pop.id = 'cursoriq-float-popover';
+      pop.className = 'cursoriq-float-popover';
+      pop.innerHTML = loadingHtml;
+      bar.appendChild(pop);
+      onResp(pop);
+    }
+
+    // Drag handle
+    const grip = document.createElement('div');
+    grip.className = 'cursoriq-float-grip';
+    grip.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="8" r="1.5"/><circle cx="15" cy="8" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="16" r="1.5"/><circle cx="15" cy="16" r="1.5"/></svg>';
+    grip.title = 'Drag to move';
+    let isDragging = false, dragOffX = 0, dragOffY = 0;
+    grip.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const r = bar.getBoundingClientRect();
+      bar.style.right = 'auto';
+      bar.style.left = r.left + 'px';
+      bar.style.top = r.top + 'px';
+      dragOffX = e.clientX - r.left;
+      dragOffY = e.clientY - r.top;
+      isDragging = true;
+      const onMove = (e2) => {
+        if (!isDragging) return;
+        bar.style.left = (e2.clientX - dragOffX) + 'px';
+        bar.style.top = (e2.clientY - dragOffY) + 'px';
+      };
+      const onUp = () => {
+        isDragging = false;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        const L = parseInt(bar.style.left, 10), T = parseInt(bar.style.top, 10);
+        if (!isNaN(L) && !isNaN(T)) chrome.storage.local.set({ floatToolbarPosition: { left: L, top: T } });
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+    bar.appendChild(grip);
+
+    bar.appendChild(btn(
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>',
+      'Open Nimbus',
+      () => { chrome.runtime.sendMessage({ action: 'openPopup' }, () => {}); }
+    ));
+    bar.appendChild(btn(
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>',
+      'Save this page',
+      () => { savePageForLater(); showToast('Page saved'); }
+    ));
+    bar.appendChild(btn(
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>',
+      'Summarize page',
+      () => {
+        const text = getPageTextForSummarize();
+        if (!text || text.length < 50) { showToast('Not enough text on this page to summarize'); return; }
+        showPopoverWith('<div class="cursoriq-float-popover-loading">Summarizing page…</div>', (pop) => {
+          chrome.runtime.sendMessage({ type: 'summarize', text }, (resp) => {
+            if (chrome.runtime.lastError) {
+              pop.innerHTML = '<div class="cursoriq-float-popover-err">Error: ' + (chrome.runtime.lastError.message || 'Connection error') + '</div><button class="cursoriq-float-popover-close">Close</button>';
+            } else if (resp && resp.error) {
+              pop.innerHTML = '<div class="cursoriq-float-popover-err">' + resp.error + '</div><button class="cursoriq-float-popover-close">Close</button>';
+            } else {
+              const t = (resp && resp.explanation) ? resp.explanation : 'No summary generated.';
+              pop.innerHTML = '<div class="cursoriq-float-popover-text"></div><button class="cursoriq-float-popover-copy">Copy</button><button class="cursoriq-float-popover-close">Close</button>';
+              pop.querySelector('.cursoriq-float-popover-text').textContent = t;
+              pop.querySelector('.cursoriq-float-popover-copy').onclick = () => { navigator.clipboard.writeText(t).catch(() => {}); pop.querySelector('.cursoriq-float-popover-copy').textContent = 'Copied'; setTimeout(() => { pop.querySelector('.cursoriq-float-popover-copy').textContent = 'Copy'; }, 600); };
+            }
+            pop.querySelector('.cursoriq-float-popover-close').onclick = removePopover;
+          });
+        });
+      }
+    ));
+    bar.appendChild(btn(
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>',
+      'Focus / Reader mode',
+      () => {
+        readerModeOn = !readerModeOn;
+        document.documentElement.classList.toggle('nimbus-reader-mode', readerModeOn);
+        showToast(readerModeOn ? 'Reader mode on' : 'Reader mode off');
+      }
+    ));
+
+    document.body.appendChild(bar);
+
+    // Restore or default position: top-right
+    chrome.storage.local.get(['floatToolbarPosition'], (o) => {
+      const pos = o.floatToolbarPosition;
+      if (pos && typeof pos.left === 'number' && typeof pos.top === 'number') {
+        bar.style.right = 'auto';
+        bar.style.left = pos.left + 'px';
+        bar.style.top = pos.top + 'px';
+      } else {
+        bar.style.top = '16px';
+        bar.style.right = '16px';
+      }
+    });
+  }
+
+  setTimeout(createFloatingToolbar, 300);
+
+  // Only block when selection clearly contains media (img, video, iframe). Very permissive.
+  function isValidTextSelection(selection, range) {
+    if (!selection || !range) return false;
+    if (!selection.toString().trim()) return false;
+    try {
+      var frag = range.cloneContents();
+      if (frag.querySelectorAll('img, video, iframe').length > 0) return false;
+      return true;
+    } catch (e) {
+      return true;
+    }
+  }
+
+  function saveForLater(textToSave) {
+    const t = (textToSave || '').toString().trim().slice(0, 500);
+    const item = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+      type: 'text',
+      text: t,
+      url: location.href,
+      title: (document.title || location.href || 'Untitled').trim(),
+      createdAt: Date.now()
+    };
+    chrome.storage.local.get(['savedForLater'], (r) => {
+      let arr = r.savedForLater || [];
+      arr.unshift(item);
+      if (arr.length > 80) arr = arr.slice(0, 80);
+      chrome.storage.local.set({ savedForLater: arr });
+    });
+  }
+
+  function showSaveToast() {
+    showToast('Saved for later');
+  }
+
+  function showToast(msg) {
+    const el = document.createElement('div');
+    el.className = 'cursoriq-toast';
+    el.textContent = msg;
+    document.body.appendChild(el);
+    const tb = document.getElementById('cursoriq-float-toolbar');
+    if (tb) {
+      const r = tb.getBoundingClientRect();
+      el.style.top = (r.bottom + 8) + 'px';
+      el.style.left = (r.left + r.width / 2) + 'px';
+      el.style.transform = 'translateX(-50%)';
+      el.style.right = 'auto';
+      el.style.bottom = 'auto';
+    } else {
+      el.style.top = '70px';
+      el.style.right = '20px';
+      el.style.left = 'auto';
+      el.style.bottom = 'auto';
+      el.style.transform = 'none';
+    }
+    setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 1800);
+  }
+
+  function savePageForLater() {
+    const item = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+      type: 'url',
+      url: location.href,
+      title: (document.title || location.href || 'Untitled').trim(),
+      createdAt: Date.now()
+    };
+    chrome.storage.local.get(['savedForLater'], (r) => {
+      let arr = r.savedForLater || [];
+      arr.unshift(item);
+      if (arr.length > 80) arr = arr.slice(0, 80);
+      chrome.storage.local.set({ savedForLater: arr });
+    });
+  }
+
+  // Detect if text is a location (postcode, place name, etc.)
+  // Only returns true when the ENTIRE selection is a single location – not when a paragraph
+  // merely contains a place name.
+  function detectLocation(text) {
+    if (!text || text.length < 2) return false;
     
-    // Store person data in chrome.storage for popup to retrieve
+    const trimmed = text.trim();
+    const words = trimmed.split(/\s+/).filter(w => w.length > 0);
+    
+    // Reject long paragraphs: max 10 words, 120 chars. Addresses like "7 Dock St, London E1 8LL" (6 words) pass.
+    if (words.length > 10 || trimmed.length > 120) return false;
+    
+    // UK postcode: e.g. SW1A 1AA, M1 1AA, E1 8LL, B33 8TH. \s* allows optional space before inward code.
+    const ukPostcodeRegex = /[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}/i;
+    if (ukPostcodeRegex.test(trimmed)) return true;
+    
+    // US ZIP code patterns (e.g., 12345, 12345-6789)
+    const usZipRegex = /\b\d{5}(-\d{4})?\b/;
+    if (usZipRegex.test(trimmed)) return true;
+    
+    // Canadian postal code (e.g., K1A 0B1)
+    const canadaPostcodeRegex = /[A-Z]\d[A-Z]\s?\d[A-Z]\d/i;
+    if (canadaPostcodeRegex.test(trimmed)) return true;
+    
+    // Australian postcode (e.g., 2000) – only in short strings to avoid matching years (e.g. 2022) in paragraphs
+    if (trimmed.length <= 50) {
+      const ausPostcodeRegex = /\b\d{4}\b/;
+      if (ausPostcodeRegex.test(trimmed)) return true;
+    }
+    
+    // Helper: match keyword as whole word only (avoids "report" matching "port", "support" matching "port")
+    function hasWholeWord(str, keyword) {
+      const re = new RegExp('\\b' + keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i');
+      return re.test(str);
+    }
+    
+    // Check for address patterns (e.g., "Vicarage Road, Watford, WD18 OHB")
+    // Pattern: word(s) + comma + word(s) + comma + postcode
+    if (trimmed.includes(',')) {
+      const parts = trimmed.split(',').map(p => p.trim());
+      if (parts.length >= 2) {
+        // Check if any part contains a postcode pattern
+        const hasPostcode = parts.some(part => {
+          return /[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}/i.test(part) ||
+                 /\b\d{5}(-\d{4})?\b/.test(part) ||
+                 /[A-Z]\d[A-Z]\s?\d[A-Z]\d/i.test(part);
+        });
+        if (hasPostcode) return true;
+        
+        // Check if it looks like an address (whole-word; 'st' = common street abbreviation)
+        const addressKeywords = ['road', 'street', 'avenue', 'drive', 'lane', 'way', 'place', 'court', 'boulevard', 'parkway', 'terrace', 'square', 'st'];
+        const lowerText = trimmed.toLowerCase();
+        for (const keyword of addressKeywords) {
+          if (hasWholeWord(lowerText, keyword)) return true;
+        }
+      }
+    }
+    
+    // Common location keywords (whole-word only to avoid "report"->"port", "capitals"->"city", etc.)
+    const locationKeywords = [
+      'street', 'avenue', 'road', 'drive', 'lane', 'way', 'boulevard', 'court',
+      'place', 'circle', 'parkway', 'terrace', 'square', 'plaza', 'park',
+      'city', 'town', 'village', 'borough', 'county', 'state', 'province',
+      'district', 'region', 'area', 'neighborhood', 'neighbourhood', 'suburb',
+      'airport', 'station', 'terminal', 'port', 'harbor', 'harbour',
+      'beach', 'mountain', 'lake', 'river', 'bridge', 'tower', 'castle',
+      'museum', 'gallery', 'theater', 'theatre', 'stadium', 'arena',
+      'university', 'college', 'school', 'hospital', 'library'
+    ];
+    
+    for (const keyword of locationKeywords) {
+      if (hasWholeWord(trimmed, keyword)) return true;
+    }
+    
+    // Check for common place name patterns (capitalized words, 1-4 words)
+    // BUT: Only if it contains location-specific indicators (not just any capitalized word)
+    if (words.length >= 1 && words.length <= 4) {
+      // If most words start with capital letter AND contains location keywords, likely a place name
+      const capitalizedWords = words.filter(w => /^[A-Z]/.test(w));
+      if (capitalizedWords.length >= words.length * 0.7) {
+        // Must contain location-specific terms to be considered a location
+        // This prevents regular capitalized words (like "Upskill") from being detected as locations
+        const locationIndicators = ['city', 'town', 'village', 'county', 'state', 'province', 'country', 'region', 'district', 'borough', 'street', 'road', 'avenue', 'drive', 'lane', 'way', 'boulevard', 'court', 'place', 'park', 'plaza', 'square', 'airport', 'station', 'port', 'harbor', 'harbour', 'beach', 'mountain', 'lake', 'river', 'bridge', 'tower', 'castle', 'museum', 'gallery', 'theater', 'theatre', 'stadium', 'arena', 'university', 'college', 'school', 'hospital', 'library'];
+        const hasLocationIndicator = locationIndicators.some(indicator => hasWholeWord(trimmed, indicator));
+        
+        // Only return true if it has location indicators OR if it's a known place pattern (like "New York", "Los Angeles")
+        // For single capitalized words without location indicators, don't treat as location
+        if (hasLocationIndicator) {
+          return true;
+        }
+        // For multi-word capitalized phrases, be more conservative - only if it looks like a proper place name
+        // (e.g., "New York", "Los Angeles" - but NOT "Upskill" or "Resume")
+        if (words.length >= 2 && capitalizedWords.length === words.length) {
+          // All words capitalized - could be a place name, but also could be a title
+          // Only treat as location if it contains common place name patterns
+          const commonPlacePatterns = ['new', 'old', 'north', 'south', 'east', 'west', 'upper', 'lower', 'great', 'little', 'big', 'small'];
+          const hasPlacePattern = words.some(w => commonPlacePatterns.includes(w.toLowerCase()));
+          if (hasPlacePattern) {
+            return true;
+          }
+        }
+      }
+    }
+    
+    return false;
+  }
+
+  // Show location tooltip with map/search options
+  function showLocationTooltip(locationText, range) {
+    manuallyClosed = false;
+    stopAllAudio();
+    removeTooltip();
+    
+    // Clear any pending timers that might trigger word tooltip
+    if (selectionTimer) {
+      clearTimeout(selectionTimer);
+      selectionTimer = null;
+    }
+    if (iconModalTimer) {
+      clearTimeout(iconModalTimer);
+      iconModalTimer = null;
+    }
+    
+    // Store the range for positioning (but don't clear selection yet - preserve native highlighting)
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      // Store the range for positioning
+      savedRange = range ? range.cloneRange() : selection.getRangeAt(0).cloneRange();
+    }
+    
+    if (range) {
+      savedRange = range.cloneRange();
+    }
+    
+    loadModalSettings();
+    
+    tooltipEl = document.createElement('div');
+    tooltipEl.className = 'cursoriq-tooltip cursoriq-location-tooltip';
+    
+    tooltipEl.addEventListener('mouseup', (e) => {
+      if (e.target.tagName === 'BUTTON' || 
+          e.target.tagName === 'A' || 
+          e.target.closest('button') || 
+          e.target.closest('a') ||
+          e.target.closest('.cursoriq-icon-btn')) {
+        e.stopPropagation();
+      }
+    });
+    tooltipEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+    
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'cursoriq-close-btn';
+    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      manuallyClosed = true;
+      if (selectionTimer) {
+        clearTimeout(selectionTimer);
+        selectionTimer = null;
+      }
+      const selection = window.getSelection();
+      if (selection) {
+        selection.removeAllRanges();
+      }
+      removeTooltip();
+      stopAllAudio();
+    });
+    tooltipEl.appendChild(closeBtn);
+    
+    // Buttons container – same layout as icon-only modal (cursoriq-icon-buttons: flex, gap 8px)
+    const buttonsContainer = document.createElement('div');
+    buttonsContainer.className = 'cursoriq-icon-buttons';
+    
+    // Map button – opens Google Maps search (white bg, blue icon)
+    const mapBtn = document.createElement('button');
+    mapBtn.className = 'cursoriq-icon-btn cursoriq-location-map-btn';
+    mapBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>';
+    mapBtn.setAttribute('aria-label', 'View on Google Maps');
+    mapBtn.setAttribute('title', 'View on Google Maps');
+    mapBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(locationText)}`;
+      chrome.runtime.sendMessage({ type: 'openTab', url: mapsUrl }, (res) => {
+        if (chrome.runtime.lastError || (res && !res.success)) console.error('Failed to open Maps:', chrome.runtime.lastError?.message || (res && res.error));
+      });
+      removeTooltip();
+      const sel = window.getSelection();
+      if (sel) sel.removeAllRanges();
+    });
+    buttonsContainer.appendChild(mapBtn);
+    
+    // Copy button – copy address/text (replaces search; white bg, blue icon)
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'cursoriq-icon-btn cursoriq-location-copy-btn';
+    copyBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    copyBtn.setAttribute('aria-label', 'Copy');
+    copyBtn.setAttribute('title', 'Copy');
+    copyBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      try {
+        await navigator.clipboard.writeText(locationText);
+        copyBtn.classList.add('copied');
+        setTimeout(() => copyBtn.classList.remove('copied'), 300);
+      } catch (err) {
+        const ta = document.createElement('textarea');
+        ta.value = locationText;
+        ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none;';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (_) {}
+        document.body.removeChild(ta);
+      }
+      removeTooltip();
+      const sel = window.getSelection();
+      if (sel) sel.removeAllRanges();
+    });
+    buttonsContainer.appendChild(copyBtn);
+    
+    tooltipEl.appendChild(buttonsContainer);
+    setFloatingToolbarVisible(false);
+    getTooltipRoot().body.appendChild(tooltipEl);
+    
+    positionTooltip({ range: range });
+    
+    // Clear selection AFTER tooltip is created and positioned (preserves native highlighting until now)
+    setTimeout(() => {
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount > 0) {
+        selection.removeAllRanges();
+      }
+    }, 50); // Small delay to ensure tooltip is fully rendered
+  }
+
+  // Open hub with location data
+  function openHubWithLocationData(locationText, canMap = false) {
     chrome.storage.local.set({
       pendingSearch: {
-        type: 'person',
-        term: searchTerm,
-        data: personData
+        type: 'location',
+        term: locationText,
+        canMap: canMap
       }
     }, () => {
-      // Try to open the popup - note: this may not work if popup is already open
-      // The popup will check for pendingSearch on load
-      chrome.runtime.sendMessage({
-        action: 'openPopup'
-      }, (response) => {
+      chrome.runtime.sendMessage({ action: 'openPopup' }, (response) => {
         if (chrome.runtime.lastError) {
           console.log('Nimbus: Could not open popup automatically, user will need to open manually');
         }
       });
+      chrome.runtime.sendMessage({ action: 'applyPendingSearch' });
+    });
+  }
+
+  // Open hub with entity data (person, organization, or place)
+  function openHubWithEntityData(entityData, searchTerm, entityType) {
+    console.log('Nimbus: Opening hub with', entityType, 'data for:', searchTerm);
+    chrome.storage.local.set({
+      pendingSearch: {
+        type: entityType,
+        term: searchTerm,
+        data: entityData
+      }
+    }, () => {
+      chrome.runtime.sendMessage({ action: 'openPopup' }, () => {
+        if (chrome.runtime.lastError) {
+          console.log('Nimbus: Could not open popup automatically, user will need to open manually');
+        }
+      });
+      setTimeout(() => {
+        chrome.runtime.sendMessage({ action: 'applyPendingSearch' });
+      }, 350);
     });
   }
 
@@ -2529,7 +3755,7 @@
     const nameSpan = document.createElement('span');
     nameSpan.className = 'cursoriq-word';
     nameSpan.textContent = personData.name;
-    nameSpan.style.cssText = 'font-size: 20px; font-weight: 700; color: #1e3a8a;';
+    nameSpan.style.cssText = 'font-size: 20px; font-weight: 700; color: #e2e8f0;';
     nameDiv.appendChild(nameSpan);
     
     // Copy button for name
@@ -2567,7 +3793,7 @@
       const bioDiv = document.createElement('div');
       bioDiv.className = 'cursoriq-explanation';
       bioDiv.textContent = personData.bio || personData.summary;
-      bioDiv.style.cssText = 'margin-bottom: 16px; line-height: 1.6; color: #334155;';
+      bioDiv.style.cssText = 'margin-bottom: 16px; line-height: 1.6; color: #4a5568;';
       detailsContainer.appendChild(bioDiv);
     }
 
@@ -2577,19 +3803,19 @@
     
     if (personData.birthDate) {
       const birthDiv = document.createElement('div');
-      birthDiv.innerHTML = `<strong style="color: #1e3a8a;">Born:</strong> ${personData.birthDate}`;
+      birthDiv.innerHTML = `<strong style="color: #93c5fd;">Born:</strong> ${personData.birthDate}`;
       metadataDiv.appendChild(birthDiv);
     }
     
     if (personData.occupation) {
       const occDiv = document.createElement('div');
-      occDiv.innerHTML = `<strong style="color: #1e3a8a;">Occupation:</strong> ${personData.occupation}`;
+      occDiv.innerHTML = `<strong style="color: #93c5fd;">Occupation:</strong> ${personData.occupation}`;
       metadataDiv.appendChild(occDiv);
     }
     
     if (personData.nationality) {
       const natDiv = document.createElement('div');
-      natDiv.innerHTML = `<strong style="color: #1e3a8a;">Nationality:</strong> ${personData.nationality}`;
+      natDiv.innerHTML = `<strong style="color: #93c5fd;">Nationality:</strong> ${personData.nationality}`;
       metadataDiv.appendChild(natDiv);
     }
     
@@ -2604,23 +3830,21 @@
       wikiLink.target = '_blank';
       wikiLink.rel = 'noopener noreferrer';
       wikiLink.textContent = 'Read more on Wikipedia';
-      wikiLink.style.cssText = 'display: inline-block; margin-bottom: 16px; color: #1e3a8a; text-decoration: none; font-size: 13px; font-weight: 600; border-bottom: 1px solid #1e3a8a;';
+      wikiLink.style.cssText = 'display: inline-block; margin-bottom: 16px; color: #93c5fd; text-decoration: none; font-size: 13px; font-weight: 600; border-bottom: 1px solid rgba(147, 197, 253, 0.6);';
       wikiLink.addEventListener('click', (e) => {
         e.stopPropagation();
       });
       detailsContainer.appendChild(wikiLink);
     }
 
-    // Recent News section
+    // Recent News section (dark theme)
     if (personData.newsArticles && personData.newsArticles.length > 0) {
-      // Detect dark mode
-      const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-      const textColor = isDarkMode ? '#ffffff' : '#1e3a8a';
-      const textSecondary = isDarkMode ? '#e2e8f0' : '#64748b';
-      const textMuted = isDarkMode ? '#cbd5e1' : '#94a3b8';
+      const textColor = '#ffffff';
+      const textSecondary = '#e2e8f0';
+      const textMuted = '#cbd5e1';
       
       const newsSection = document.createElement('div');
-      newsSection.style.cssText = 'margin-top: 20px; padding-top: 20px; border-top: 1px solid rgba(226, 232, 240, 0.8);';
+      newsSection.style.cssText = 'margin-top: 20px; padding-top: 20px; border-top: 1px solid rgba(255, 255, 255, 0.12);';
       
       const newsTitle = document.createElement('div');
       newsTitle.style.cssText = `font-size: 16px; font-weight: 700; color: ${textColor}; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;`;
@@ -2632,17 +3856,17 @@
       
       personData.newsArticles.forEach((article, index) => {
         const newsItem = document.createElement('div');
-        newsItem.style.cssText = 'padding: 12px; background: rgba(241, 245, 249, 0.5); border-radius: 8px; border: 1px solid rgba(226, 232, 240, 0.5); transition: all 0.2s ease; cursor: pointer;';
+        newsItem.style.cssText = 'padding: 12px; background: rgba(42, 58, 155, 0.5); border-radius: 8px; border: 1px solid rgba(71, 85, 105, 0.5); transition: all 0.2s ease; cursor: pointer;';
         
         newsItem.addEventListener('mouseenter', () => {
-          newsItem.style.background = 'rgba(241, 245, 249, 0.8)';
-          newsItem.style.borderColor = 'rgba(30, 58, 138, 0.3)';
+          newsItem.style.background = 'rgba(48, 68, 165, 0.72)';
+          newsItem.style.borderColor = 'rgba(31, 127, 255, 0.4)';
           newsItem.style.transform = 'translateY(-1px)';
         });
         
         newsItem.addEventListener('mouseleave', () => {
-          newsItem.style.background = 'rgba(241, 245, 249, 0.5)';
-          newsItem.style.borderColor = 'rgba(226, 232, 240, 0.5)';
+          newsItem.style.background = 'rgba(42, 58, 155, 0.5)';
+          newsItem.style.borderColor = 'rgba(71, 85, 105, 0.5)';
           newsItem.style.transform = 'translateY(0)';
         });
         
@@ -2686,10 +3910,11 @@
     }
 
     tooltipEl.appendChild(detailsContainer);
-    document.body.appendChild(tooltipEl);
+    setFloatingToolbarVisible(false);
+    getTooltipRoot().body.appendChild(tooltipEl);
     
     // Position the tooltip
-    positionTooltip(tooltipEl, wordInfo);
+    positionTooltip(wordInfo);
     
     currentWord = personData.name;
   }

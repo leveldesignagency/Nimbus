@@ -1,0 +1,15 @@
+{
+  "name": "nimbus-api",
+  "version": "1.0.0",
+  "description": "Nimbus extension backend API",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "stripe": "^14.0.0"
+  }
+}
+
+
+

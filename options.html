@@ -5,11 +5,11 @@
   <title>Nimbus — Settings</title>
   <style>
     body { font-family: Inter, system-ui, -apple-system, Roboto, Arial; padding: 18px; color:#0d1b2a; max-width: 600px; margin: 0 auto; }
-    h2 { color: #1e3a8a; margin-bottom: 20px; }
+    h2 { color: #05007f; margin-bottom: 20px; }
     label { display:block; margin-top:12px; font-weight:600; }
     input[type="text"], textarea, select, input[type="number"] { width:100%; padding:8px; border:1px solid #ddd; border-radius:6px; font-size:14px; box-sizing: border-box; }
-    button { margin-top:12px; padding:8px 12px; border-radius:6px; background:#1e3a8a; color:white; border:none; cursor:pointer; font-size:14px; }
-    button:hover { background:#1e40af; }
+    button { margin-top:12px; padding:8px 12px; border-radius:6px; background:#05007f; color:white; border:none; cursor:pointer; font-size:14px; }
+    button:hover { background:#1f7fff; }
     .hint { font-size:12px; color:#666; margin-top:6px; }
     #status { margin-top:8px; padding: 8px; background: #f3f4f6; border-radius: 6px; font-size: 13px; }
   </style>
@@ -38,23 +38,28 @@
   </div>
 
   <div id="subscription-section" style="margin-top: 30px; padding-top: 30px; border-top: 1px solid #ddd; display: none;">
-    <h3 style="color: #1e3a8a; margin-bottom: 15px;">Subscription Management</h3>
+    <h3 style="color: #05007f; margin-bottom: 15px;">Subscription Management</h3>
     <div id="subscription-info" style="margin-bottom: 15px; padding: 12px; background: #f3f4f6; border-radius: 6px; font-size: 13px;"></div>
     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
       <button id="cancel-btn" style="background: #f59e0b; display: none;">Cancel Subscription</button>
-      <button id="resubscribe-btn" style="background: #1e3a8a; display: none;">Resubscribe</button>
+      <button id="resubscribe-btn" style="background: #05007f; display: none;">Resubscribe</button>
       <button id="refund-btn" style="background: #dc2626; display: none;">Request Refund (7-day window)</button>
     </div>
     <div id="subscription-status" style="margin-top: 12px; font-size: 13px;"></div>
   </div>
 
   <div id="account-section" style="margin-top: 30px; padding-top: 30px; border-top: 1px solid #ddd;">
-    <h3 style="color: #1e3a8a; margin-bottom: 15px;">Account</h3>
+    <h3 style="color: #05007f; margin-bottom: 15px;">Account</h3>
     <div id="account-info" style="margin-bottom: 15px; padding: 12px; background: #f3f4f6; border-radius: 6px; font-size: 13px;"></div>
-    <button id="signout-btn" style="background: #64748b;">Sign Out</button>
+    <button id="signout-btn" style="background: #dc2626; color: white; padding: 10px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; transition: background 0.2s;">Sign Out</button>
+    <div class="hint" style="margin-top: 8px;">Signing out will clear your account and subscription data. You'll need to sign in again to use premium features.</div>
   </div>
   
   <div id="status" style="margin-top:12px;"></div>
+
+  <div style="margin-top: 60px; padding: 40px 20px; border-top: 2px solid #e5e7eb; background: #f9fafb; text-align: center; border-radius: 8px;">
+    <button id="simple-signout-btn" style="background: #64748b; color: white; padding: 12px 32px; border: none; border-radius: 8px; cursor: pointer; font-size: 15px; font-weight: 600; min-width: 150px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">Sign Out</button>
+  </div>
 
   <script src="options.js"></script>
 </body>

@@ -1,6 +1,14 @@
 # Chrome Web Store package
 nimbus-store-package/
 nimbus-extension.zip
+nimbus-*-store.zip
+Nimbus-*.zip
+*-extension-submission.zip
+
+# Secrets / local env
+.env
+.env.*
+.env.local
 
 # macOS
 .DS_Store
@@ -19,4 +27,6 @@ node_modules/
 # Logs
 *.log
 
+# Temp / junk
+zimAfVIV
 

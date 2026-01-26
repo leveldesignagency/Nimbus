@@ -92,6 +92,12 @@ const VERCEL_API_URL = 'https://nimbus-api-ten.vercel.app/api/chat';
 
 // CRITICAL: Set up message listener IMMEDIATELY
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.type === 'openTab' && msg.url) {
+    chrome.tabs.create({ url: msg.url }, () => {
+      sendResponse(chrome.runtime.lastError ? { success: false, error: String(chrome.runtime.lastError.message) } : { success: true });
+    });
+    return true;
+  }
   if (msg && msg.action === 'openPopup') {
     // Open the extension popup
     try {
@@ -219,6 +225,90 @@ IMPORTANT LIMITATIONS:
     });
     return true; // keep channel open for async
   }
+  if (msg && msg.type === 'summarize' && msg.text) {
+    (async () => {
+      try {
+        const cfg = await chrome.storage.local.get(['model']);
+        const model = cfg.model || 'gpt-4o-mini';
+        const text = String(msg.text).trim().slice(0, 12000);
+        const messages = [
+          { role: 'system', content: 'You are a helpful assistant. Summarize the user\'s text in 2-3 concise sentences. Be clear and direct. Do not add an introduction like "Here is a summary" — just give the summary.' },
+          { role: 'user', content: text }
+        ];
+        const resp = await fetch(VERCEL_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, messages, temperature: 0.5 })
+        });
+        if (resp.ok) {
+          const json = await resp.json();
+          const explanation = json.choices?.[0]?.message?.content?.trim() || 'No summary generated.';
+          sendResponse({ explanation });
+        } else {
+          const err = await resp.json().catch(() => ({}));
+          sendResponse({ error: err.error || `API error: ${resp.status}` });
+        }
+      } catch (err) {
+        sendResponse({ error: err.message || 'Failed to summarize' });
+      }
+    })();
+    return true;
+  }
+  if (msg && msg.type === 'translate' && msg.text) {
+    (async () => {
+      const fallbackError = 'Translation service unavailable. Please try again later.';
+      // Translation: LibreTranslate (libretranslate.de) first, then MyMemory (mymemory.translated.net). Both free.
+      // For higher quality, Google Cloud Translation API would require an API key.
+      const langMap = { 'es':'es','fr':'fr','de':'de','it':'it','pt':'pt','ru':'ru','ja':'ja','zh':'zh','ko':'ko','ar':'ar','hi':'hi','nl':'nl','sv':'sv','pl':'pl','tr':'tr','en':'en' };
+      try {
+        const cfg = await chrome.storage.local.get(['settings']);
+        const sourceCode = (msg.source && msg.source !== 'auto') ? (langMap[msg.source] || msg.source) : 'auto';
+        const targetCode = (msg.target && langMap[msg.target]) ? langMap[msg.target] : (langMap[cfg.settings?.dictionaryLanguage] || cfg.settings?.dictionaryLanguage || 'en');
+        const text = String(msg.text).trim().slice(0, 3000);
+        if (!text) { sendResponse({ translation: '', error: null }); return; }
+
+        // Try LibreTranslate first — use text() + JSON.parse to avoid "Unexpected token '<'" when server returns HTML
+        try {
+          const resp = await fetch('https://libretranslate.de/translate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ q: text, source: sourceCode, target: targetCode, format: 'text' })
+          });
+          if (resp.ok) {
+            const raw = await resp.text();
+            let data = null;
+            try { data = raw && raw.startsWith('{') ? JSON.parse(raw) : null; } catch (_) {}
+            if (data && data.translatedText) {
+              sendResponse({ translation: data.translatedText, error: null });
+              return;
+            }
+          }
+        } catch (_) {}
+
+        // Fallback to MyMemory — langpair is source|target; if source was 'auto' use 'en' as guess
+        try {
+          const mySource = sourceCode === 'auto' ? 'en' : sourceCode;
+          const myUrl = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${mySource}|${targetCode}`;
+          const r2 = await fetch(myUrl);
+          if (r2.ok) {
+            const raw2 = await r2.text();
+            let d = null;
+            try { d = raw2 && (raw2.startsWith('{') || raw2.startsWith('[')) ? JSON.parse(raw2) : null; } catch (_) {}
+            const t = (d && d.responseData && d.responseData.translatedText) ? d.responseData.translatedText : null;
+            if (t) {
+              sendResponse({ translation: t, error: null });
+              return;
+            }
+          }
+        } catch (_) {}
+
+        sendResponse({ translation: text, error: fallbackError });
+      } catch (err) {
+        sendResponse({ translation: '', error: fallbackError });
+      }
+    })();
+    return true;
+  }
   return false;
 });
 
@@ -326,16 +416,30 @@ async function handleExplain(term, context, detailed = false) {
   if (isMedicalTerm) {
     // Skip entity detection, fall through to dictionary lookup (modal)
   } else {
-    // More flexible pattern: allows hyphens, apostrophes, multiple capitals (e.g., McDonald, O'Brien, Mary-Jane)
-    // Also allows common organization suffixes
-    const isLikelyEntity = /^[A-Z][A-Za-z'\-]+(\s+[A-Z][A-Za-z'\-]+)*(\s+(Inc|LLC|Ltd|Corp|Company|Corporation|Foundation|Institute|University|College|Group|Organization|Org))?$/i.test(trimmedTerm) && 
-                          trimmedTerm.split(/\s+/).length >= 1 && 
-                          trimmedTerm.split(/\s+/).length <= 6 && // Increased to 6 for organizations
-                          trimmedTerm.length >= 2 &&
-                          trimmedTerm.length <= 80; // Increased for organization names
+    // More precise entity detection - only match actual proper nouns
+    // Must start with capital letter and be a proper noun pattern
+    // Exclude common words that might be capitalized at sentence start
+    const commonWords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'up', 'down', 'out', 'off', 'over', 'under', 'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'each', 'both', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'just', 'now', 'get', 'got', 'go', 'went', 'come', 'came', 'see', 'saw', 'know', 'knew', 'think', 'thought', 'take', 'took', 'make', 'made', 'give', 'gave', 'say', 'said', 'tell', 'told', 'ask', 'asked', 'work', 'worked', 'call', 'called', 'try', 'tried', 'use', 'used', 'find', 'found', 'want', 'wanted', 'look', 'looked', 'need', 'needed', 'become', 'became', 'leave', 'left', 'put', 'put', 'mean', 'meant', 'keep', 'kept', 'let', 'let', 'begin', 'began', 'seem', 'seemed', 'help', 'helped', 'show', 'showed', 'hear', 'heard', 'play', 'played', 'run', 'ran', 'move', 'moved', 'live', 'lived', 'believe', 'believed', 'bring', 'brought', 'happen', 'happened', 'write', 'wrote', 'sit', 'sat', 'stand', 'stood', 'lose', 'lost', 'pay', 'paid', 'meet', 'met', 'include', 'included', 'continue', 'continued', 'set', 'set', 'learn', 'learned', 'change', 'changed', 'lead', 'led', 'understand', 'understood', 'watch', 'watched', 'follow', 'followed', 'stop', 'stopped', 'create', 'created', 'speak', 'spoke', 'read', 'read', 'allow', 'allowed', 'add', 'added', 'spend', 'spent', 'grow', 'grew', 'open', 'opened', 'walk', 'walked', 'win', 'won', 'offer', 'offered', 'remember', 'remembered', 'love', 'loved', 'consider', 'considered', 'appear', 'appeared', 'buy', 'bought', 'wait', 'waited', 'serve', 'served', 'die', 'died', 'send', 'sent', 'build', 'built', 'stay', 'stayed', 'fall', 'fell', 'cut', 'cut', 'reach', 'reached', 'kill', 'killed', 'raise', 'raised', 'pass', 'passed', 'sell', 'sold', 'decide', 'decided', 'return', 'returned', 'explain', 'explained', 'develop', 'developed', 'carry', 'carried', 'break', 'broke', 'receive', 'received', 'agree', 'agreed', 'support', 'supported', 'hit', 'hit', 'produce', 'produced', 'eat', 'ate', 'cover', 'covered', 'catch', 'caught', 'draw', 'drew', 'choose', 'chose'];
     
-    if (isLikelyEntity) {
-    try {
+    const words = trimmedTerm.split(/\s+/).filter(w => w.trim().length > 0);
+    const firstWord = words[0] ? words[0].toLowerCase() : '';
+    
+    // Exclude if it's a common word (likely just capitalized at sentence start)
+    if (commonWords.includes(firstWord)) {
+      // Not an entity - skip to dictionary lookup
+    } else {
+      // More flexible pattern: allows hyphens, apostrophes, multiple capitals (e.g., McDonald, O'Brien, Mary-Jane)
+      // Also allows common organization suffixes
+      // Must start with capital letter and not be a common word
+      const isLikelyEntity = /^[A-Z][A-Za-z'\-]+(\s+[A-Z][A-Za-z'\-]+)*(\s+(Inc|LLC|Ltd|Corp|Company|Corporation|Foundation|Institute|University|College|Group|Organization|Org))?$/i.test(trimmedTerm) && 
+                            trimmedTerm.split(/\s+/).length >= 1 && 
+                            trimmedTerm.split(/\s+/).length <= 6 && // Increased to 6 for organizations
+                            trimmedTerm.length >= 2 &&
+                            trimmedTerm.length <= 80 && // Increased for organization names
+                            !commonWords.includes(firstWord); // Exclude common words
+      
+      if (isLikelyEntity) {
+      try {
       // First try to fetch from Wikipedia
       const entityData = await fetchEntityFromWikipedia(term);
       
@@ -360,6 +464,7 @@ async function handleExplain(term, context, detailed = false) {
               nationality: entityData.nationality,
               relationships: entityData.relationships,
               notableWorks: entityData.notableWorks,
+              bio: entityData.bio || entityData.summary,
               summary: entityData.summary,
               wikipediaUrl: entityData.wikipediaUrl,
               newsArticles: newsArticles || []
@@ -417,9 +522,10 @@ async function handleExplain(term, context, detailed = false) {
         }
       } else {
       }
-    } catch (err) {
-      // Continue to dictionary lookup
-    }
+      } catch (err) {
+        // Continue to dictionary lookup
+      }
+      }
     }
   }
 
@@ -1140,7 +1246,7 @@ async function translateText(text, targetLang) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
     
-    // Try LibreTranslate first (better quality)
+    // Try LibreTranslate first (better quality) — use text() + JSON.parse to avoid errors when server returns HTML
     try {
       const resp = await fetch('https://libretranslate.de/translate', {
         method: 'POST',
@@ -1157,7 +1263,9 @@ async function translateText(text, targetLang) {
       clearTimeout(timeoutId);
       
       if (resp.ok) {
-        const data = await resp.json();
+        const raw = await resp.text();
+        let data = null;
+        try { data = raw && raw.startsWith('{') ? JSON.parse(raw) : null; } catch (_) {}
         if (data && data.translatedText) {
           console.log(`Nimbus: Translated "${text.substring(0, 50)}..." to ${targetLang}`);
           return data.translatedText;
@@ -1170,7 +1278,7 @@ async function translateText(text, targetLang) {
       }
     }
     
-    // Fallback to MyMemory Translation API
+    // Fallback to MyMemory Translation API — same safe parse in case it returns HTML
     try {
       const myMemoryUrl = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${targetCode}`;
       const myMemoryController = new AbortController();
@@ -1179,7 +1287,9 @@ async function translateText(text, targetLang) {
       clearTimeout(myMemoryTimeoutId);
       
       if (myMemoryResp.ok) {
-        const myMemoryData = await myMemoryResp.json();
+        const raw2 = await myMemoryResp.text();
+        let myMemoryData = null;
+        try { myMemoryData = raw2 && (raw2.startsWith('{') || raw2.startsWith('[')) ? JSON.parse(raw2) : null; } catch (_) {}
         if (myMemoryData && myMemoryData.responseData && myMemoryData.responseData.translatedText) {
           console.log(`Nimbus: Translated via MyMemory to ${targetLang}`);
           return myMemoryData.responseData.translatedText;
@@ -1365,26 +1475,44 @@ async function tryMedicalDictionaries(term) {
 }
 
 // Fetch entity (person, organization, or place) information from Wikipedia
+// Try PERSON first: place parser was misclassifying people (e.g. Donald Trump) when the
+// article mentioned "city", "located", etc. and lacked "died" (living people). Person parser
+// is more specific for names, so we prefer it.
 async function fetchEntityFromWikipedia(name) {
-  // First try as place (cities, countries, locations) - most specific
-  const placeData = await fetchPlaceFromWikipedia(name);
-  if (placeData && placeData.isPlace) {
-    return placeData;
-  }
-  
-  // Then try as person
   const personData = await fetchPersonFromWikipedia(name);
   if (personData && personData.isPerson) {
     return personData;
   }
-  
-  // Finally try as organization
+
+  const placeData = await fetchPlaceFromWikipedia(name);
+  if (placeData && placeData.isPlace) {
+    return placeData;
+  }
+
   const orgData = await fetchOrganizationFromWikipedia(name);
   if (orgData && orgData.isOrganization) {
     return orgData;
   }
-  
+
   return null;
+}
+
+// Resolve a search term to a Wikipedia page title via Opensearch (for "Zelenskyy" -> "Volodymyr Zelenskyy", "Biden" -> "Joe Biden", etc.)
+async function resolveWikipediaTitleBySearch(term) {
+  try {
+    const url = `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(term)}&limit=5&format=json`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const r = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!r.ok) return null;
+    const arr = await r.json();
+    const titles = Array.isArray(arr[1]) ? arr[1] : [];
+    const chosen = titles.find(t => typeof t === 'string' && !/\((disambiguation|surname)\)$/i.test(t)) || titles[0];
+    return (typeof chosen === 'string' && chosen) ? chosen : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 // Fetch person information from Wikipedia
@@ -1393,7 +1521,7 @@ async function fetchPersonFromWikipedia(name) {
     // Clean the name for Wikipedia search
     const searchName = name.trim().replace(/\s+/g, '_');
     
-    // Try Wikipedia API search first to find the exact page
+    // Try Wikipedia REST page/summary with exact title first
     const searchUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(searchName)}`;
     
     const controller = new AbortController();
@@ -1414,11 +1542,43 @@ async function fetchPersonFromWikipedia(name) {
             return await parseWikipediaPersonData(altData, name);
           }
         }
+        // Fallback: Opensearch to resolve "Zelenskyy"->"Volodymyr Zelenskyy", "Biden"->"Joe Biden", "Putin"->"Vladimir Putin", etc.
+        const resolvedTitle = await resolveWikipediaTitleBySearch(name.trim());
+        if (resolvedTitle) {
+          const resolvedSlug = resolvedTitle.replace(/\s+/g, '_');
+          const sumUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(resolvedSlug)}`;
+          const sumResponse = await fetch(sumUrl, { signal: controller.signal });
+          if (sumResponse.ok) {
+            const sumData = await sumResponse.json();
+            return await parseWikipediaPersonData(sumData, name);
+          }
+        }
         return null;
       }
       
       const data = await response.json();
-      return await parseWikipediaPersonData(data, name);
+      let parsed = await parseWikipediaPersonData(data, name);
+      if (parsed) return parsed;
+      // 200 but not a person (disambiguation, weak extract): try opensearch to resolve to full/canonical name (e.g. "Einstein" -> "Albert Einstein")
+      const resolvedTitle = await resolveWikipediaTitleBySearch(name.trim());
+      const resolvedSlug = resolvedTitle ? resolvedTitle.replace(/\s+/g, '_') : null;
+      if (resolvedSlug && resolvedSlug !== searchName) {
+        const sumUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(resolvedSlug)}`;
+        const sumController = new AbortController();
+        const sumTimeout = setTimeout(() => sumController.abort(), 5000);
+        try {
+          const sumResponse = await fetch(sumUrl, { signal: sumController.signal });
+          clearTimeout(sumTimeout);
+          if (sumResponse.ok) {
+            const sumData = await sumResponse.json();
+            parsed = await parseWikipediaPersonData(sumData, name);
+            if (parsed) return parsed;
+          }
+        } catch (e) {
+          clearTimeout(sumTimeout);
+        }
+      }
+      return null;
     } catch (err) {
       clearTimeout(timeoutId);
       if (err.name === 'AbortError') {
@@ -1430,6 +1590,32 @@ async function fetchPersonFromWikipedia(name) {
     console.error('Nimbus: Error fetching from Wikipedia:', err);
     return null;
   }
+}
+
+// Fetch social links (X, Instagram, YouTube, TikTok) from Wikidata for a Wikipedia title
+async function fetchWikidataSocialLinks(wikiTitle) {
+  const out = { twitter: null, instagram: null, youtube: null, tiktok: null };
+  if (!wikiTitle || typeof wikiTitle !== 'string') return out;
+  try {
+    const encTitle = encodeURIComponent(String(wikiTitle).replace(/\s+/g, '_'));
+    const wpRes = await fetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encTitle}&prop=pageprops&ppprop=wikibase_item&format=json&origin=*`);
+    if (!wpRes.ok) return out;
+    const wp = await wpRes.json();
+    const pages = wp.query?.pages || {};
+    const page = Object.values(pages)[0];
+    const qid = page?.pageprops?.wikibase_item;
+    if (!qid || typeof qid !== 'string') return out;
+    const wdRes = await fetch(`https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${encodeURIComponent(qid)}&props=claims&format=json&origin=*`);
+    if (!wdRes.ok) return out;
+    const wd = await wdRes.json();
+    const claims = wd.entities?.[qid]?.claims || {};
+    const v = (pid) => (claims[pid]?.[0]?.mainsnak?.datavalue?.value);
+    const p2002 = v('P2002'); if (p2002 && typeof p2002 === 'string') out.twitter = `https://x.com/${p2002.replace(/^@/, '')}`;
+    const p2003 = v('P2003'); if (p2003 && typeof p2003 === 'string') out.instagram = `https://instagram.com/${p2003.replace(/^@/, '')}`;
+    const p2397 = v('P2397'); if (p2397 && typeof p2397 === 'string') out.youtube = `https://www.youtube.com/channel/${p2397}`;
+    const p7083 = v('P7083'); if (p7083 && typeof p7083 === 'string') out.tiktok = `https://www.tiktok.com/@${p7083.replace(/^@/, '')}`;
+  } catch (e) { /* ignore */ }
+  return out;
 }
 
 // Parse Wikipedia API response to extract person information
@@ -1487,11 +1673,14 @@ async function parseWikipediaPersonData(data, originalName) {
     return null;
   }
   
-  // More comprehensive person detection - require STRONG indicators
+  // Person detection: if Wikipedia has a person article, show it. Living or dead — we don't require "died".
   const personIndicators = [
     /born\s+\d{1,2}\s+\w+\s+\d{4}/i.test(content), // "born 15 January 1990"
     /born\s+\w+\s+\d{1,2},?\s+\d{4}/i.test(content), // "born January 15, 1990"
     /born\s+\d{4}/i.test(content), // "born 1990"
+    /\(\s*born\s+[^)]*\)/i.test(content), // "(born 14 March 1879)" or "(born June 14, 1946)" — very common in Wikipedia ledes
+    /\b(he|she)\s+(is|was|has|had|received|won)\b/i.test(content), // "He was", "She is" — biographical
+    /(?:is|was)\s+(?:a|an)\s+(?:American|British|German|French|Canadian|Australian|Indian|Japanese|Chinese|Russian|Brazilian|Mexican|Italian|Spanish|Irish|Scottish|Dutch|Polish|Swedish|Norwegian|Korean|Israeli|Egyptian|South African)\b/i.test(content), // "is an American politician", "was a British writer"
     /died\s+\d{1,2}\s+\w+\s+\d{4}/i.test(content), // "died 15 January 1990"
     /died\s+\w+\s+\d{1,2},?\s+\d{4}/i.test(content), // "died January 15, 1990"
     /died\s+\d{4}/i.test(content), // "died 1990"
@@ -1508,6 +1697,20 @@ async function parseWikipediaPersonData(data, originalName) {
     title.includes('(athlete)'),
     title.includes('(footballer)'),
     title.includes('(basketball)'),
+    // Political/leadership – title
+    title.includes('(president)'),
+    title.includes('(prime minister)'),
+    title.includes('(chancellor)'),
+    title.includes('(minister)'),
+    title.includes('(monarch)'),
+    title.includes('(dictator)'),
+    // Political/leadership – extract
+    /(?:is|was|serves?|served)\s+(?:as\s+)?(?:the\s+)?(\d*(?:st|nd|rd|th)\s+)?(?:president|prime minister|chancellor|minister|secretary of state|governor|senator)\b/i.test(content),
+    /(?:elected|re-elected|inaugurated|took office)\s+(?:as\s+)?(?:president|prime minister|chancellor|minister|governor)\b/i.test(content),
+    /(?:the\s+)?(?:current|incumbent|former)\s+(?:president|prime minister|chancellor|minister|secretary of state|governor)\b/i.test(content),
+    /\b(?:president|prime minister|chancellor|minister)\s+(?:of|since|from)\s+/i.test(content),
+    /\b(?:head of state|head of government)\b/i.test(content),
+    /\b(?:member of parliament|mp\b|m\.p\.)\s+/i.test(content),
     /is\s+(?:a|an)\s+\w+\s+(?:born|died|who|which)/i.test(content), // "is a writer born..."
     /was\s+(?:a|an)\s+\w+\s+(?:born|died|who|which)/i.test(content) // "was a writer born..."
   ];
@@ -1652,7 +1855,10 @@ async function parseWikipediaPersonData(data, originalName) {
   // Get summary - first paragraph, up to 400 characters
   const summary = content.split('\n')[0] || content.substring(0, 400);
   const cleanSummary = summary.replace(/\s+/g, ' ').trim();
-  
+
+  let socialLinks = {};
+  try { socialLinks = await fetchWikidataSocialLinks(title); } catch (_) {}
+
   return {
     isPerson: true,
     name: title,
@@ -1665,7 +1871,8 @@ async function parseWikipediaPersonData(data, originalName) {
     relationships: relationships.length > 0 ? relationships : null,
     notableWorks: notableWorks.length > 0 ? notableWorks : null,
     summary: cleanSummary,
-    wikipediaUrl: data.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/\s+/g, '_'))}`
+    wikipediaUrl: data.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/\s+/g, '_'))}`,
+    socialLinks
   };
 }
 
@@ -2046,6 +2253,17 @@ async function fetchPlaceFromWikipedia(name) {
       clearTimeout(timeoutId);
       
       if (!response.ok) {
+        // Opensearch fallback: e.g. "Kiev"->"Kyiv", "America"->"United States"
+        const resolvedTitle = await resolveWikipediaTitleBySearch(name.trim());
+        if (resolvedTitle) {
+          const resolvedSlug = resolvedTitle.replace(/\s+/g, '_');
+          const sumUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(resolvedSlug)}`;
+          const sumResponse = await fetch(sumUrl, { signal: controller.signal });
+          if (sumResponse.ok) {
+            const sumData = await sumResponse.json();
+            return parseWikipediaPlaceData(sumData, name);
+          }
+        }
         return null;
       }
       
@@ -2096,10 +2314,12 @@ function parseWikipediaPlaceData(data, originalName) {
     /situated\s+in/i.test(content)
   ];
   
-  // Exclude if it's clearly a person or organization
-  const personExclude = content.toLowerCase().includes('born') && content.toLowerCase().includes('died');
+  // Exclude if it's clearly a person or organization. Person = "born" in a date context (living or dead).
+  const personExclude =
+    /\bborn\s+(\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{1,2},?\s+\d{4}|\d{4})/i.test(content) ||
+    /\(\s*born\s+[^)]*\)/i.test(content); // "(born …)" or "born 14 March 1879" etc.
   const orgExclude = content.toLowerCase().includes('founded') && content.toLowerCase().includes('company');
-  
+
   const hasPlaceIndicator = placeIndicators.some(indicator => indicator === true);
   const isDisambiguation = type === 'disambiguation';
   const isPlace = hasPlaceIndicator && !isDisambiguation && !personExclude && !orgExclude;

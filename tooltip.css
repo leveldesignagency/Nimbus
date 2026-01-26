@@ -1,16 +1,45 @@
-/* tooltip.css - Modern, beautiful UI design */
+/* tooltip.css - Nimbus hub dark style (aligned with floating toolbar) */
+
+/* Global Nimbus variables – containers, icons, consistency */
+:root {
+  --nimbus-surface: rgba(42, 58, 155, 0.48);
+  --nimbus-surface-strong: rgba(48, 68, 165, 0.78);
+  --nimbus-surface-solid: rgba(46, 62, 160, 0.92);
+  --nimbus-surface-overlay: rgba(38, 52, 145, 0.6);
+  --nimbus-icon-opacity: 0.95;
+  --nimbus-icon: #94a3b8;
+  --nimbus-icon-hover: #e2e8f0;
+}
+
+/* Success/info toast – positioned under floating toolbar via JS */
+.cursoriq-toast {
+  position: fixed;
+  top: 70px;
+  right: 20px;
+  z-index: 2147483645;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a;
+  color: #e2e8f0;
+  border: 2px solid rgba(31, 127, 255, 0.5);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(31, 127, 255, 0.2);
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
 
 .cursoriq-tooltip {
   position: fixed !important;
   z-index: 2147483647 !important;
-  max-width: 420px;
+  max-width: min(520px, 90vw);
   min-width: 280px;
   width: auto !important;
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%) !important;
-  color: #1e293b !important;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04) !important;
-  border: 2px solid rgba(30, 58, 138, 0.2) !important;
-  border-radius: 16px !important;
+  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a !important;
+  color: #e2e8f0 !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(31, 127, 255, 0.25) !important;
+  border: 2px solid rgba(31, 127, 255, 0.5) !important;
+  border-radius: 10px !important;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   font-size: 14px;
   line-height: 1.6;
@@ -39,8 +68,8 @@
 }
 
 .cursoriq-tooltip.warning {
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%) !important;
-  border-color: #fcd34d !important;
+  background: radial-gradient(ellipse 110% 110% at 0% 100%, #04045a 0%, rgba(4,4,90,0.6) 25%, rgba(4,4,90,0.2) 45%, rgba(4,4,90,0) 65%), radial-gradient(ellipse 110% 110% at 100% 0%, #05007f 0%, rgba(5,0,127,0.6) 25%, rgba(4,4,90,0.2) 45%, rgba(4,4,90,0) 65%), #04045a !important;
+  border-color: rgba(251, 191, 36, 0.6) !important;
 }
 
 /* Email modal - same styling as word modal, just icons */
@@ -75,7 +104,7 @@
 }
 
 .cursoriq-person-tooltip > div:last-child::-webkit-scrollbar-track {
-  background: rgba(241, 245, 249, 0.5);
+  background: var(--nimbus-surface-overlay);
   border-radius: 3px;
 }
 
@@ -94,16 +123,16 @@
   right: -12px;
   width: 28px;
   height: 28px;
-  border-radius: 50% !important;
-  background: #ffffff !important;
-  border: 2px solid #cbd5e1 !important;
-  color: #475569 !important;
+  border-radius: 6px !important;
+  background: var(--nimbus-surface-solid) !important;
+  border: 2px solid rgba(31, 127, 255, 0.4) !important;
+  color: #e2e8f0 !important;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 2147483648;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4) !important;
   transition: all 0.2s ease;
   padding: 0 !important;
   margin: 0 !important;
@@ -119,37 +148,89 @@
 }
 
 .cursoriq-close-btn:hover {
-  background: #f1f5f9 !important;
-  border-color: #94a3b8 !important;
-  color: #0f172a !important;
+  background: var(--nimbus-surface-strong) !important;
+  border-color: rgba(31, 127, 255, 0.6) !important;
+  color: #fff !important;
   transform: scale(1.1);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
 }
 
 .cursoriq-close-btn:active {
   transform: scale(0.95);
 }
 
+.cursoriq-summary-loading {
+  padding: 20px 24px;
+  color: #94a3b8;
+  font-size: 14px;
+  text-align: center;
+}
+
+.cursoriq-summary-wrap {
+  padding: 16px 20px 20px;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+}
+
+.cursoriq-summary-text {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #cbd5e1;
+  margin-bottom: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cursoriq-summary-copy {
+  align-self: flex-end;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1.5px solid rgba(31, 127, 255, 0.5);
+  border-radius: 8px;
+  background: rgba(31, 127, 255, 0.15);
+  color: #60a5fa;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
+}
+
+.cursoriq-summary-copy:hover {
+  background: rgba(31, 127, 255, 0.25);
+  border-color: rgba(31, 127, 255, 0.7);
+  color: #93c5fd;
+}
+
+.cursoriq-summary-copy svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  stroke: currentColor;
+  fill: none;
+}
+
 .cursoriq-header {
   padding: 16px 18px 12px;
-  border-bottom: 1px solid rgba(226, 232, 240, 0.6);
+  border-bottom: 1px solid rgba(31, 127, 255, 0.25);
   margin-bottom: 0;
 }
 
 .cursoriq-word {
   font-size: 24px;
   font-weight: 700;
-  color: #0f172a;
   letter-spacing: -0.02em;
-  background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: #ffffff;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  min-width: 0;
 }
 
 .cursoriq-phonetic {
   font-size: 11px;
-  color: #64748b;
+  color: #ffffff;
   font-style: italic;
   font-family: 'Courier New', monospace;
   letter-spacing: 0.5px;
@@ -162,21 +243,21 @@
   padding: 0;
   background: transparent;
   border: none;
-  color: #64748b;
+  color: var(--nimbus-icon);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 6px;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  opacity: 0.7;
+  opacity: var(--nimbus-icon-opacity);
   flex-shrink: 0;
 }
 
 .cursoriq-copy-btn:hover {
-  background: rgba(241, 245, 249, 0.8);
+  background: rgba(31, 127, 255, 0.2);
   opacity: 1;
-  color: #475569;
+  color: var(--nimbus-icon-hover);
   transform: scale(1.1);
 }
 
@@ -185,7 +266,7 @@
 }
 
 .cursoriq-copy-btn.copied {
-  color: #10b981;
+  color: #34d399;
   transform: scale(1.15);
   opacity: 1;
 }
@@ -198,9 +279,215 @@
   transform: rotate(15deg) scale(1.1);
 }
 
+/* Translate button in 1–2 word tooltip – match copy/sound */
+.cursoriq-translate-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--nimbus-icon);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: all 0.2s;
+  opacity: var(--nimbus-icon-opacity);
+  flex-shrink: 0;
+}
+.cursoriq-translate-btn:hover {
+  background: rgba(31, 127, 255, 0.2);
+  opacity: 1;
+  color: var(--nimbus-icon-hover);
+  transform: scale(1.1);
+}
+.cursoriq-translate-btn:active {
+  transform: scale(0.95);
+}
+
+/* Translate modal: from/to language selector (1–2 word: replaces explanation; 3+ word: under tooltip) */
+.cursoriq-translate-modal {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 200px;
+}
+.cursoriq-translate-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cursoriq-translate-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+  flex-shrink: 0;
+  min-width: 36px;
+}
+/* Custom dropdown for From/To (replaces native select) */
+.cursoriq-translate-dropdown {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.cursoriq-translate-dropdown-selected {
+  padding: 8px 32px 8px 12px;
+  font-size: 13px;
+  color: #e2e8f0;
+  background: var(--nimbus-surface-strong);
+  border: 1.5px solid rgba(31, 127, 255, 0.4);
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  transition: border-color 0.2s, background 0.2s;
+}
+.cursoriq-translate-dropdown-selected:hover {
+  border-color: rgba(31, 127, 255, 0.6);
+  background: var(--nimbus-surface-solid);
+}
+.cursoriq-translate-dropdown.active .cursoriq-translate-dropdown-selected {
+  border-color: rgba(31, 127, 255, 0.7);
+  background: var(--nimbus-surface-solid);
+}
+.cursoriq-translate-dropdown-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cursoriq-translate-dropdown-arrow {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--nimbus-icon);
+  transition: transform 0.2s;
+}
+.cursoriq-translate-dropdown-arrow svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  stroke: currentColor;
+  fill: none;
+}
+.cursoriq-translate-dropdown.active .cursoriq-translate-dropdown-arrow {
+  transform: rotate(180deg);
+}
+.cursoriq-translate-dropdown-options {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--nimbus-surface-solid);
+  border: 1.5px solid rgba(31, 127, 255, 0.4);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: none;
+  z-index: 1000;
+}
+.cursoriq-translate-dropdown.active .cursoriq-translate-dropdown-options {
+  display: block;
+}
+.cursoriq-translate-dropdown-option {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #e2e8f0;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.cursoriq-translate-dropdown-option:hover {
+  background: rgba(31, 127, 255, 0.2);
+  color: #93c5fd;
+}
+.cursoriq-translate-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.cursoriq-translate-btn-do {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #05007f 0%, #1f7fff 100%);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.cursoriq-translate-btn-do:hover {
+  transform: scale(1.02);
+  box-shadow: 0 4px 12px rgba(31, 127, 255, 0.4);
+}
+.cursoriq-translate-btn-do:active {
+  transform: scale(0.98);
+}
+.cursoriq-translate-btn-cancel {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #94a3b8;
+  background: transparent;
+  border: 1.5px solid rgba(148, 163, 184, 0.4);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.cursoriq-translate-btn-cancel:hover {
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.6);
+  background: var(--nimbus-surface);
+}
+
+/* Paragraph/explanation copy – same styling as .cursoriq-copy-btn */
+.cursoriq-copy-explanation-btn {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--nimbus-icon);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: var(--nimbus-icon-opacity);
+  transition: background 0.2s, color 0.2s, transform 0.2s;
+  z-index: 10;
+}
+.cursoriq-copy-explanation-btn:hover {
+  background: rgba(31, 127, 255, 0.2);
+  color: var(--nimbus-icon-hover);
+  transform: scale(1.1);
+}
+.cursoriq-copy-explanation-btn:active {
+  transform: scale(0.95);
+}
+.cursoriq-copy-explanation-btn.copied {
+  color: #34d399;
+  opacity: 1;
+}
+.cursoriq-copy-explanation-btn svg {
+  display: block;
+}
+
 .cursoriq-explanation {
   padding: 0 18px 16px;
-  color: #475569;
+  color: #cbd5e1;
   font-size: 14px;
   line-height: 1.7;
   user-select: text !important;
@@ -208,6 +495,10 @@
   -moz-user-select: text !important;
   -ms-user-select: text !important;
   cursor: text;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-height: 50vh;
+  overflow-y: auto;
 }
 
 .cursoriq-actions {
@@ -223,24 +514,25 @@
   width: 36px;
   height: 36px;
   padding: 0;
-  background: rgba(241, 245, 249, 0.8);
-  border: 1px solid rgba(226, 232, 240, 0.8);
-  border-radius: 8px;
-  color: #64748b;
+  background: transparent;
+  border: 1.5px solid rgba(31, 127, 255, 0.4);
+  border-radius: 6px;
+  color: var(--nimbus-icon);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  opacity: var(--nimbus-icon-opacity);
   transition: all 0.2s ease;
   flex-shrink: 0;
 }
 
 .cursoriq-search-btn-icon:hover,
 .cursoriq-fav-btn-icon:hover {
-  background: rgba(241, 245, 249, 1);
-  border-color: #cbd5e1;
-  color: #475569;
-  transform: scale(1.05);
+  background: rgba(31, 127, 255, 0.2);
+  color: var(--nimbus-icon-hover);
+  opacity: 1;
+  transform: scale(1.1);
 }
 
 .cursoriq-search-btn-icon:active,
@@ -256,10 +548,10 @@
 .cursoriq-fav-btn {
   flex: 1;
   padding: 10px 16px;
-  background: white;
-  color: #475569;
-  border: 1.5px solid #e2e8f0;
-  border-radius: 10px;
+  background: var(--nimbus-surface-strong);
+  color: #cbd5e1;
+  border: 1.5px solid rgba(31, 127, 255, 0.4);
+  border-radius: 8px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -278,29 +570,30 @@
 }
 
 .cursoriq-fav-btn:hover {
-  background: #f8fafc;
-  border-color: #cbd5e1;
+  background: rgba(31, 127, 255, 0.2);
+  border-color: rgba(31, 127, 255, 0.6);
+  color: #e2e8f0;
   transform: translateY(-1px);
 }
 
 .cursoriq-fav-btn.favorited {
-  background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
-  border-color: #fca5a5;
-  color: #dc2626;
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #f87171;
 }
 
 .cursoriq-fav-btn.favorited:hover {
-  background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
-  border-color: #f87171;
+  background: rgba(239, 68, 68, 0.3);
+  border-color: rgba(239, 68, 68, 0.6);
 }
 
 .cursoriq-google-btn {
   flex: 1;
   padding: 10px 16px;
-  background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+  background: linear-gradient(135deg, #05007f 0%, #1f7fff 100%);
   color: white !important;
   border: none;
-  border-radius: 10px;
+  border-radius: 8px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -310,7 +603,7 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  box-shadow: 0 4px 6px -1px rgba(30, 58, 138, 0.3);
+  box-shadow: 0 4px 12px rgba(31, 127, 255, 0.3);
 }
 
 .cursoriq-google-btn svg {
@@ -320,28 +613,28 @@
 }
 
 .cursoriq-google-btn:hover {
-  background: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%);
+  background: linear-gradient(135deg, #1f7fff 0%, #4d9aff 100%);
   transform: translateY(-1px);
-  box-shadow: 0 6px 12px -2px rgba(30, 58, 138, 0.4);
+  box-shadow: 0 6px 16px rgba(31, 127, 255, 0.4);
 }
 
 .cursoriq-google-btn:active {
   transform: translateY(0);
-  box-shadow: 0 2px 4px -1px rgba(30, 58, 138, 0.3);
+  box-shadow: 0 2px 8px rgba(31, 127, 255, 0.3);
 }
 
 .cursoriq-synonyms-container {
   margin-top: 0;
   padding: 16px 18px;
-  background: rgba(248, 250, 252, 0.6);
-  border-top: 1px solid rgba(226, 232, 240, 0.6);
-  border-radius: 0 0 16px 16px;
+  background: var(--nimbus-surface);
+  border-top: 1px solid rgba(31, 127, 255, 0.25);
+  border-radius: 0 0 10px 10px;
 }
 
 .cursoriq-synonyms-label {
   font-size: 11px;
   font-weight: 700;
-  color: #64748b;
+  color: #94a3b8;
   margin-bottom: 10px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -375,25 +668,25 @@
   display: inline-flex;
   align-items: center;
   padding: 6px 14px;
-  background: white;
-  color: #475569;
-  border-radius: 20px;
+  background: var(--nimbus-surface-strong);
+  color: #cbd5e1;
+  border-radius: 8px;
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  border: 1.5px solid #e2e8f0;
+  border: 1.5px solid rgba(31, 127, 255, 0.4);
   flex-shrink: 0;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
 }
 
 .cursoriq-synonym-tag:hover {
-  background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
-  color: white;
-  border-color: #1e3a8a;
+  background: rgba(31, 127, 255, 0.25);
+  color: #fff;
+  border-color: rgba(31, 127, 255, 0.6);
   transform: translateY(-2px);
-  box-shadow: 0 4px 8px rgba(30, 58, 138, 0.3);
+  box-shadow: 0 4px 12px rgba(31, 127, 255, 0.25);
 }
 
 /* Examples section */
@@ -405,7 +698,7 @@
 .cursoriq-examples-label {
   font-size: 11px;
   font-weight: 600;
-  color: #64748b;
+  color: #94a3b8;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 8px;
@@ -422,11 +715,11 @@
 
 .cursoriq-example-item {
   font-size: 13px;
-  color: #475569;
+  color: #cbd5e1;
   line-height: 1.5;
   padding: 8px 12px;
-  background: rgba(241, 245, 249, 0.6);
-  border-left: 3px solid #1e3a8a;
+  background: var(--nimbus-surface-overlay);
+  border-left: 3px solid rgba(31, 127, 255, 0.6);
   border-radius: 6px;
   font-style: italic;
 }
@@ -438,7 +731,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(15, 23, 42, 0.5);
+  background: var(--nimbus-surface);
   backdrop-filter: blur(4px);
   z-index: 2147483646;
   display: flex;
@@ -453,9 +746,9 @@
 }
 
 .cursoriq-mini-window {
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-  border-radius: 20px;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a;
+  border-radius: 10px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(31, 127, 255, 0.25);
   max-width: 520px;
   width: 90%;
   max-height: 450px;
@@ -463,7 +756,7 @@
   flex-direction: column;
   animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   overflow: hidden;
-  border: 1px solid rgba(226, 232, 240, 0.8);
+  border: 2px solid rgba(31, 127, 255, 0.5);
 }
 
 @keyframes slideUp {
@@ -482,19 +775,22 @@
   justify-content: space-between;
   align-items: center;
   padding: 18px 22px;
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-  border-bottom: 1px solid rgba(226, 232, 240, 0.6);
+  background: var(--nimbus-surface-strong);
+  border-bottom: 1px solid rgba(31, 127, 255, 0.25);
   font-weight: 700;
   font-size: 16px;
-  color: #0f172a;
+  color: #e2e8f0;
 }
 
-.cursoriq-close-btn {
-  background: rgba(226, 232, 240, 0.5);
-  border: none;
+.cursoriq-mini-window .cursoriq-close-btn {
+  position: static;
+  top: auto;
+  right: auto;
+  background: var(--nimbus-surface-strong);
+  border: 2px solid rgba(31, 127, 255, 0.4);
   font-size: 22px;
   line-height: 1;
-  color: #64748b;
+  color: #e2e8f0;
   cursor: pointer;
   padding: 0;
   width: 32px;
@@ -502,13 +798,14 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: 6px;
   transition: all 0.2s ease;
 }
 
-.cursoriq-close-btn:hover {
-  background: #e2e8f0;
-  color: #0f172a;
+.cursoriq-mini-window .cursoriq-close-btn:hover {
+  background: var(--nimbus-surface-strong);
+  border-color: rgba(31, 127, 255, 0.6);
+  color: #fff;
   transform: rotate(90deg);
 }
 
@@ -517,19 +814,20 @@
   overflow-y: auto;
   font-size: 14px;
   line-height: 1.7;
-  color: #475569;
+  color: #cbd5e1;
   flex: 1;
 }
 
-/* Icon-only modal for long text selections - compact, light mode only */
+/* Icon-only modal – Nimbus dark, squarer, matches floating toolbar */
 .cursoriq-icon-only-modal {
   min-width: auto !important;
   width: auto !important;
   max-width: none !important;
   padding: 8px 10px !important;
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%) !important;
-  border: 2px solid rgba(30, 58, 138, 0.2) !important;
-  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.05) !important;
+  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a !important;
+  border: 2px solid rgba(31, 127, 255, 0.5) !important;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(31, 127, 255, 0.2) !important;
+  border-radius: 10px !important;
 }
 
 .cursoriq-icon-buttons {
@@ -543,40 +841,40 @@
   width: 36px;
   height: 36px;
   padding: 0;
-  background: rgba(241, 245, 249, 0.9);
-  border: 1.5px solid rgba(226, 232, 240, 0.8);
-  border-radius: 8px;
-  color: #1e3a8a;
+  background: transparent;
+  border: 1.5px solid rgba(31, 127, 255, 0.4);
+  border-radius: 6px;
+  color: var(--nimbus-icon-hover);
+  opacity: var(--nimbus-icon-opacity);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background 0.2s, color 0.2s, opacity 0.2s, transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   flex-shrink: 0;
 }
 
 .cursoriq-icon-btn:hover {
-  background: rgba(241, 245, 249, 1);
-  border-color: #1e3a8a;
-  color: #1e3a8a;
-  transform: scale(1.08);
-  box-shadow: 0 2px 8px rgba(30, 58, 138, 0.15);
+  background: rgba(31, 127, 255, 0.2);
+  color: var(--nimbus-icon-hover);
+  opacity: 1;
+  transform: scale(1.1);
 }
 
 .cursoriq-icon-btn:active {
-  transform: scale(0.96);
+  transform: scale(0.95);
 }
 
 .cursoriq-icon-btn.copied {
-  color: #10b981;
-  border-color: #10b981;
-  background: rgba(16, 185, 129, 0.1);
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.6);
+  background: rgba(52, 211, 153, 0.15);
 }
 
 .cursoriq-icon-btn.playing {
-  color: #1e3a8a;
-  border-color: #1e3a8a;
-  background: rgba(30, 58, 138, 0.1);
+  color: #60a5fa;
+  border-color: rgba(31, 127, 255, 0.5);
+  background: rgba(31, 127, 255, 0.2);
   animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -593,7 +891,7 @@
   width: 18px;
   height: 18px;
   display: block;
-  stroke: #1e3a8a;
+  stroke: currentColor;
   fill: none;
 }
 
@@ -601,16 +899,207 @@
   width: 20px;
   height: 20px;
   display: block;
-  filter: none;
   margin: auto;
   object-fit: contain;
 }
 
-/* Close button for icon modal - smaller */
+.cursoriq-search-icon-btn img {
+  filter: brightness(0) invert(1);
+}
+
+/* Close button for icon modal - smaller, Nimbus dark */
 .cursoriq-icon-only-modal .cursoriq-close-btn {
   width: 24px;
   height: 24px;
   top: -10px;
   right: -10px;
   font-size: 16px;
+  border-radius: 6px !important;
+  background: var(--nimbus-surface-solid) !important;
+  border-color: rgba(31, 127, 255, 0.4) !important;
+  color: #e2e8f0 !important;
+}
+
+/* Location tooltip – Nimbus dark, compact */
+.cursoriq-location-tooltip {
+  min-width: auto !important;
+  max-width: none !important;
+  padding: 10px 12px !important;
+  border-radius: 10px !important;
+}
+
+.cursoriq-location-tooltip .cursoriq-close-btn {
+  width: 24px;
+  height: 24px;
+  top: -10px;
+  right: -10px;
+  border-radius: 6px !important;
+  background: var(--nimbus-surface-solid) !important;
+  border-color: rgba(31, 127, 255, 0.4) !important;
+  color: #e2e8f0 !important;
+}
+
+.cursoriq-location-tooltip .cursoriq-icon-btn {
+  background: transparent !important;
+  border: 1.5px solid rgba(31, 127, 255, 0.4) !important;
+  color: rgba(226, 232, 240, 0.95) !important;
+}
+.cursoriq-location-tooltip .cursoriq-icon-btn:hover {
+  background: rgba(31, 127, 255, 0.2) !important;
+  color: #e2e8f0 !important;
+  transform: scale(1.1);
+}
+.cursoriq-location-tooltip .cursoriq-icon-btn svg {
+  stroke: currentColor;
+}
+
+/* Floating quick-action toolbar on every page – Nimbus hub dark (top-right, moveable, squarer) */
+.cursoriq-float-toolbar {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 2147483640;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 10px 8px 8px;
+  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a;
+  border: 2px solid rgba(31, 127, 255, 0.55);
+  border-radius: 10px;
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(31, 127, 255, 0.25), 0 0 24px rgba(31, 127, 255, 0.12);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.cursoriq-float-grip {
+  width: 24px;
+  height: 36px;
+  margin-right: 4px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(148, 163, 184, 0.8);
+  cursor: grab;
+  flex-shrink: 0;
+}
+.cursoriq-float-grip:active { cursor: grabbing; }
+.cursoriq-float-grip:hover { color: rgba(203, 213, 225, 0.95); }
+.cursoriq-float-grip svg { width: 14px; height: 14px; display: block; }
+
+.cursoriq-float-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.95);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s, background 0.2s, transform 0.2s;
+}
+
+.cursoriq-float-btn:hover {
+  background: rgba(31, 127, 255, 0.2);
+  color: #e2e8f0;
+  transform: scale(1.1);
+}
+
+.cursoriq-float-btn:active {
+  transform: scale(0.95);
+}
+
+.cursoriq-float-btn svg {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+.cursoriq-float-popover {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 260px;
+  max-width: 360px;
+  padding: 14px 16px;
+  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a;
+  border: 2px solid rgba(31, 127, 255, 0.5);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(31, 127, 255, 0.2);
+  z-index: 2147483641;
+}
+
+.cursoriq-float-popover-loading,
+.cursoriq-float-popover-err {
+  font-size: 14px;
+  color: #94a3b8;
+  margin-bottom: 10px;
+}
+
+.cursoriq-float-popover-err {
+  color: #f87171;
+}
+
+.cursoriq-float-popover-text {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #e2e8f0;
+  margin-bottom: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.cursoriq-float-popover-copy,
+.cursoriq-float-popover-close {
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  margin-right: 8px;
+  transition: opacity 0.2s;
+}
+
+.cursoriq-float-popover-copy {
+  background: linear-gradient(135deg, #05007f 0%, #1f7fff 100%);
+  color: #fff;
+}
+
+.cursoriq-float-popover-close {
+  background: var(--nimbus-surface-strong);
+  color: var(--nimbus-icon-hover);
+}
+
+.cursoriq-float-popover-copy:hover,
+.cursoriq-float-popover-close:hover {
+  opacity: 1;
+}
+
+/* Reader / Focus mode – hide clutter */
+html.nimbus-reader-mode nav,
+html.nimbus-reader-mode aside,
+html.nimbus-reader-mode .sidebar,
+html.nimbus-reader-mode .comments,
+html.nimbus-reader-mode .comment-section,
+html.nimbus-reader-mode .ad,
+html.nimbus-reader-mode .ads,
+html.nimbus-reader-mode [id*="ad-"],
+html.nimbus-reader-mode [class*="ad-container"],
+html.nimbus-reader-mode .social-share,
+html.nimbus-reader-mode .related-posts,
+html.nimbus-reader-mode footer {
+  display: none !important;
+}
+
+html.nimbus-reader-mode main,
+html.nimbus-reader-mode article {
+  max-width: 720px !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
 }

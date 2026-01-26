@@ -25,6 +25,7 @@ cp -r assets "$STORE_DIR/"
 
 # Copy logo and favicon (if needed)
 cp "Nimbus Logo-02.svg" "$STORE_DIR/" 2>/dev/null || true
+cp "favicon_nimbus.png" "$STORE_DIR/" 2>/dev/null || true
 cp "Nimbus Favicon.png" "$STORE_DIR/" 2>/dev/null || true
 
 # Create zip file

@@ -99,3 +99,8 @@ Even with 1,000 users:
 4. Monitor costs for first month
 5. Adjust limits as needed
 
+
+
+
+
+

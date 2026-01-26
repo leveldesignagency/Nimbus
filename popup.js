@@ -4,6 +4,7 @@
   const searchInput = document.getElementById('searchInput');
   const favoritesDiv = document.getElementById('favorites');
   const recentDiv = document.getElementById('recent');
+  const savedDiv = document.getElementById('saved');
   const wordOfDayDiv = document.getElementById('wordOfDay');
   const nimbusTitle = document.getElementById('nimbusTitle');
   let navigationHistory = []; // Stack for back button
@@ -18,6 +19,7 @@
 
   // Subscription checking - Using Stripe (Chrome Web Store doesn't manage products)
   const API_BASE_URL = 'https://nimbus-api-ten.vercel.app/api';
+  console.log('[API] API_BASE_URL:', API_BASE_URL);
   let subscriptionActive = false;
   let userEmail = null;
 
@@ -78,14 +80,12 @@
     }
     
     if (!email) {
-      console.error('Popup: Cannot start polling without email');
       return;
     }
     
     let attempts = 0;
     const maxAttempts = 60; // Poll for up to 5 minutes (5 second intervals)
     
-    console.log('Popup: Starting payment polling for email:', email);
     
     paymentPollInterval = setInterval(async () => {
       attempts++;
@@ -93,12 +93,10 @@
       if (attempts > maxAttempts) {
         clearInterval(paymentPollInterval);
         paymentPollInterval = null;
-        console.log('Popup: Polling timeout, stopping');
         return;
       }
       
       try {
-        console.log(`Popup: Polling attempt ${attempts}/${maxAttempts}...`);
         
         // First try by session ID if available
         if (sessionId && attempts <= 10) {
@@ -125,13 +123,11 @@
                 
                 clearInterval(paymentPollInterval);
                 paymentPollInterval = null;
-                console.log('Popup: Subscription found via session polling, reloading');
                 location.reload();
                 return;
               }
             }
           } catch (e) {
-            console.log('Popup: Session verification failed, trying email:', e);
           }
         }
         
@@ -168,9 +164,23 @@
     }, 5000); // Poll every 5 seconds
   }
 
+  // Load unpacked = different runtime ID. Chrome Web Store install uses fixed ID.
+  const STORE_EXTENSION_ID = 'abmihilkdbamlelkmpfegjfimcjpcihh';
+  function isDeveloperMode() {
+    try {
+      return chrome.runtime.id !== STORE_EXTENSION_ID;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Check subscription status via our API (Stripe backend)
   async function checkSubscription() {
-    // NO BYPASS - Strict subscription check for production
+    if (isDeveloperMode()) {
+      subscriptionActive = true;
+      return true;
+    }
+
     try {
       // Get subscription ID and email from storage
       const result = await new Promise((resolve) => {
@@ -182,18 +192,17 @@
       const userEmail = result.userEmail;
       const cachedActive = result.subscriptionActive;
 
+
       // CRITICAL FIX: Check cached active status FIRST - if it's true and expiry is valid, return immediately
       // This ensures the popup shows the hub immediately after payment verification
       if (cachedActive === true) {
         // Verify expiry is still valid
         if (expiry && new Date(expiry) > new Date()) {
           subscriptionActive = true;
-          console.log('Popup: Using cached subscription status (active)');
           return true;
         } else if (!expiry) {
           // If no expiry but cached is active, still trust it (might be a new subscription)
           subscriptionActive = true;
-          console.log('Popup: Using cached subscription status (active, no expiry yet)');
           return true;
         }
       }
@@ -235,7 +244,8 @@
       // Check if expired locally
       if (expiry && new Date(expiry) < new Date()) {
         subscriptionActive = false;
-        chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
+        chrome.storage.local.set({ subscriptionActive: false });
+        // Only remove if truly expired - but keep subscriptionId/userEmail for manage subscription
         return false;
       }
 
@@ -254,29 +264,32 @@
         }
 
         const data = await response.json();
+        
         if (data.valid) {
           subscriptionActive = true;
           // Update storage with latest info
-          chrome.storage.local.set({
+          await chrome.storage.local.set({
             subscriptionExpiry: data.expiryDate,
             subscriptionId: subscriptionId,
             subscriptionActive: true,
+            userEmail: userEmail || data.email || undefined,
           });
           return true;
         } else {
           subscriptionActive = false;
-          chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
+          chrome.storage.local.set({ subscriptionActive: false });
           return false;
         }
       } catch (apiError) {
-        console.error('API verification error:', apiError);
         // If API fails but expiry is still valid and we have cached active status, allow access
         if (expiry && new Date(expiry) > new Date() && cachedActive === true) {
           subscriptionActive = true;
           return true;
         }
+        // Don't remove data on network/API errors - only set status to false
         subscriptionActive = false;
         chrome.storage.local.set({ subscriptionActive: false });
+        // DO NOT REMOVE subscriptionId or userEmail - keep them for manage subscription
         return false;
       }
     } catch (e) {
@@ -322,7 +335,7 @@
     }
     
     const upgradeHtml = `
-      <div style="text-align: center; padding: 20px 30px; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 30%, #2563eb 60%, #3b82f6 100%); border-radius: 16px; margin: 5px 20px; max-width: 500px; margin-left: auto; margin-right: auto; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
+      <div style="text-align: center; padding: 20px 30px; background: linear-gradient(135deg, #05007f 0%, #0a0a9e 30%, #1f7fff 60%, #4d9aff 100%); border-radius: 16px; margin: 5px 20px; max-width: 500px; margin-left: auto; margin-right: auto; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
         <img src="${chrome.runtime.getURL('NimbusLogo.svg')}" alt="Nimbus" style="height: 40px; margin-bottom: 15px; filter: brightness(0) invert(1);" onerror="this.onerror=null; this.src='${chrome.runtime.getURL('Nimbus Logo-02.svg')}'; this.onerror=function(){this.onerror=null; this.src='${chrome.runtime.getURL('Nimbus Logo-01.svg')}'; this.onerror=function(){this.style.display='none';};};">
         <h2 style="margin: 0 0 10px 0; color: #ffffff; font-size: 28px; font-weight: 700;">Subscribe to Nimbus</h2>
         <p style="margin: 0 0 12px 0; color: #e2e8f0; font-size: 16px; line-height: 1.5;">Unlock unlimited word definitions, AI explanations, and context</p>
@@ -330,13 +343,13 @@
           <span style="color: #ffffff; font-size: 15px; font-weight: 600;">✨ Start with a 3-Day Free Trial</span>
         </div>
         <div style="background: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 25px; border-radius: 12px; margin-bottom: 25px; border: 1px solid rgba(255,255,255,0.2);">
-          <div style="font-size: 42px; font-weight: 700; color: #ffffff; margin-bottom: 5px;">£4.99</div>
-          <div style="font-size: 16px; color: #cbd5e1;">per year • Then £4.99/year</div>
+          <div style="font-size: 42px; font-weight: 700; color: #ffffff; margin-bottom: 5px;">£2.99</div>
+          <div style="font-size: 16px; color: #cbd5e1;">per year • Then £2.99/year</div>
         </div>
         
         ${email ? `<p style="margin: 0 0 25px 0; color: #cbd5e1; font-size: 14px;">Signed in as: <strong style="color: #ffffff;">${email}</strong></p>` : ''}
         
-        ${!email ? `<button id="signin-btn" style="width: 100%; background: #ffffff; color: #1e3a8a; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600; margin-bottom: 20px; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: center; gap: 8px;">
+        ${!email ? `<button id="signin-btn" style="width: 100%; background: #ffffff; color: #05007f; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600; margin-bottom: 20px; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: center; gap: 8px;">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
             <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
@@ -346,7 +359,7 @@
           Sign in with Google
         </button>` : ''}
         
-        <button id="subscribe-btn" style="width: 100%; background: #ffffff; color: #1e3a8a; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 16px; font-weight: 600; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); ${!email ? 'opacity: 0.5; cursor: not-allowed;' : ''}" ${!email ? 'disabled' : ''}>
+        <button id="subscribe-btn" style="width: 100%; background: #ffffff; color: #05007f; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 16px; font-weight: 600; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); ${!email ? 'opacity: 0.5; cursor: not-allowed;' : ''}" ${!email ? 'disabled' : ''}>
           ${email ? 'Start Free Trial - 3 Days Free' : 'Sign in to Subscribe'}
         </button>
 
@@ -367,7 +380,6 @@
     
     // Set up button handlers
     setTimeout(() => {
-      console.log('Setting up button handlers, email:', email);
       const subscribeBtn = document.getElementById('subscribe-btn');
       const signinBtn = document.getElementById('signin-btn');
       console.log('Buttons found - subscribeBtn:', !!subscribeBtn, 'signinBtn:', !!signinBtn);
@@ -532,7 +544,7 @@
             
             showNotification(errorMsg, 'error');
             subscribeBtn.disabled = false;
-            subscribeBtn.textContent = 'Subscribe Now - £4.99/year';
+            subscribeBtn.textContent = 'Subscribe Now - £2.99/year';
           }
         });
       }
@@ -545,35 +557,37 @@
           signinBtn.disabled = true;
           signinBtn.innerHTML = 'Opening Google sign-in...';
           
-          // Try getProfileUserInfo first (works in unpacked mode)
-          chrome.identity.getProfileUserInfo((userInfo) => {
-            if (userInfo && userInfo.email) {
-              // Got email directly
-              chrome.storage.local.set({ userEmail: userInfo.email });
-              showNotification('Signed in!', 'success');
-              location.reload();
-              return;
-            }
-            
-            // Fallback to OAuth token flow
+          signinBtn.innerHTML = 'Opening Google sign-in...';
+          
             chrome.identity.getAuthToken({ 
               interactive: true,
               scopes: ['https://www.googleapis.com/auth/userinfo.email']
             }, async (token) => {
               if (chrome.runtime.lastError) {
                 const error = chrome.runtime.lastError.message;
-                console.error('OAuth error:', error);
-                
-                // If OAuth fails, show email input for testing (unpacked mode)
-                showEmailInputFallback();
+              
+              signinBtn.disabled = false;
+              signinBtn.innerHTML = 'Sign in with Google';
+              
+              // Show user-friendly error message
+              let errorMsg = 'Sign-in failed. Please try again.';
+              if (error.includes('canceled') || error.includes('user_cancelled') || error.includes('cancel')) {
+                errorMsg = 'Sign-in was cancelled. Please try again.';
+              }
+              
+              showNotification(errorMsg, 'error');
+              
                 return;
               }
               
               if (!token) {
                 signinBtn.disabled = false;
                 signinBtn.innerHTML = 'Sign in with Google';
+              showNotification('Sign-in failed. Please try again.', 'error');
                 return;
               }
+            
+            signinBtn.innerHTML = 'Verifying...';
               
               // Get email from Google
               try {
@@ -586,79 +600,27 @@
                   if (userInfo.email) {
                     // Save email and reload
                     await chrome.storage.local.set({ userEmail: userInfo.email });
-                    showNotification('Signed in!', 'success');
+                  showNotification('Signed in successfully!', 'success');
+                  setTimeout(() => {
                     location.reload();
+                  }, 500);
+                } else {
+                  signinBtn.disabled = false;
+                  signinBtn.innerHTML = 'Sign in with Google';
+                  showNotification('Sign-in failed. No email found in account.', 'error');
                   }
+              } else {
+                signinBtn.disabled = false;
+                signinBtn.innerHTML = 'Sign in with Google';
+                showNotification('Sign-in failed. Please try again.', 'error');
                 }
               } catch (error) {
                 signinBtn.disabled = false;
                 signinBtn.innerHTML = 'Sign in with Google';
-                showNotification('Sign-in failed', 'error');
+              showNotification('Sign-in failed. Please check your internet connection.', 'error');
               }
-            });
           });
         };
-      }
-      
-      // Email input fallback for unpacked mode testing
-      function showEmailInputFallback() {
-        const signinBtn = document.getElementById('signin-btn');
-        if (!signinBtn) return;
-        
-        // Hide Google sign-in button
-        signinBtn.style.display = 'none';
-        
-        // Show email input
-        const emailSection = document.createElement('div');
-        emailSection.id = 'email-input-section';
-        emailSection.style.marginBottom = '20px';
-        emailSection.innerHTML = `
-          <label style="display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600; color: #ffffff; text-align: left;">Email Address</label>
-          <input type="email" id="email-input" placeholder="your.email@example.com" style="width: 100%; padding: 12px; border: 2px solid rgba(255,255,255,0.3); border-radius: 8px; background: rgba(255,255,255,0.95); color: #1e293b; font-size: 14px; box-sizing: border-box; margin-bottom: 12px;" autocomplete="email">
-          <button id="email-submit" style="width: 100%; background: #ffffff; color: #1e3a8a; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
-            Continue
-          </button>
-        `;
-        
-        signinBtn.parentNode.insertBefore(emailSection, signinBtn.nextSibling);
-        
-        const emailInput = document.getElementById('email-input');
-        const submitBtn = document.getElementById('email-submit');
-        
-        if (emailInput) {
-          emailInput.focus();
-          emailInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && submitBtn) {
-              submitBtn.click();
-            }
-          });
-        }
-        
-        if (submitBtn) {
-          submitBtn.addEventListener('click', () => {
-            const emailValue = emailInput ? emailInput.value.trim() : '';
-            
-            if (!emailValue || !emailValue.includes('@') || !emailValue.includes('.')) {
-              showNotification('Please enter a valid email address', 'error');
-              if (emailInput) {
-                emailInput.focus();
-                emailInput.style.borderColor = '#dc2626';
-                setTimeout(() => {
-                  if (emailInput) emailInput.style.borderColor = 'rgba(255,255,255,0.3)';
-                }, 2000);
-              }
-              return;
-            }
-            
-            submitBtn.disabled = true;
-            submitBtn.textContent = 'Saving...';
-            
-            chrome.storage.local.set({ userEmail: emailValue.toLowerCase() }, () => {
-              showNotification('Email saved!', 'success');
-              location.reload();
-            });
-          });
-        }
       }
       
       // Verify subscription button handler
@@ -669,7 +631,6 @@
           verifyBtn.textContent = 'Checking...';
           
           try {
-            console.log('Manually verifying subscription for email:', email);
             
             // First try by session ID if we have one
             const pendingData = await new Promise((resolve) => {
@@ -677,7 +638,6 @@
             });
             
             if (pendingData.pendingCheckoutSessionId) {
-              console.log('Trying to verify by session ID:', pendingData.pendingCheckoutSessionId);
               try {
                 const sessionResponse = await fetch(`${API_BASE_URL}/get-session`, {
                   method: 'POST',
@@ -719,17 +679,23 @@
             }
             
             // Fallback: Check subscription by email
-            console.log('Trying to verify by email:', email);
+            
             const response = await fetch(`${API_BASE_URL}/verify-license`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ licenseKey: email }),
             });
             
-            const data = await response.json();
-            console.log('Email verification response:', data);
-            console.log('Response status:', response.status);
             
+            if (!response.ok) {
+              const errorText = await response.text();
+              verifyBtn.disabled = false;
+              verifyBtn.textContent = 'Already paid? Verify Subscription';
+              showNotification(`Verification failed (${response.status}). Check Stripe dashboard to confirm payment.`, 'error');
+              return;
+            }
+            
+            const data = await response.json();
             if (data.valid) {
               // Save subscription
               await chrome.storage.local.set({
@@ -738,6 +704,7 @@
                 subscriptionActive: true,
                 userEmail: email,
               });
+              
               
               // Clear pending checkout
               await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
@@ -750,14 +717,12 @@
               verifyBtn.disabled = false;
               verifyBtn.textContent = 'Already paid? Verify Subscription';
               const errorMsg = data.error || 'No active subscription found for this email.';
-              console.error('Verification failed:', errorMsg, 'Full response:', data);
               showNotification(`${errorMsg} Check Stripe dashboard to confirm payment.`, 'error');
             }
           } catch (error) {
-            console.error('Verification error:', error);
             verifyBtn.disabled = false;
             verifyBtn.textContent = 'Already paid? Verify Subscription';
-            showNotification(`Failed to verify: ${error.message}. Check console for details.`, 'error');
+            showNotification('Verification failed. Please try again.', 'error');
           }
         });
       }
@@ -777,66 +742,6 @@
         });
       }
       
-      // Test mode fallback - allows testing payment flow in unpacked extensions
-      function showTestEmailInput() {
-        const signinBtn = document.getElementById('signin-btn');
-        if (!signinBtn) return;
-        
-        // Hide Google sign-in button
-        signinBtn.style.display = 'none';
-        
-        // Show test email input
-        const emailSection = document.createElement('div');
-        emailSection.id = 'test-email-section';
-        emailSection.style.marginBottom = '20px';
-        emailSection.innerHTML = `
-          <label style="display: block; margin-bottom: 8px; font-size: 14px; font-weight: 600; color: #ffffff; text-align: left;">Email Address</label>
-          <input type="email" id="test-email-input" placeholder="your.email@example.com" style="width: 100%; padding: 12px; border: 2px solid rgba(255,255,255,0.3); border-radius: 8px; background: rgba(255,255,255,0.95); color: #1e293b; font-size: 14px; box-sizing: border-box; margin-bottom: 12px;" autocomplete="email">
-          <button id="test-email-submit" style="width: 100%; background: #ffffff; color: #1e3a8a; border: none; padding: 12px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600;">
-            Continue
-          </button>
-        `;
-        
-        signinBtn.parentNode.insertBefore(emailSection, signinBtn.nextSibling);
-        
-        const emailInput = document.getElementById('test-email-input');
-        const submitBtn = document.getElementById('test-email-submit');
-        
-        if (emailInput) {
-          emailInput.focus();
-          emailInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && submitBtn) {
-              submitBtn.click();
-            }
-          });
-        }
-        
-        if (submitBtn) {
-          submitBtn.addEventListener('click', () => {
-            const emailValue = emailInput ? emailInput.value.trim() : '';
-            
-            if (!emailValue || !emailValue.includes('@') || !emailValue.includes('.')) {
-              showNotification('Please enter a valid email address', 'error');
-              if (emailInput) {
-                emailInput.focus();
-                emailInput.style.borderColor = '#dc2626';
-                setTimeout(() => {
-                  if (emailInput) emailInput.style.borderColor = 'rgba(255,255,255,0.3)';
-                }, 2000);
-              }
-              return;
-            }
-            
-            submitBtn.disabled = true;
-            submitBtn.textContent = 'Saving...';
-            
-            userEmail = emailValue.toLowerCase();
-            chrome.storage.local.set({ userEmail: userEmail });
-            showNotification('Email saved!', 'success');
-            setTimeout(() => showUpgradePromptInPopup(), 500);
-          });
-        }
-      }
     }, 100);
   }
   
@@ -883,10 +788,10 @@
         
         // Hover effect
         upgradeBtn.addEventListener('mouseenter', () => {
-          upgradeBtn.style.background = '#1e40af';
+          upgradeBtn.style.background = '#1f7fff';
         });
         upgradeBtn.addEventListener('mouseleave', () => {
-          upgradeBtn.style.background = '#1e3a8a';
+          upgradeBtn.style.background = '#05007f';
         });
       }
       
@@ -970,17 +875,17 @@
     // Handle code blocks (```language\ncode\n```)
     escaped = escaped.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
       const language = lang || 'text';
-      return `<div class="code-block-container" style="margin: 8px 0; border-radius: 8px; overflow: hidden; background: #1e293b; border: 1px solid #334155;">
-        <div style="padding: 8px 12px; background: #0f172a; border-bottom: 1px solid #334155; font-size: 11px; color: #94a3b8; font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
+      return `<div class="code-block-container" style="margin: 8px 0; border-radius: 8px; overflow: hidden; background: #0d1045; border: 1px solid #252a65;">
+        <div style="padding: 8px 12px; background: #0d0d3a; border-bottom: 1px solid #252a65; font-size: 11px; color: #94a3b8; font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
           <span>${language}</span>
-          <button class="copy-code-btn" style="background: transparent; border: none; color: #94a3b8; cursor: pointer; font-size: 10px; padding: 2px 6px; border-radius: 4px; transition: all 0.2s;" onmouseover="this.style.background='#334155'; this.style.color='#fff';" onmouseout="this.style.background='transparent'; this.style.color='#94a3b8';">Copy</button>
+          <button class="copy-code-btn" style="background: transparent; border: none; color: #94a3b8; cursor: pointer; font-size: 10px; padding: 2px 6px; border-radius: 4px; transition: all 0.2s;" onmouseover="this.style.background='#252a65'; this.style.color='#fff';" onmouseout="this.style.background='transparent'; this.style.color='#94a3b8';">Copy</button>
         </div>
         <pre style="margin: 0; padding: 12px; overflow-x: auto; max-height: 300px; overflow-y: auto; color: #e2e8f0; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 12px; line-height: 1.5; white-space: pre; word-wrap: normal;"><code>${code.trim()}</code></pre>
       </div>`;
     });
     
     // Handle inline code (`code`)
-    escaped = escaped.replace(/`([^`]+)`/g, '<code style="background: #1e293b; color: #60a5fa; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 12px;">$1</code>');
+    escaped = escaped.replace(/`([^`]+)`/g, '<code style="background: #0d1045; color: #4d9aff; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 12px;">$1</code>');
     
     // Convert line breaks to <br>
     escaped = escaped.replace(/\n/g, '<br>');
@@ -1141,7 +1046,7 @@
     const link = document.querySelector("link[rel='icon']") || document.createElement('link');
     link.type = 'image/png';
     link.rel = 'icon';
-    link.href = chrome.runtime.getURL('Nimbus Favicon.png');
+    link.href = chrome.runtime.getURL('favicon_nimbus.png');
     if (!document.querySelector("link[rel='icon']")) {
       document.getElementsByTagName('head')[0].appendChild(link);
     }
@@ -1152,8 +1057,22 @@
   // Set logo dynamically (Chrome extension popups need this)
   function setLogo() {
     try {
+      // Check if chrome.runtime is available
+      if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.getURL) {
+        console.warn('chrome.runtime not available yet, will retry');
+        return false;
+      }
+      
       const logoImg = document.getElementById('nimbusTitle');
-      if (!logoImg) return;
+      if (!logoImg) {
+        console.warn('Logo element not found, will retry');
+        return false;
+      }
+      
+      // Ensure logo element is visible
+      logoImg.style.display = '';
+      logoImg.style.visibility = 'visible';
+      logoImg.style.opacity = '1';
       
       // List of logo files to try in order (with fallbacks)
       const logoFiles = [
@@ -1162,12 +1081,183 @@
         'Nimbus Logo-01.svg'
       ];
       
+      // Hosted fallback URLs - try these if local files fail
+      // You can host the logo on GitHub, Vercel, or any CDN and update these URLs
+      const hostedFallbacks = [
+        'https://raw.githubusercontent.com/yourusername/yourrepo/main/NimbusLogo.svg', // GitHub raw URL
+        'https://nimbus-api-ten.vercel.app/NimbusLogo.svg', // Vercel static hosting
+        // Add more fallback URLs here if needed
+      ];
+      
       let currentIndex = 0;
+      let hostedIndex = 0;
+      let loaded = false;
+      let tryingHosted = false;
       
       const tryNextLogo = () => {
-        if (currentIndex >= logoFiles.length) {
-          // All logos failed - show text fallback
-          console.warn('All logo files failed to load, using text fallback');
+        if (loaded) return; // Already loaded successfully
+        
+        // First try all local files
+        if (currentIndex < logoFiles.length) {
+          const logoFile = logoFiles[currentIndex];
+          try {
+            const logoUrl = chrome.runtime.getURL(logoFile);
+            
+            // Verify the URL is valid
+            if (!logoUrl || logoUrl.includes('undefined') || !logoUrl.startsWith('chrome-extension://')) {
+              console.error('[LOGO] Invalid URL generated:', logoUrl, 'for file:', logoFile);
+              currentIndex++;
+              tryNextLogo();
+              return;
+            }
+            
+            // Verify chrome.runtime.id exists
+            try {
+              const runtimeId = chrome.runtime.id;
+              if (!runtimeId) {
+                console.error('[LOGO] No runtime ID available');
+                currentIndex++;
+                tryNextLogo();
+                return;
+              }
+            } catch (e) {
+              console.error('[LOGO] Cannot access runtime ID:', e);
+              currentIndex++;
+              tryNextLogo();
+              return;
+            }
+            
+            // Clear any previous error handlers
+            logoImg.onerror = null;
+            logoImg.onload = null;
+            
+            // Ensure the image element is properly styled and visible
+            logoImg.style.display = 'block';
+            logoImg.style.visibility = 'visible';
+            logoImg.style.opacity = '1';
+            logoImg.style.width = 'auto';
+            logoImg.style.height = '24px';
+            logoImg.style.maxWidth = '120px';
+            
+            // Preload the image to verify it exists before setting on element
+            const testImg = new Image();
+            testImg.onload = () => {
+              // Image exists and loaded, set it on the actual element
+              logoImg.src = logoUrl;
+              logoImg.style.display = 'block';
+              logoImg.style.visibility = 'visible';
+              logoImg.style.opacity = '1';
+            };
+            testImg.onerror = () => {
+              // Image failed, try next
+              if (!loaded) {
+                currentIndex++;
+                tryNextLogo();
+              }
+            };
+            testImg.src = logoUrl;
+            
+            // Also set directly as immediate fallback
+            logoImg.src = logoUrl;
+            
+            // Set timeout to move to next if this one doesn't load (increased to 3s)
+            const timeout = setTimeout(() => {
+              if (!loaded) {
+                currentIndex++;
+                tryNextLogo();
+              }
+            }, 3000);
+            
+            logoImg.onerror = (e) => {
+              clearTimeout(timeout);
+              if (!loaded) {
+                console.warn(`Logo failed to load: ${logoFile}`, e);
+                currentIndex++;
+                tryNextLogo();
+              }
+            };
+            
+            // If image loads successfully, hide text fallback if it exists
+            logoImg.onload = () => {
+              clearTimeout(timeout);
+              if (!loaded) {
+                loaded = true;
+                console.log('✅ Logo loaded successfully:', logoFile, 'from URL:', logoUrl);
+                const textFallback = logoImg.parentElement?.querySelector('.logo-text-fallback');
+                if (textFallback) {
+                  textFallback.style.display = 'none';
+                }
+                logoImg.style.display = '';
+                logoImg.style.visibility = 'visible';
+                logoImg.style.opacity = '1';
+              }
+            };
+            return;
+          } catch (e) {
+            console.error('Error setting logo src:', e);
+            currentIndex++;
+            tryNextLogo();
+            return;
+          }
+        }
+        
+        // If all local files failed, try hosted fallbacks
+        if (!tryingHosted && hostedFallbacks.length > 0 && hostedIndex < hostedFallbacks.length) {
+          tryingHosted = true;
+          const hostedUrl = hostedFallbacks[hostedIndex];
+          console.log('All local logos failed, trying hosted fallback:', hostedUrl);
+          
+          // Clear any previous error handlers
+          logoImg.onerror = null;
+          logoImg.onload = null;
+          
+          // Set the src to hosted URL
+          logoImg.src = hostedUrl;
+          logoImg.style.display = '';
+          logoImg.style.visibility = 'visible';
+          logoImg.style.opacity = '1';
+          
+          // Set timeout to move to next hosted URL if this one doesn't load
+          const timeout = setTimeout(() => {
+            if (!loaded) {
+              console.warn(`Hosted logo load timeout for: ${hostedUrl}, trying next...`);
+              hostedIndex++;
+              tryingHosted = false;
+              tryNextLogo();
+            }
+          }, 2000);
+          
+          logoImg.onerror = (e) => {
+            clearTimeout(timeout);
+            if (!loaded) {
+              console.warn(`Hosted logo failed to load: ${hostedUrl}`, e);
+              hostedIndex++;
+              tryingHosted = false;
+              tryNextLogo();
+            }
+          };
+          
+          // If hosted image loads successfully
+          logoImg.onload = () => {
+            clearTimeout(timeout);
+            if (!loaded) {
+              loaded = true;
+              console.log('✅ Logo loaded successfully from hosted URL:', hostedUrl);
+              const textFallback = logoImg.parentElement?.querySelector('.logo-text-fallback');
+              if (textFallback) {
+                textFallback.style.display = 'none';
+              }
+              logoImg.style.display = '';
+              logoImg.style.visibility = 'visible';
+              logoImg.style.opacity = '1';
+            }
+          };
+          return;
+        }
+        
+        // All local and hosted logos failed - show text fallback
+        if (currentIndex >= logoFiles.length && (hostedIndex >= hostedFallbacks.length || hostedFallbacks.length === 0)) {
+          console.warn('All logo files and hosted fallbacks failed, using text fallback');
           if (logoImg.tagName === 'IMG') {
             const parent = logoImg.parentElement;
             if (parent) {
@@ -1186,102 +1276,56 @@
           }
           return;
         }
-        
-        const logoFile = logoFiles[currentIndex];
-        const logoUrl = chrome.runtime.getURL(logoFile);
-        logoImg.src = logoUrl;
-        logoImg.style.display = ''; // Make sure it's visible
-        logoImg.style.visibility = 'visible';
-        
-        logoImg.onerror = () => {
-          console.warn(`Logo failed to load: ${logoFile}, trying next...`);
-          currentIndex++;
-          tryNextLogo();
-        };
-        
-        // If image loads successfully, hide text fallback if it exists
-        logoImg.onload = () => {
-          console.log('Logo loaded successfully:', logoFile);
-          const textFallback = logoImg.parentElement?.querySelector('.logo-text-fallback');
-          if (textFallback) {
-            textFallback.style.display = 'none';
-          }
-          logoImg.style.display = '';
-          logoImg.style.visibility = 'visible';
-        };
       };
       
       tryNextLogo();
+      return true;
     } catch (e) {
       console.error('Failed to set logo:', e);
+      return false;
     }
   }
   
-  // Set logo immediately - run as early as possible
-  (function initLogo() {
-    const logoImg = document.getElementById('nimbusTitle');
-    if (logoImg) {
-      // Try to set logo immediately
-      const logoFiles = ['NimbusLogo.svg', 'Nimbus Logo-02.svg', 'Nimbus Logo-01.svg'];
-      let currentIndex = 0;
-      
-      const tryLogo = () => {
-        if (currentIndex >= logoFiles.length) {
-          // All failed - show text
-          if (logoImg.parentElement && !logoImg.parentElement.querySelector('.logo-text-fallback')) {
-            const textFallback = document.createElement('span');
-            textFallback.className = 'logo-text-fallback';
-            textFallback.textContent = 'Nimbus';
-            textFallback.style.cssText = 'font-size: 20px; font-weight: 700; color: #ffffff; letter-spacing: 0.5px;';
-            logoImg.parentElement.insertBefore(textFallback, logoImg);
-            logoImg.style.display = 'none';
-          }
-          return;
-        }
-        
-        const logoFile = logoFiles[currentIndex];
-        try {
-          const logoUrl = chrome.runtime.getURL(logoFile);
-          logoImg.src = logoUrl;
-          logoImg.style.display = '';
-          logoImg.style.visibility = 'visible';
-          
-          logoImg.onload = () => {
-            console.log('Logo loaded:', logoFile);
-            const textFallback = logoImg.parentElement?.querySelector('.logo-text-fallback');
-            if (textFallback) textFallback.style.display = 'none';
-            logoImg.style.display = '';
-          };
-          
-          logoImg.onerror = () => {
-            currentIndex++;
-            tryLogo();
-          };
-        } catch (e) {
-          console.error('Error setting logo:', e);
-          currentIndex++;
-          tryLogo();
-        }
-      };
-      
-      tryLogo();
+  // Set logo immediately - run as early as possible with multiple retries
+  function initLogo() {
+    // Check if chrome.runtime is available
+    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.getURL) {
+      setTimeout(initLogo, 50);
+      return;
     }
-  })();
+    
+    const logoImg = document.getElementById('nimbusTitle');
+    if (!logoImg) {
+      setTimeout(initLogo, 50);
+      return;
+    }
+    
+    const success = setLogo();
+    if (!success) {
+      setTimeout(initLogo, 100);
+    }
+  }
   
-  // Also use the setLogo function as backup
-  setLogo();
+  // Start logo loading immediately - multiple attempts
+  initLogo();
   
-  // Set logo when DOM is ready
+  // Also use the setLogo function as backup at various points
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', setLogo);
+    document.addEventListener('DOMContentLoaded', () => {
+      setTimeout(() => setLogo(), 50);
+      setTimeout(() => setLogo(), 200);
+      setTimeout(() => setLogo(), 500);
+    });
   } else {
-    setLogo();
+    setTimeout(() => setLogo(), 50);
+    setTimeout(() => setLogo(), 200);
+    setTimeout(() => setLogo(), 500);
   }
   
   // Also try after short delays in case the element isn't ready yet
-  setTimeout(setLogo, 50);
-  setTimeout(setLogo, 200);
-  setTimeout(setLogo, 500);
+  setTimeout(() => setLogo(), 1000);
+  setTimeout(() => setLogo(), 2000);
+  setTimeout(() => setLogo(), 3000);
 
   // Load all data on popup open
   // Load settings and translate UI on initial load (after translations object is defined)
@@ -1319,17 +1363,33 @@
           chrome.storage.local.remove(['pendingSearch']);
           return;
         }
-        // Clear pending search
+        // Person / place / org: use pending.data when available so the hub actually shows content.
+        // (Re-fetch was causing empty hub when the second explain failed or returned non-entity.)
+        if (pending.type === 'person' && pending.data) {
         chrome.storage.local.remove(['pendingSearch']);
-        
-        // Display the search result
-        if (pending.type === 'person') {
           displayPersonResult(pending.term, pending.data);
-        } else if (pending.type === 'organization') {
-          displayOrganizationResult(pending.term, pending.data);
-        } else if (pending.type === 'place') {
+          return;
+        }
+        if (pending.type === 'place' && pending.data) {
+          chrome.storage.local.remove(['pendingSearch']);
           displayPlaceResult(pending.term, pending.data);
-        } else {
+          return;
+        }
+        if (pending.type === 'organization' && pending.data) {
+          chrome.storage.local.remove(['pendingSearch']);
+          displayOrganizationResult(pending.term, pending.data);
+          return;
+        }
+        if ((pending.type === 'person' || pending.type === 'place' || pending.type === 'organization') && pending.term) {
+          chrome.storage.local.remove(['pendingSearch']);
+          executeSearch(pending.term);
+          return;
+        }
+        if (pending.type === 'location') {
+          chrome.storage.local.remove(['pendingSearch']);
+          displayLocationResult(pending.term, pending.canMap);
+        } else if (pending.term) {
+          chrome.storage.local.remove(['pendingSearch']);
           showWordDetails(pending.term);
         }
       }
@@ -1367,22 +1427,20 @@
     // Listen for subscription activation
     if (areaName === 'local' && (changes.subscriptionId || changes.subscriptionActive)) {
       // Reload popup when subscription is activated
-      console.log('Popup: Subscription activated via storage change');
       setTimeout(() => {
         location.reload();
       }, 500);
     }
   });
   
-  // Listen for subscription activation message from background
+  // Listen for subscription activation and applyPendingSearch (person/org/place from content script)
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg && msg.action === 'subscriptionActivated') {
-      console.log('Popup: Subscription activated via message');
-      setTimeout(() => {
-        location.reload();
-      }, 500);
+      setTimeout(() => location.reload(), 500);
+    } else if (msg && msg.action === 'applyPendingSearch') {
+      handlePendingSearch();
     }
-    return true; // Keep channel open for async response
+    return false; // we never call sendResponse; avoids "message port closed" on sender
   });
   
   // Also poll for subscription activation after a checkout (in case message/storage change missed)
@@ -1391,7 +1449,6 @@
       const timeSinceCheckout = Date.now() - result.tempSessionData.timestamp;
       // If checkout was initiated less than 5 minutes ago, poll for activation
       if (timeSinceCheckout < 5 * 60 * 1000) {
-        console.log('Popup: Polling for subscription activation after checkout');
         const pollInterval = setInterval(async () => {
           const subData = await new Promise((resolve) => {
             chrome.storage.local.get(['subscriptionActive', 'subscriptionId'], resolve);
@@ -1399,7 +1456,6 @@
           if (subData.subscriptionActive) {
             clearInterval(pollInterval);
             chrome.storage.local.remove(['tempSessionData']);
-            console.log('Popup: Subscription found via polling, reloading');
             location.reload();
           }
         }, 2000); // Poll every 2 seconds
@@ -1412,8 +1468,21 @@
     }
   });
   
+  // Load word of day - skip when pendingSearch has entity to show so handlePendingSearch can render it
+  (function loadWordOfDayImmediately() {
+    const el = document.getElementById('wordOfDay');
+    if (!el) {
+      setTimeout(loadWordOfDayImmediately, 50);
+      return;
+    }
+    chrome.storage.local.get(['pendingSearch'], (r) => {
+      if (r.pendingSearch && r.pendingSearch.term) return;
+      loadWordOfDay();
+    });
+  })();
+  
   // Check subscription FIRST - show payment screen immediately if not subscribed
-  // This runs BEFORE any content loading
+  // This runs AFTER word of day starts loading
   (async () => {
     // Clear any URL params immediately (background script handles verification)
     const urlParams = new URLSearchParams(window.location.search);
@@ -1430,7 +1499,6 @@
       const email = pendingData.pendingCheckoutEmail || await getUserEmail();
       const sessionId = pendingData.pendingCheckoutSessionId;
       
-      console.log('Popup: Found pending checkout, verifying...', { email, sessionId });
       
       // Try to verify by session ID first
       if (sessionId) {
@@ -1455,7 +1523,6 @@
               // Clear pending checkout
               await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
               
-              console.log('Popup: Subscription verified, reloading');
               // Small delay to ensure storage is fully written
               await new Promise(resolve => setTimeout(resolve, 100));
               location.reload();
@@ -1463,7 +1530,7 @@
             }
           }
         } catch (e) {
-          console.error('Popup: Error verifying by session:', e);
+          // Error verifying by session, continue to email check
         }
       }
       
@@ -1489,26 +1556,47 @@
             // Clear pending checkout
             await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
             
-            console.log('Popup: Subscription verified by email, reloading');
             // Small delay to ensure storage is fully written
             await new Promise(resolve => setTimeout(resolve, 100));
             location.reload();
             return;
           }
         } catch (e) {
-          console.error('Popup: Error verifying by email:', e);
+          // Error verifying by email, continue to subscription check
         }
       }
     }
     
-    // Check subscription status - with retry if not found
+    // Clear any invalid/mock subscription data from dev mode FIRST
+    const storageData = await new Promise((resolve) => {
+      chrome.storage.local.get(['subscriptionId', 'subscriptionActive', 'subscriptionExpiry', 'userEmail'], resolve);
+    });
+
+    const devMode = isDeveloperMode();
+    if (devMode) subscriptionActive = true;
+    
+    // If no subscription data at all, show payment screen immediately (skip in Load unpacked)
+    if (!devMode && !storageData.subscriptionId && !storageData.userEmail) {
+      showUpgradePromptInPopup();
+      return;
+    }
+    
+    if (storageData.subscriptionId === 'dev-mode-mock-subscription') {
+      await chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
+    }
+    
+    // Check subscription status
     let isActive = await checkSubscription();
     
+    // Force check: if subscriptionActive is false or undefined, show payment screen (skip in Load unpacked)
+    const currentStatus = await new Promise((resolve) => {
+      chrome.storage.local.get(['subscriptionActive'], resolve);
+    });
+    
+    if (!devMode && (!isActive || currentStatus.subscriptionActive !== true)) {
     // If not active, try checking by email as fallback (in case subscription was just activated)
-    if (!isActive) {
       const email = await getUserEmail();
       if (email) {
-        console.log('Popup: Subscription not found by ID, checking by email:', email);
         try {
           const verifyResponse = await fetch(`${API_BASE_URL}/verify-license`, {
             method: 'POST',
@@ -1526,19 +1614,17 @@
                 subscriptionActive: true,
                 userEmail: email,
               });
-              console.log('Popup: Found subscription by email, reloading');
-              // Small delay to ensure storage is fully written
               await new Promise(resolve => setTimeout(resolve, 100));
               location.reload();
               return;
             }
           }
         } catch (e) {
-          console.error('Popup: Error checking by email:', e);
+          // Error checking by email, continue to show payment screen
         }
       }
       
-      // Still not active - show payment screen
+      // FORCE show payment screen - no valid subscription found
       showUpgradePromptInPopup();
       return; // Stop here - don't load anything else
     }
@@ -1558,34 +1644,48 @@
       });
       
       // Load word of day FIRST and immediately (don't wait for other content)
+      // Use setTimeout to ensure DOM is fully ready
+      setTimeout(() => {
       loadWordOfDay();
+      }, 100);
+      
+      // Also try loading after a short delay in case first attempt fails
+      setTimeout(() => {
+        const wordOfDayDiv = document.getElementById('wordOfDay');
+        if (wordOfDayDiv && wordOfDayDiv.innerHTML.includes('Loading')) {
+          console.log('[WOTD] Still loading after delay, retrying...');
+          loadWordOfDay();
+        }
+      }, 2000);
       
       // Load other content in parallel
       loadConversations();
       loadFavorites();
       loadRecent();
+      loadSaved();
       
-      // Conversations expand/collapse
-      const conversationsHeader = document.getElementById('conversationsHeader');
-      const conversationsArrow = document.getElementById('conversationsArrow');
-      const conversationsDiv = document.getElementById('conversations');
-      if (conversationsHeader && conversationsDiv) {
-        conversationsHeader.style.cursor = 'pointer';
-        conversationsHeader.addEventListener('click', (e) => {
+      // Expand/collapse for all hub sections (auto-collapsed by default)
+      const collapseConfig = [
+        { header: 'wordOfDayHeader', content: 'wordOfDay', arrow: 'wordOfDayArrow', onExpand: null },
+        { header: 'conversationsHeader', content: 'conversations', arrow: 'conversationsArrow', onExpand: () => loadConversations() },
+        { header: 'favoritesHeader', content: 'favorites', arrow: 'favoritesArrow', onExpand: null },
+        { header: 'savedHeader', content: 'saved', arrow: 'savedArrow', onExpand: null },
+        { header: 'recentHeader', content: 'recent', arrow: 'recentArrow', onExpand: null }
+      ];
+      collapseConfig.forEach(({ header, content, arrow, onExpand }) => {
+        const h = document.getElementById(header);
+        const c = document.getElementById(content);
+        const a = document.getElementById(arrow);
+        if (!h || !c) return;
+        h.style.cursor = 'pointer';
+        h.addEventListener('click', (e) => {
           e.stopPropagation();
-          const isHidden = conversationsDiv.style.display === 'none' || !conversationsDiv.style.display;
-          conversationsDiv.style.display = isHidden ? 'block' : 'none';
-          if (conversationsArrow) {
-            conversationsArrow.style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
-          }
-          // Load conversations when expanded
-          if (isHidden) {
-            loadConversations();
-          }
+          const isHidden = c.style.display === 'none' || c.style.display === '';
+          c.style.display = isHidden ? 'block' : 'none';
+          if (a) a.style.transform = isHidden ? 'rotate(180deg)' : 'rotate(0deg)';
+          if (isHidden && onExpand) onExpand();
         });
-      } else {
-        console.error('Nimbus: Conversations header or div not found!', { conversationsHeader, conversationsDiv });
-      }
+      });
     } catch (e) {
       console.error('Nimbus: Error loading initial content:', e);
     }
@@ -1601,6 +1701,8 @@
     const dropdowns = document.querySelectorAll('.custom-dropdown');
     
     dropdowns.forEach(dropdown => {
+      // Use full-screen modal for language; skip normal dropdown behavior
+      if (dropdown.id === 'languageDropdown') return;
       // Skip if already initialized
       if (dropdown.dataset.initialized === 'true') {
         return;
@@ -1683,12 +1785,93 @@
       document.addEventListener('click', window._dropdownClickHandler);
     }
   }
+
+  function initLanguageModal() {
+    if (window._languageModalInited) return;
+    window._languageModalInited = true;
+    const languageDropdown = document.getElementById('languageDropdown');
+    const languageModal = document.getElementById('languageModal');
+    const languageModalBackdrop = document.getElementById('languageModalBackdrop');
+    const languageModalClose = document.getElementById('languageModalClose');
+    const dictionaryLanguage = document.getElementById('dictionaryLanguage');
+    const textSpan = languageDropdown?.querySelector('.custom-dropdown-text');
+    if (!languageDropdown || !languageModal || !dictionaryLanguage || !textSpan) return;
+
+    function openModal() {
+      const current = dictionaryLanguage.value || 'en';
+      languageModal.querySelectorAll('.language-modal-option').forEach((btn) => {
+        const isSelected = btn.dataset.value === current;
+        btn.classList.toggle('selected', isSelected);
+        btn.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+      });
+      languageModal.classList.add('open');
+      languageModal.setAttribute('aria-hidden', 'false');
+    }
+    function closeModal() {
+      languageModal.classList.remove('open');
+      languageModal.setAttribute('aria-hidden', 'true');
+    }
+
+    const selected = languageDropdown.querySelector('.custom-dropdown-selected');
+    if (selected) {
+      selected.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openModal();
+      });
+    }
+    if (languageModalBackdrop) languageModalBackdrop.addEventListener('click', closeModal);
+    if (languageModalClose) languageModalClose.addEventListener('click', closeModal);
+
+    languageModal.querySelectorAll('.language-modal-option').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const value = btn.dataset.value;
+        const flag = btn.dataset.flag || value;
+        dictionaryLanguage.value = value;
+        textSpan.textContent = flag;
+        closeModal();
+        dictionaryLanguage.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    });
+  }
   
   const settingsBtn = document.getElementById('settingsBtn');
   const settingsPage = document.getElementById('settingsPage');
   const settingsCloseBtn = document.getElementById('settingsCloseBtn');
   const mainContent = document.getElementById('mainContent');
   const refreshBtn = document.getElementById('refreshBtn');
+  const savePageBtn = document.getElementById('savePageBtn');
+  
+  // Save this page - add current tab to Saved
+  if (savePageBtn) {
+    savePageBtn.addEventListener('click', () => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs || !tabs[0] || !tabs[0].url) return;
+        const tab = tabs[0];
+        const item = {
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+          type: 'url',
+          url: tab.url,
+          title: (tab.title || tab.url || 'Untitled').trim(),
+          createdAt: Date.now()
+        };
+        getStorage('savedForLater').then(arr => {
+          arr = arr || [];
+          arr.unshift(item);
+          if (arr.length > 80) arr = arr.slice(0, 80);
+          return setStorage({ savedForLater: arr });
+        }).then(() => {
+          loadSaved();
+          const t = translations[window.currentUILanguage || 'en'] || translations.en;
+          showNotification(t.saved || 'Saved', 'success');
+        }).catch(e => {
+          console.error('Save page error', e);
+          showNotification('Could not save.', 'error');
+        });
+      });
+    });
+  }
   
   // Refresh button - reload all hub content
   if (refreshBtn) {
@@ -1718,20 +1901,21 @@
   
   if (settingsBtn) {
     settingsBtn.addEventListener('click', () => {
-      mainContent.style.display = 'none';
+      document.body.classList.add('settings-open');
       settingsPage.style.display = 'flex';
       loadSettings();
-      // Initialize custom dropdowns after a brief delay to ensure DOM is ready
+      // Initialize custom dropdowns and language modal after a brief delay to ensure DOM is ready
       setTimeout(() => {
         initCustomDropdowns();
+        initLanguageModal();
       }, 50);
     });
   }
   
   if (settingsCloseBtn) {
     settingsCloseBtn.addEventListener('click', () => {
+      document.body.classList.remove('settings-open');
       settingsPage.style.display = 'none';
-      mainContent.style.display = 'block';
     });
   }
   
@@ -1772,8 +1956,15 @@
   const translations = {
     en: {
       settings: 'Settings',
+      chooseLanguage: 'Choose Language',
       favorites: 'Favorites',
       recentSearches: 'Recent Searches',
+      saved: 'Saved',
+      saveForLater: 'Save for later',
+      noSaved: 'No saved items yet.',
+      savePage: 'Save this page',
+      open: 'Open',
+      remove: 'Remove',
       wordOfDay: 'Word of the Day',
       noFavorites: 'No favorites yet. Click the heart icon in tooltips to add words!',
       noRecentSearches: 'No recent searches yet. Select words on web pages to see them here!',
@@ -1808,7 +1999,7 @@
       loadingRecent: 'Loading recent searches...',
       loadingWordOfDay: 'Loading word of the day...',
       errorLoadingWordOfDay: 'Error loading word of the day.',
-      searchPlaceholder: 'Search for a word...',
+      searchPlaceholder: 'Search',
       searchButton: 'Search',
       settingsButton: 'Settings',
       autoRenewDesc: 'Automatically renew your subscription when it expires',
@@ -1905,7 +2096,7 @@
       loadingRecent: 'Cargando búsquedas recientes...',
       loadingWordOfDay: 'Cargando palabra del día...',
       errorLoadingWordOfDay: 'Error al cargar la palabra del día.',
-      searchPlaceholder: 'Buscar una palabra...',
+      searchPlaceholder: 'Buscar',
       searchButton: 'Buscar',
       settingsButton: 'Configuración',
       autoRenewDesc: 'Renovar automáticamente tu suscripción cuando expire',
@@ -1993,7 +2184,7 @@
       loadingRecent: 'Chargement des recherches récentes...',
       loadingWordOfDay: 'Chargement du mot du jour...',
       errorLoadingWordOfDay: 'Erreur lors du chargement du mot du jour.',
-      searchPlaceholder: 'Rechercher un mot...',
+      searchPlaceholder: 'Rechercher',
       searchButton: 'Rechercher',
       settingsButton: 'Paramètres',
       autoRenewDesc: 'Renouveler automatiquement votre abonnement à l\'expiration',
@@ -2086,7 +2277,7 @@
       loadingRecent: 'Letzte Suchen werden geladen...',
       loadingWordOfDay: 'Wort des Tages wird geladen...',
       errorLoadingWordOfDay: 'Fehler beim Laden des Wortes des Tages.',
-      searchPlaceholder: 'Nach einem Wort suchen...',
+      searchPlaceholder: 'Suchen',
       searchButton: 'Suchen',
       settingsButton: 'Einstellungen',
       autoRenewDesc: 'Ihr Abonnement automatisch erneuern, wenn es abläuft',
@@ -2179,7 +2370,7 @@
       loadingRecent: 'Caricamento ricerche recenti...',
       loadingWordOfDay: 'Caricamento parola del giorno...',
       errorLoadingWordOfDay: 'Errore nel caricamento della parola del giorno.',
-      searchPlaceholder: 'Cerca una parola...',
+      searchPlaceholder: 'Cerca',
       searchButton: 'Cerca',
       settingsButton: 'Impostazioni',
       autoRenewDesc: 'Rinnova automaticamente il tuo abbonamento alla scadenza',
@@ -2272,7 +2463,7 @@
       loadingRecent: 'Carregando pesquisas recentes...',
       loadingWordOfDay: 'Carregando palavra do dia...',
       errorLoadingWordOfDay: 'Erro ao carregar a palavra do dia.',
-      searchPlaceholder: 'Pesquisar uma palavra...',
+      searchPlaceholder: 'Pesquisar',
       searchButton: 'Pesquisar',
       settingsButton: 'Configurações',
       autoRenewDesc: 'Renovar automaticamente sua assinatura quando expirar',
@@ -2365,7 +2556,7 @@
       loadingRecent: 'Загрузка недавних поисков...',
       loadingWordOfDay: 'Загрузка слова дня...',
       errorLoadingWordOfDay: 'Ошибка загрузки слова дня.',
-      searchPlaceholder: 'Поиск слова...',
+      searchPlaceholder: 'Поиск',
       searchButton: 'Поиск',
       settingsButton: 'Настройки',
       autoRenewDesc: 'Автоматически продлевать подписку при истечении',
@@ -2458,7 +2649,7 @@
       loadingRecent: '最近の検索を読み込み中...',
       loadingWordOfDay: '今日の単語を読み込み中...',
       errorLoadingWordOfDay: '今日の単語の読み込みエラー。',
-      searchPlaceholder: '単語を検索...',
+      searchPlaceholder: '検索',
       searchButton: '検索',
       settingsButton: '設定',
       autoRenewDesc: '期限切れ時にサブスクリプションを自動的に更新',
@@ -2551,7 +2742,7 @@
       loadingRecent: '正在加载最近搜索...',
       loadingWordOfDay: '正在加载每日一词...',
       errorLoadingWordOfDay: '加载每日一词时出错。',
-      searchPlaceholder: '搜索单词...',
+      searchPlaceholder: '搜索',
       searchButton: '搜索',
       settingsButton: '设置',
       autoRenewDesc: '到期时自动续订您的订阅',
@@ -2644,7 +2835,7 @@
       loadingRecent: '최근 검색 로드 중...',
       loadingWordOfDay: '오늘의 단어 로드 중...',
       errorLoadingWordOfDay: '오늘의 단어 로드 오류.',
-      searchPlaceholder: '단어 검색...',
+      searchPlaceholder: '검색',
       searchButton: '검색',
       settingsButton: '설정',
       autoRenewDesc: '만료 시 구독을 자동으로 갱신',
@@ -2737,7 +2928,7 @@
       loadingRecent: 'جارٍ تحميل البحث الأخير...',
       loadingWordOfDay: 'جارٍ تحميل كلمة اليوم...',
       errorLoadingWordOfDay: 'خطأ في تحميل كلمة اليوم.',
-      searchPlaceholder: 'البحث عن كلمة...',
+      searchPlaceholder: 'بحث',
       searchButton: 'بحث',
       settingsButton: 'الإعدادات',
       autoRenewDesc: 'تجديد اشتراكك تلقائياً عند انتهاء الصلاحية',
@@ -2830,7 +3021,7 @@
       loadingRecent: 'हाल की खोजें लोड हो रही हैं...',
       loadingWordOfDay: 'दिन का शब्द लोड हो रहा है...',
       errorLoadingWordOfDay: 'दिन का शब्द लोड करने में त्रुटि।',
-      searchPlaceholder: 'एक शब्द खोजें...',
+      searchPlaceholder: 'खोज',
       searchButton: 'खोजें',
       settingsButton: 'सेटिंग्स',
       autoRenewDesc: 'समाप्ति पर अपनी सदस्यता को स्वचालित रूप से नवीनीकृत करें',
@@ -2923,7 +3114,7 @@
       loadingRecent: 'Recente zoekopdrachten laden...',
       loadingWordOfDay: 'Woord van de dag laden...',
       errorLoadingWordOfDay: 'Fout bij het laden van het woord van de dag.',
-      searchPlaceholder: 'Zoek naar een woord...',
+      searchPlaceholder: 'Zoeken',
       searchButton: 'Zoeken',
       settingsButton: 'Instellingen',
       autoRenewDesc: 'Uw abonnement automatisch verlengen wanneer het verloopt',
@@ -3096,7 +3287,7 @@
       loadingRecent: 'Ładowanie ostatnich wyszukiwań...',
       loadingWordOfDay: 'Ładowanie słowa dnia...',
       errorLoadingWordOfDay: 'Błąd podczas ładowania słowa dnia.',
-      searchPlaceholder: 'Szukaj słowa...',
+      searchPlaceholder: 'Szukaj',
       searchButton: 'Szukaj',
       settingsButton: 'Ustawienia',
       autoRenewDesc: 'Automatycznie odnawiaj subskrypcję po wygaśnięciu',
@@ -3192,7 +3383,7 @@
       loadingRecent: 'Son aramalar yükleniyor...',
       loadingWordOfDay: 'Günün kelimesi yükleniyor...',
       errorLoadingWordOfDay: 'Günün kelimesi yüklenirken hata oluştu.',
-      searchPlaceholder: 'Bir kelime ara...',
+      searchPlaceholder: 'Ara',
       searchButton: 'Ara',
       settingsButton: 'Ayarlar',
       autoRenewDesc: 'Aboneliğiniz süresi dolduğunda otomatik olarak yenileyin',
@@ -3319,17 +3510,22 @@
       settingsBtn.title = t.settingsButton;
     }
     
+    const savePageBtnEl = document.getElementById('savePageBtn');
+    if (savePageBtnEl && t.savePage) {
+      savePageBtnEl.title = t.savePage;
+    }
+    
     // Translate specific elements by ID/class/selector
     const translationsMap = {
       '#settingsPage h2': t.settings,
       '[data-tab="subscription"] span': t.subscription,
       '[data-tab="modal"] span': t.modalPlacement,
-      '[data-tab="api"] span': t.apiSettings,
       '[data-tab="general"] span': t.general,
       '[data-tab="contact"] span': t.contact,
       '#favorites .section-title span': t.favorites,
       '#recent .section-title span': t.recentSearches,
-      '.word-of-day-title': t.wordOfDay,
+      '#saved .section-title span': t.saved,
+      '#wordOfDayHeader span': t.wordOfDay,
       '#loadMoreBtn': t.loadMore,
       '#showLessBtn': t.showLess,
       '#clearAllBtn': t.clearAll,
@@ -3339,8 +3535,7 @@
       'label[for="contactName"]': t.name,
       'label[for="contactEmail"]': t.email,
       'label[for="contactSubject"]': t.subject,
-      'label[for="contactMessage"]': t.message,
-      '#saveApiSettingsBtn': t.saveApiSettings
+      'label[for="contactMessage"]': t.message
     };
     
     Object.keys(translationsMap).forEach(selector => {
@@ -3440,7 +3635,7 @@
     });
     
     // Force update word of day title if it exists
-    const wordOfDayTitle = document.querySelector('.word-of-day-title');
+    const wordOfDayTitle = document.querySelector('#wordOfDayHeader span');
     if (wordOfDayTitle) {
       wordOfDayTitle.textContent = t.wordOfDay;
     }
@@ -3451,6 +3646,9 @@
     
     const recentTitle = document.querySelector('#recent').closest('.section')?.querySelector('.section-title span');
     if (recentTitle) recentTitle.textContent = t.recentSearches;
+    
+    const savedTitle = document.querySelector('#saved')?.closest('.section')?.querySelector('.section-title span');
+    if (savedTitle) savedTitle.textContent = t.saved;
     
     // Translate labels
     const labelTranslations = {
@@ -3740,8 +3938,7 @@
         document.getElementById('modalDraggable').checked = settings.modalDraggable !== false;
       }
       
-      // API settings tab - API key is now managed server-side
-      // Explanation style - update custom dropdown
+      // Explanation style (in General tab) - update custom dropdown
       const explanationStyleInput = document.getElementById('explanationStyle');
       const explanationStyleDropdown = document.getElementById('explanationStyleDropdown');
       if (explanationStyleInput && explanationStyleDropdown) {
@@ -3805,8 +4002,6 @@
     });
   }
   
-  // Save API settings - API key is now managed server-side, no user input needed
-  
   // Auto-save settings on change
   document.addEventListener('change', (e) => {
     if (e.target.closest('#settingsPage')) {
@@ -3832,6 +4027,7 @@
         loadWordOfDay();
         loadFavorites();
         loadRecent();
+        loadSaved();
         const t = translations[newLang] || translations.en;
         showNotification(t.languageUpdated || 'Language updated!', 'success');
       } else {
@@ -3849,6 +4045,7 @@
       // Load subscription info when tab is clicked
       setTimeout(() => {
         loadPopupSubscriptionInfo();
+        setupManageSubscriptionButton();
       }, 300); // Wait for tab to expand
     });
   }
@@ -3934,7 +4131,7 @@
           <div style="text-align: center;">
             <div style="margin-bottom: 16px;">
               <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Status</div>
-              <div style="font-size: 16px; font-weight: 700; color: ${isCancelled ? '#f59e0b' : isTrialing ? '#3b82f6' : '#10b981'};">${statusText}</div>
+              <div style="font-size: 16px; font-weight: 700; color: ${isCancelled ? '#f59e0b' : isTrialing ? '#1f7fff' : '#10b981'};">${statusText}</div>
             </div>
             ${trialEndDate ? `
             <div style="margin-bottom: 16px;">
@@ -3953,7 +4150,7 @@
               <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Subscription ID</div>
               <div style="display: flex; align-items: center; justify-content: center; gap: 8px;">
                 <code style="font-size: 12px; background: var(--bg-secondary); padding: 6px 12px; border-radius: 6px; color: var(--text-primary); font-family: 'Monaco', 'Courier New', monospace;">${data.subscriptionId}</code>
-                <button id="copy-subscription-id" style="background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; transition: all 0.2s;" title="Copy Subscription ID">
+                <button id="copy-subscription-id" style="background: linear-gradient(135deg, #05007f 0%, #1f7fff 100%); color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; transition: all 0.2s;" title="Copy Subscription ID">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -3976,7 +4173,7 @@
               copyBtn.style.background = 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
               setTimeout(() => {
                 copyBtn.innerHTML = originalHTML;
-                copyBtn.style.background = 'linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%)';
+                copyBtn.style.background = 'linear-gradient(135deg, #05007f 0%, #1f7fff 100%)';
               }, 2000);
               showNotification('Subscription ID copied!', 'success');
             } catch (err) {
@@ -3989,6 +4186,8 @@
         const manageBtn = document.getElementById('popup-manage-subscription-btn');
         if (manageBtn) {
           manageBtn.style.display = 'inline-block';
+          // Ensure button handler is attached when button is shown
+          setupManageSubscriptionButton();
         }
         
         if (isCancelled) {
@@ -4040,11 +4239,11 @@
     modalContent.style.cssText = 'background: white; padding: 24px; border-radius: 12px; max-width: 400px; width: 90%; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3);';
     
     modalContent.innerHTML = `
-      <h3 style="margin: 0 0 16px 0; color: #1e3a8a; font-size: 20px; font-weight: 700;">${title}</h3>
+      <h3 style="margin: 0 0 16px 0; color: #05007f; font-size: 20px; font-weight: 700;">${title}</h3>
       <p style="margin: 0 0 24px 0; color: #475569; font-size: 14px; line-height: 1.6;">${message}</p>
       <div style="display: flex; gap: 12px; justify-content: flex-end;">
         <button id="modal-cancel" style="padding: 10px 20px; border: 1px solid #cbd5e1; background: white; color: #475569; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px;">${cancelText || 'Cancel'}</button>
-        <button id="modal-confirm" style="padding: 10px 20px; border: none; background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); color: white; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; box-shadow: 0 2px 4px rgba(30, 58, 138, 0.3);">${confirmText || 'Confirm'}</button>
+        <button id="modal-confirm" style="padding: 10px 20px; border: none; background: linear-gradient(135deg, #05007f 0%, #1f7fff 100%); color: white; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; box-shadow: 0 2px 4px rgba(5, 0, 127, 0.35);">${confirmText || 'Confirm'}</button>
       </div>
     `;
     
@@ -4074,36 +4273,77 @@
     });
   }
 
-  // Manage subscription button - opens Stripe customer portal
-  const manageSubscriptionBtn = document.getElementById('popup-manage-subscription-btn');
-  if (manageSubscriptionBtn) {
-    manageSubscriptionBtn.addEventListener('click', async () => {
-      manageSubscriptionBtn.disabled = true;
-      manageSubscriptionBtn.textContent = 'Opening...';
+  // Manage subscription button handler - set up when button is available
+  function setupManageSubscriptionButton() {
+    const manageSubscriptionBtn = document.getElementById('popup-manage-subscription-btn');
+    if (!manageSubscriptionBtn) {
+      console.warn('Manage subscription button not found');
+      return;
+    }
+    
+    // Remove any existing listeners by cloning the button
+    const newBtn = manageSubscriptionBtn.cloneNode(true);
+    manageSubscriptionBtn.parentNode.replaceChild(newBtn, manageSubscriptionBtn);
+    
+    newBtn.addEventListener('click', async () => {
+      newBtn.disabled = true;
+      newBtn.textContent = 'Opening...';
       
       try {
-        // Check if extension context is valid
-        if (!chrome || !chrome.runtime || !chrome.runtime.id) {
-          throw new Error('Extension context not available');
+        const result = await chrome.storage.local.get(['subscriptionId', 'userEmail', 'subscriptionExpiry']);
+        let email = result.userEmail;
+        let subscriptionId = result.subscriptionId;
+        
+        // If storage is empty, try to get from subscription info that was just loaded
+        if (!email && !subscriptionId) {
+          // Try to get from the subscription info display
+          const subscriptionInfo = document.getElementById('popup-subscription-info');
+          if (subscriptionInfo) {
+            const subscriptionIdMatch = subscriptionInfo.textContent.match(/sub_[a-zA-Z0-9]+/);
+            if (subscriptionIdMatch) {
+              subscriptionId = subscriptionIdMatch[0];
+            }
+          }
+          
+          // If still no data, try to verify by checking if user has active subscription
+          if (!email && !subscriptionId) {
+            // Last resort: try to get email from Chrome identity
+            try {
+              const identityResult = await new Promise((resolve) => {
+                chrome.identity.getProfileUserInfo((userInfo) => {
+                  if (userInfo && userInfo.email) {
+                    resolve(userInfo.email);
+                  } else {
+                    resolve(null);
+                  }
+                });
+              });
+              if (identityResult) {
+                email = identityResult;
+              }
+            } catch (e) {
+              console.error('Could not get email from identity:', e);
+            }
+          }
         }
         
-        const result = await chrome.storage.local.get(['subscriptionId', 'userEmail']);
-        const email = result.userEmail;
-        const subscriptionId = result.subscriptionId;
-        
+        // If we still have nothing, show error
         if (!email && !subscriptionId) {
-          showNotification('No subscription found', 'error');
-          manageSubscriptionBtn.disabled = false;
+          showNotification('No subscription found. Please ensure you are signed in and have an active subscription.', 'error');
+          newBtn.disabled = false;
           const currentLang = window.currentUILanguage || 'en';
           const t = translations[currentLang] || translations.en;
-          manageSubscriptionBtn.textContent = t.manageSubscription || 'Manage Subscription';
+          newBtn.textContent = t.manageSubscription || 'Manage Subscription';
           return;
         }
         
         // Create customer portal session
-        console.log('Creating portal session with:', { email, subscriptionId, API_BASE_URL });
+        console.log('[MANAGE SUB] Creating portal session with:', { email, subscriptionId, API_BASE_URL });
         const returnUrl = chrome.runtime.getURL('popup.html');
-        const response = await fetch(`${API_BASE_URL}/create-portal-session`, {
+        const portalUrl = `${API_BASE_URL}/create-portal-session`;
+        console.log('[MANAGE SUB] Calling:', portalUrl);
+        
+        const response = await fetch(portalUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -4113,9 +4353,16 @@
           }),
         });
         
-        console.log('Portal session response status:', response.status);
+        console.log('[MANAGE SUB] Response status:', response.status);
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('[MANAGE SUB] Error response:', errorText);
+          throw new Error(`Server error: ${response.status} - ${errorText}`);
+        }
+        
         const data = await response.json();
-        console.log('Portal session response data:', data);
+        console.log('[MANAGE SUB] Response data:', data);
         
         if (response.ok && data.url) {
           // Open Stripe customer portal in new tab
@@ -4123,25 +4370,38 @@
           showNotification('Opening subscription management...', 'success');
         } else {
           const errorMsg = data.error || data.message || 'Failed to open subscription management. Please check the console for details.';
-          console.error('Portal session error:', errorMsg, data);
-          showNotification(errorMsg, 'error');
+          console.error('[MANAGE SUB] Portal session error:', errorMsg, data);
+          
+          // Don't show "environment" errors - show user-friendly message
+          if (errorMsg.toLowerCase().includes('environment') || errorMsg.toLowerCase().includes('not available')) {
+            showNotification('Unable to open subscription management. Please try refreshing the extension or contact support.', 'error');
+          } else {
+            showNotification(errorMsg, 'error');
+          }
         }
       } catch (error) {
-        console.error('Error opening customer portal:', error);
-        // Don't show "environment" error - just show generic error
-        showNotification('Error opening subscription management. Please try again.', 'error');
+        console.error('[MANAGE SUB] Error opening customer portal:', error);
+        
+        // Check if it's a network error
+        if (error.message && error.message.includes('fetch')) {
+          showNotification('Network error. Please check your connection and try again.', 'error');
+        } else if (error.message && error.message.includes('environment')) {
+          showNotification('Unable to open subscription management. Please try refreshing the extension.', 'error');
+        } else {
+          showNotification('Error opening subscription management. Please try again.', 'error');
+        }
       } finally {
-        manageSubscriptionBtn.disabled = false;
+        newBtn.disabled = false;
         const currentLang = window.currentUILanguage || 'en';
         const t = translations[currentLang] || translations.en;
-        manageSubscriptionBtn.textContent = t.manageSubscription || 'Manage Subscription';
+        newBtn.textContent = t.manageSubscription || 'Manage Subscription';
       }
     });
     
     console.log('Manage subscription button handler attached');
   }
   
-  // Set up immediately - this will also be called when subscription tab opens
+  // Set up immediately if button exists
   setupManageSubscriptionButton();
 
   // Cancel subscription button
@@ -4195,7 +4455,7 @@
             // Was refunded (within 7 days)
             await chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
             if (statusDiv) {
-              statusDiv.innerHTML = `✅ Subscription cancelled and refunded. £${data.refundAmount || 4.99} will be refunded to your original payment method.`;
+              statusDiv.innerHTML = `✅ Subscription cancelled and refunded. £${data.refundAmount || 2.99} will be refunded to your original payment method.`;
               statusDiv.style.color = '#10b981';
             }
             showNotification('Subscription cancelled and refunded', 'success');
@@ -4352,7 +4612,7 @@
           await chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
           
           if (statusDiv) {
-            statusDiv.innerHTML = `✅ Refund processed successfully! £${data.amount || 4.99} will be refunded to your original payment method.`;
+            statusDiv.innerHTML = `✅ Refund processed successfully! £${data.amount || 2.99} will be refunded to your original payment method.`;
             statusDiv.style.color = '#10b981';
           }
           showNotification('Refund processed successfully', 'success');
@@ -4392,6 +4652,7 @@
           showNotification('All data cleared successfully!', 'success');
           loadFavorites();
           loadRecent();
+          loadSaved();
           loadWordOfDay();
         });
       }
@@ -4667,10 +4928,9 @@
     }
   }
 
-  // Display person result in hub
-  function displayPersonResult(searchTerm, personData) {
-    currentView = 'person';
-    // Add hub-search-mode class when showing search results
+  // Display location result in hub with map view
+  function displayLocationResult(locationTerm, canMap = true) {
+    currentView = 'location';
     document.body.classList.add('hub-search-mode');
     
     // Hide other sections
@@ -4681,12 +4941,155 @@
     });
     
     // Save to recent
-    saveToRecent(searchTerm);
+    saveToRecent(locationTerm);
     loadRecent();
     
-    // Build person card HTML
+    // Build location card HTML with map
     const hasBack = navigationHistory.length > 1;
+    const wordOfDayDiv = document.getElementById('wordOfDay');
+    
+    // Google Maps embed URL (using iframe with search query - free, no API key needed)
+    const mapsQuery = encodeURIComponent(locationTerm);
+    // Use Google Maps search URL directly in iframe (works without API key)
+    const mapsEmbedUrl = `https://www.google.com/maps?q=${mapsQuery}&output=embed`;
+    // Fallback to full Google Maps page
+    const mapsSearchUrl = `https://www.google.com/maps/search/?api=1&query=${mapsQuery}`;
+    
     wordOfDayDiv.innerHTML = `
+      <div class="word-card-modal location-card">
+        <div class="word-card-header">
+          <div class="word-card-header-top">
+            ${hasBack ? `<button class="word-card-back-btn" id="wordCardBackBtn" title="Back">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 12H5M12 19l-7-7 7-7"/>
+              </svg>
+            </button>` : ''}
+            <div class="word-card-word-container">
+              <div class="word-card-word-wrapper">
+                <span class="word-card-word">${locationTerm}</span>
+              </div>
+              <button class="word-card-copy-btn" id="wordCardCopyBtn" title="Copy location">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="word-card-content location-content">
+          <div class="location-map-container" style="width: 100%; height: 400px; border-radius: 12px; overflow: hidden; margin-bottom: 16px; background: #f1f5f9; display: flex; align-items: center; justify-content: center;">
+            ${canMap ? `
+              <iframe 
+                src="${mapsEmbedUrl}" 
+                width="100%" 
+                height="100%" 
+                style="border: 0; border-radius: 12px;" 
+                allowfullscreen="" 
+                loading="lazy" 
+                referrerpolicy="no-referrer-when-downgrade">
+              </iframe>
+            ` : `
+              <div style="padding: 20px; text-align: center; color: #64748b;">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin: 0 auto 12px; opacity: 0.5;">
+                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                  <circle cx="12" cy="10" r="3"></circle>
+                </svg>
+                <p style="margin: 0 0 12px; font-size: 14px;">Location found but cannot be mapped directly.</p>
+                <a href="${mapsSearchUrl}" target="_blank" style="color: #05007f; text-decoration: underline; font-weight: 500;">Search on Google Maps</a>
+              </div>
+            `}
+          </div>
+          <div style="display: flex; gap: 8px; justify-content: center;">
+            <a href="${mapsSearchUrl}" target="_blank" style="display: inline-flex; align-items: center; gap: 6px; padding: 10px 20px; background: linear-gradient(135deg, #05007f 0%, #1f7fff 100%); color: white; border-radius: 8px; text-decoration: none; font-weight: 500; font-size: 14px; transition: all 0.2s;" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 4px 8px rgba(5, 0, 127, 0.35)';" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='none';">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                <circle cx="12" cy="10" r="3"></circle>
+              </svg>
+              Open in Google Maps
+            </a>
+            <a href="https://www.google.com/search?q=${mapsQuery}" target="_blank" style="display: inline-flex; align-items: center; gap: 6px; padding: 10px 20px; background: #f8fafc; color: #05007f; border: 2px solid rgba(31, 127, 255, 0.25); border-radius: 8px; text-decoration: none; font-weight: 500; font-size: 14px; transition: all 0.2s;" onmouseover="this.style.borderColor='#05007f'; this.style.background='#ffffff';" onmouseout="this.style.borderColor='rgba(31, 127, 255, 0.25)'; this.style.background='#f8fafc';">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <path d="m21 21-4.35-4.35"></path>
+              </svg>
+              Search on Google
+            </a>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    // Set up back button
+    if (hasBack) {
+      const backBtn = document.getElementById('wordCardBackBtn');
+      if (backBtn) {
+        backBtn.addEventListener('click', () => {
+          navigationHistory.pop();
+          if (navigationHistory.length > 0) {
+            const prev = navigationHistory[navigationHistory.length - 1];
+            if (prev.type === 'person') {
+              displayPersonResult(prev.term, prev.data);
+            } else if (prev.type === 'organization') {
+              displayOrganizationResult(prev.term, prev.data);
+            } else if (prev.type === 'place') {
+              displayPlaceResult(prev.term, prev.data);
+            } else if (prev.type === 'location') {
+              displayLocationResult(prev.term, prev.canMap);
+            } else {
+              showWordDetails(prev.term);
+            }
+          } else {
+            location.reload();
+          }
+        });
+      }
+    }
+    
+    // Set up copy button
+    const copyBtn = document.getElementById('wordCardCopyBtn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(locationTerm);
+          copyBtn.style.transform = 'scale(0.9)';
+          setTimeout(() => {
+            copyBtn.style.transform = 'scale(1)';
+          }, 200);
+        } catch (err) {
+          console.error('Failed to copy:', err);
+        }
+      });
+    }
+    
+    // Add to navigation history
+    navigationHistory.push({ type: 'location', term: locationTerm, canMap: canMap });
+  }
+
+  // Display person result in hub
+  function displayPersonResult(searchTerm, personData) {
+    if (!personData) {
+      showWordDetails(searchTerm);
+      return;
+    }
+    const container = document.getElementById('wordOfDay') || wordOfDayDiv;
+    if (!container) {
+      console.warn('Nimbus: #wordOfDay not found');
+      showWordDetails(searchTerm);
+      return;
+    }
+    const section = container.closest('.section');
+    if (section) section.style.display = 'block';
+    currentView = 'person';
+    document.body.classList.add('hub-search-mode');
+    document.body.classList.add('entity-card-view');
+    document.querySelectorAll('.section').forEach(sec => {
+      if (sec.querySelector('#wordOfDay') === null) sec.style.display = 'none';
+    });
+    saveToRecent(searchTerm);
+    loadRecent();
+    const hasBack = navigationHistory.length > 1;
+    container.innerHTML = `
       <div class="word-card-modal person-card">
         <div class="word-card-header">
           <div class="word-card-header-top">
@@ -4744,11 +5147,19 @@
             </div>
           </div>
           ` : ''}
-          ${personData.wikipediaUrl ? `
-          <div class="person-wiki-link">
-            <a href="${personData.wikipediaUrl}" target="_blank" rel="noopener noreferrer">Read more on Wikipedia</a>
+          ${(personData.socialLinks && (personData.socialLinks.twitter || personData.socialLinks.instagram || personData.socialLinks.youtube || personData.socialLinks.tiktok)) ? `
+          <div class="person-social">
+            ${personData.socialLinks.twitter ? `<a href="${personData.socialLinks.twitter}" target="_blank" rel="noopener noreferrer" title="X (Twitter)" class="person-social-icon">${'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>'}</a>` : ''}
+            ${personData.socialLinks.instagram ? `<a href="${personData.socialLinks.instagram}" target="_blank" rel="noopener noreferrer" title="Instagram" class="person-social-icon">${'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="18" cy="6" r="1.5" fill="currentColor"/></svg>'}</a>` : ''}
+            ${personData.socialLinks.youtube ? `<a href="${personData.socialLinks.youtube}" target="_blank" rel="noopener noreferrer" title="YouTube" class="person-social-icon">${'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 6v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><polygon points="10,9 10,15 15,12" fill="currentColor"/></svg>'}</a>` : ''}
+            ${personData.socialLinks.tiktok ? `<a href="${personData.socialLinks.tiktok}" target="_blank" rel="noopener noreferrer" title="TikTok" class="person-social-icon">${'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5"/></svg>'}</a>` : ''}
           </div>
           ` : ''}
+          <div class="entity-sources">${[
+            personData.wikipediaUrl ? `<a href="${personData.wikipediaUrl}" target="_blank" rel="noopener noreferrer">Wikipedia</a>` : '',
+            `<a href="https://news.google.com/search?q=${encodeURIComponent(personData.name || searchTerm)}" target="_blank" rel="noopener noreferrer">Google News</a>`,
+            `<a href="https://www.bbc.co.uk/search?q=${encodeURIComponent(personData.name || searchTerm)}" target="_blank" rel="noopener noreferrer">BBC</a>`
+          ].filter(Boolean).join(' · ')}</div>
         </div>
       </div>
     `;
@@ -4781,15 +5192,12 @@
       });
     }
     
-    // Add click handlers for news items
     if (personData.newsArticles && personData.newsArticles.length > 0) {
-      wordOfDayDiv.querySelectorAll('.person-news-item').forEach((item, index) => {
+      container.querySelectorAll('.person-news-item').forEach((item, index) => {
         item.addEventListener('click', (e) => {
           e.stopPropagation();
           const article = personData.newsArticles[index];
-          if (article && article.link) {
-            window.open(article.link, '_blank', 'noopener,noreferrer');
-          }
+          if (article && article.link) window.open(article.link, '_blank', 'noopener,noreferrer');
         });
       });
     }
@@ -4798,8 +5206,8 @@
   // Display organization result in hub
   function displayOrganizationResult(searchTerm, orgData) {
     currentView = 'organization';
-    // Add hub-search-mode class when showing search results
     document.body.classList.add('hub-search-mode');
+    document.body.classList.add('entity-card-view');
     
     // Hide other sections
     document.querySelectorAll('.section').forEach(section => {
@@ -4874,11 +5282,11 @@
             </div>
           </div>
           ` : ''}
-          ${orgData.wikipediaUrl ? `
-          <div class="person-wiki-link">
-            <a href="${orgData.wikipediaUrl}" target="_blank" rel="noopener noreferrer">Read more on Wikipedia</a>
-          </div>
-          ` : ''}
+          <div class="entity-sources">${[
+            orgData.wikipediaUrl ? `<a href="${orgData.wikipediaUrl}" target="_blank" rel="noopener noreferrer">Wikipedia</a>` : '',
+            `<a href="https://news.google.com/search?q=${encodeURIComponent(orgData.name || searchTerm)}" target="_blank" rel="noopener noreferrer">Google News</a>`,
+            `<a href="https://www.bbc.co.uk/search?q=${encodeURIComponent(orgData.name || searchTerm)}" target="_blank" rel="noopener noreferrer">BBC</a>`
+          ].filter(Boolean).join(' · ')}</div>
         </div>
       </div>
     `;
@@ -4927,9 +5335,14 @@
 
   // Display place result in hub
   function displayPlaceResult(searchTerm, placeData) {
+    if (!placeData) {
+      showWordDetails(searchTerm);
+      return;
+    }
+    if (!wordOfDayDiv) return;
     currentView = 'place';
-    // Add hub-search-mode class when showing search results
     document.body.classList.add('hub-search-mode');
+    document.body.classList.add('entity-card-view');
     
     // Hide other sections
     document.querySelectorAll('.section').forEach(section => {
@@ -5003,11 +5416,11 @@
             </div>
           </div>
           ` : ''}
-          ${placeData.wikipediaUrl ? `
-          <div class="person-wiki-link">
-            <a href="${placeData.wikipediaUrl}" target="_blank" rel="noopener noreferrer">Read more on Wikipedia</a>
-          </div>
-          ` : ''}
+          <div class="entity-sources">${[
+            placeData.wikipediaUrl ? `<a href="${placeData.wikipediaUrl}" target="_blank" rel="noopener noreferrer">Wikipedia</a>` : '',
+            `<a href="https://news.google.com/search?q=${encodeURIComponent(placeData.name || searchTerm)}" target="_blank" rel="noopener noreferrer">Google News</a>`,
+            `<a href="https://www.bbc.co.uk/search?q=${encodeURIComponent(placeData.name || searchTerm)}" target="_blank" rel="noopener noreferrer">BBC</a>`
+          ].filter(Boolean).join(' · ')}</div>
         </div>
       </div>
     `;
@@ -5064,8 +5477,8 @@
 
   function showHubView() {
     currentView = 'hub';
-    // Remove hub-search-mode class to show blue background
     document.body.classList.remove('hub-search-mode');
+    document.body.classList.remove('entity-card-view');
     
     // Show search bar again when returning to hub - ensure it's visible
     const searchContainer = document.querySelector('.search-container');
@@ -5087,10 +5500,12 @@
     searchInput.value = '';
     loadFavorites();
     loadRecent();
+    loadSaved();
     loadWordOfDay();
   }
 
   async function showWordDetails(word, pushToHistory = true) {
+    document.body.classList.remove('entity-card-view');
     // Show loading immediately
     showLoadingPlaceholder(word);
     
@@ -5319,7 +5734,7 @@
     const hasBack = navigationHistory.length > 1;
     // isStatement already declared above at line 3642
     wordOfDayDiv.innerHTML = `
-      <div class="word-card-modal">
+      <div class="word-card-modal ${isStatement ? 'statement-chat' : ''}">
         <div class="word-card-header">
           <div class="word-card-header-top">
             <div class="word-card-word-container">
@@ -5338,9 +5753,9 @@
           ${hasBack ? `<button class="back-btn" id="wordCardBackBtn">← Back</button>` : ''}
         </div>
         ${word.trim().split(/\s+/).length >= 3 ? `
-          <!-- Chat Interface for AI Responses - For statements, show chat only -->
-          <div class="ai-chat-container" id="aiChatContainer" style="margin-top: 0; padding: 20px 0; width: 100%;">
-            <div class="ai-chat-messages" id="aiChatMessages" style="max-height: 400px; overflow-y: auto; margin-bottom: 16px; padding: 16px; display: flex; flex-direction: column; gap: 16px;">
+          <!-- Chat Interface for AI Responses - full-height, fixed input at bottom -->
+          <div class="ai-chat-container" id="aiChatContainer" style="margin-top: 0; padding: 0; width: 100%;">
+            <div class="ai-chat-messages" id="aiChatMessages" style="padding: 16px; display: flex; flex-direction: column; gap: 16px;">
               <!-- User message: The highlighted sentence -->
               <div class="ai-message ai-user" style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
                 <div style="font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 4px;">You</div>
@@ -5378,8 +5793,7 @@
           ` : ''}
         `}
         ${word.trim().split(/\s+/).length >= 3 ? `
-            </div>
-            <div class="ai-chat-input-container" style="display: flex; gap: 8px; align-items: center; padding: 0 16px 20px 16px;">
+            <div class="ai-chat-input-container" style="display: flex; gap: 8px; align-items: center; padding: 16px; flex-shrink: 0;">
               <input type="text" id="aiChatInput" placeholder="Ask a follow-up question..." style="flex: 1; padding: 12px 16px; border: 2px solid var(--border-color); border-radius: 12px; background: var(--card-bg); color: var(--text-primary); font-size: 13px; outline: none; box-shadow: var(--card-shadow-inner), var(--card-shadow);" />
               <button id="aiChatSendBtn" style="padding: 12px 16px; background: var(--accent-blue); color: white; border: none; border-radius: 12px; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.2s ease; box-shadow: var(--card-shadow-inner), var(--card-shadow);">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -5387,76 +5801,6 @@
                   <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
                 </svg>
               </button>
-            </div>
-          </div>
-          ${data.newsArticles && data.newsArticles.length > 0 ? `
-            <div class="word-card-news-container" style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border-color, rgba(226, 232, 240, 0.8));">
-              <div style="font-size: 14px; font-weight: 700; color: var(--text-inverse); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"></path>
-                  <rect x="11" y="7" width="10" height="5" rx="1"></rect>
-                  <rect x="11" y="14" width="7" height="5" rx="1"></rect>
-                </svg>
-                Recent News & Articles
-              </div>
-              <div style="display: flex; flex-direction: column; gap: 10px;">
-                  ${data.newsArticles.slice(0, 5).map(article => {
-                    // Clean description - remove any HTML tags, href links, and URLs
-                    let cleanDescription = article.description || '';
-                    cleanDescription = cleanDescription.replace(/<[^>]*>/g, ''); // Remove HTML tags
-                    cleanDescription = cleanDescription.replace(/https?:\/\/[^\s]+/g, ''); // Remove URLs
-                    cleanDescription = cleanDescription.replace(/href=["'][^"']*["']/gi, ''); // Remove href attributes
-                    cleanDescription = cleanDescription.replace(/<a\s+[^>]*>/gi, ''); // Remove anchor tags
-                    cleanDescription = cleanDescription.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
-                    
-                    // Make article clickable if link exists
-                    const articleContent = `
-                    <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px; line-height: 1.4; color: var(--text-primary);">${article.title || 'No title'}</div>
-                    ${cleanDescription ? `<div style="font-size: 12px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 6px;">${cleanDescription.substring(0, 100)}${cleanDescription.length > 100 ? '...' : ''}</div>` : ''}
-                    ${article.date ? `<div style="font-size: 11px; color: var(--text-muted);">${new Date(article.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</div>` : ''}
-                    `;
-                    
-                    if (article.link) {
-                      return `
-                      <a href="${article.link}" target="_blank" rel="noopener noreferrer" class="word-card-news-item" style="display: block; padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); box-shadow: var(--card-shadow-inner), var(--card-shadow); text-decoration: none; cursor: pointer; transition: all 0.2s ease;">
-                        ${articleContent}
-                      </a>
-                    `;
-                    } else {
-                      return `
-                      <div class="word-card-news-item" style="display: block; padding: 12px 16px; background: var(--card-bg); border-radius: 12px; color: var(--text-primary); box-shadow: var(--card-shadow-inner), var(--card-shadow);">
-                        ${articleContent}
-                      </div>
-                    `;
-                    }
-                  }).join('')}
-              </div>
-            </div>
-          ` : ''}
-          <div class="word-card-links-container" style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border-color, rgba(226, 232, 240, 0.8));">
-            <div style="font-size: 13px; font-weight: 600; color: var(--text-inverse); margin-bottom: 12px;">Learn More:</div>
-            <div style="display: flex; flex-direction: column; gap: 8px;">
-              <a href="https://en.wikipedia.org/wiki/${encodeURIComponent(word)}" target="_blank" rel="noopener noreferrer" class="word-card-link" style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--card-bg); border: 2px solid var(--border-color); border-radius: 12px; text-decoration: none; color: var(--text-primary); font-size: 13px; font-weight: 700; transition: all 0.2s ease; box-shadow: var(--card-shadow-inner), var(--card-shadow);">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-                </svg>
-                Wikipedia
-              </a>
-              <a href="https://www.google.com/search?q=${encodeURIComponent(word)}" target="_blank" rel="noopener noreferrer" class="word-card-link" style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--card-bg); border: 2px solid var(--border-color); border-radius: 12px; text-decoration: none; color: var(--text-primary); font-size: 13px; font-weight: 700; transition: all 0.2s ease; box-shadow: var(--card-shadow-inner), var(--card-shadow);">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="11" cy="11" r="8"/>
-                  <path d="m21 21-4.35-4.35"/>
-                </svg>
-                Google Search
-              </a>
-              <a href="https://news.google.com/search?q=${encodeURIComponent(word)}" target="_blank" rel="noopener noreferrer" class="word-card-link" style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--card-bg); border: 2px solid var(--border-color); border-radius: 12px; text-decoration: none; color: var(--text-primary); font-size: 13px; font-weight: 700; transition: all 0.2s ease; box-shadow: var(--card-shadow-inner), var(--card-shadow);">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"></path>
-                  <rect x="11" y="7" width="10" height="5" rx="1"></rect>
-                  <rect x="11" y="14" width="7" height="5" rx="1"></rect>
-                </svg>
-                Google News
-              </a>
             </div>
           </div>
         ` : ''}
@@ -5695,7 +6039,7 @@
             infoDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
             infoDiv.innerHTML = `
               <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
-              <div style="padding: 10px 14px; background: #dbeafe; border-radius: 12px; border: 1px solid #60a5fa; color: #1e40af; line-height: 1.5; font-size: 13px;">I can help explain concepts and provide information, but I cannot create Word documents or PDFs. You can copy any text I provide and paste it into your document editor.</div>
+              <div style="padding: 10px 14px; background: #dbeafe; border-radius: 12px; border: 1px solid #60a5fa; color: #05007f; line-height: 1.5; font-size: 13px;">I can help explain concepts and provide information, but I cannot create Word documents or PDFs. You can copy any text I provide and paste it into your document editor.</div>
             `;
             chatMessages.appendChild(infoDiv);
             chatInput.disabled = false;
@@ -5886,7 +6230,7 @@
             <div style="display: flex; flex-direction: column; gap: 8px;">
               ${suggestions.map(s => `
                 <button class="suggestion-item" style="text-align: left; cursor: pointer; padding: 12px 16px; background: white; border: 1px solid #e2e8f0; border-radius: 8px; transition: all 0.2s;" data-word="${s}">
-                  <span style="font-weight: 600; color: #1e3a8a;">${s}</span>
+                  <span style="font-weight: 600; color: #05007f;">${s}</span>
                 </button>
               `).join('')}
             </div>
@@ -5964,9 +6308,7 @@
                   </div>
                   <div class="recent-table-time" style="min-width: 80px; text-align: right; color: var(--text-muted); font-size: 12px;">${timeAgo}</div>
                   <button class="recent-remove-btn conversation-delete-btn" data-conversation-id="${id}" title="Delete conversation" style="margin-left: 8px;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
-                    </svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
                   </button>
                 </div>
               `;
@@ -6132,7 +6474,7 @@
                               infoDiv.style.cssText = 'display: flex; flex-direction: column; gap: 4px;';
                               infoDiv.innerHTML = `
                                 <div style="font-size: 11px; color: var(--text-muted, #94a3b8); font-weight: 600; margin-bottom: 4px;">AI Assistant</div>
-                                <div style="padding: 10px 14px; background: #dbeafe; border-radius: 12px; border: 1px solid #60a5fa; color: #1e40af; line-height: 1.5; font-size: 13px;">I can help explain concepts and provide information, but I cannot create Word documents or PDFs. You can copy any text I provide and paste it into your document editor.</div>
+                                <div style="padding: 10px 14px; background: #dbeafe; border-radius: 12px; border: 1px solid #60a5fa; color: #05007f; line-height: 1.5; font-size: 13px;">I can help explain concepts and provide information, but I cannot create Word documents or PDFs. You can copy any text I provide and paste it into your document editor.</div>
                               `;
                               chatMessages.appendChild(infoDiv);
                               chatInput.disabled = false;
@@ -6335,20 +6677,22 @@
         return;
       }
 
-      favoritesDiv.innerHTML = favorites.map(word => `
+      favoritesDiv.innerHTML = favorites.map(word => {
+        const t = translations[window.currentUILanguage || 'en'] || translations.en;
+        return `
         <div class="word-item" data-word="${word}">
           <span class="word">${word}</span>
-          <button class="remove-btn" data-word="${word}">Remove</button>
+          <button class="remove-btn" data-word="${word}" title="${t.removeFromFavorites || 'Remove'}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+          </button>
         </div>
-      `).join('');
+      `; }).join('');
 
       // Add click handlers - entire card is clickable
       favoritesDiv.querySelectorAll('.word-item').forEach(el => {
         el.addEventListener('click', (e) => {
-          // Don't trigger if clicking the remove button
-          if (!e.target.classList.contains('remove-btn')) {
+          if (e.target.closest('.remove-btn')) return;
             showWordDetails(el.dataset.word);
-          }
         });
       });
 
@@ -6433,7 +6777,7 @@
                 <div class="recent-table-row">
                   <span class="recent-table-word" data-word="${word}">${word}</span>
                   <span class="recent-table-time">${timeAgo}</span>
-                  <button class="recent-remove-btn" data-index="${index}" title="Remove">×</button>
+                  <button class="recent-remove-btn" data-index="${index}" title="Remove"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg></button>
                 </div>
               `;
             }).join('')}
@@ -6450,10 +6794,8 @@
           row.dataset.word = wordEl.dataset.word;
           row.style.cursor = 'pointer';
           row.addEventListener('click', (e) => {
-            // Don't trigger if clicking the remove button
-            if (!e.target.classList.contains('recent-remove-btn')) {
+            if (e.target.closest('.recent-remove-btn')) return;
               showWordDetails(row.dataset.word);
-            }
           });
         }
       });
@@ -6493,14 +6835,29 @@
         });
       }
       
-      document.getElementById('collapseRecent').addEventListener('click', () => {
+      // Add Show Less button handler
+      const collapseBtn = document.getElementById('collapseRecent');
+      if (collapseBtn) {
+        // Remove any existing listeners by cloning
+        const newBtn = collapseBtn.cloneNode(true);
+        collapseBtn.parentNode.replaceChild(newBtn, collapseBtn);
+        
+        newBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          e.preventDefault();
         recentExpanded = false;
         renderRecentSearches();
       });
+        console.log('Show Less button attached for recent searches');
+      } else {
+        console.error('Show Less button not found in DOM!');
+      }
     } else {
       // Show first 10 with Load More button - use same table style
       const first10 = allRecentSearches.slice(0, 10);
       const hasMore = allRecentSearches.length > 10;
+      const moreText = t.more || 'more';
+      const remainingCount = allRecentSearches.length - 10;
       
       const listHTML = `
         <div class="recent-table-container">
@@ -6517,7 +6874,7 @@
               `;
             }).join('')}
           </div>
-          ${hasMore ? `<button class="load-more-btn" id="loadMoreRecent">${t.loadMore} (${allRecentSearches.length - 10} ${t.more})</button>` : ''}
+          ${hasMore ? `<button class="load-more-btn" id="loadMoreRecent" style="display: block;">${t.loadMore} (${remainingCount} ${moreText})</button>` : ''}
         </div>
       `;
       
@@ -6531,11 +6888,24 @@
         });
       });
       
+      // Add Load More button handler - ensure it exists before adding listener
       if (hasMore) {
-        document.getElementById('loadMoreRecent').addEventListener('click', () => {
+        const loadMoreBtn = document.getElementById('loadMoreRecent');
+        if (loadMoreBtn) {
+          // Remove any existing listeners by cloning
+          const newBtn = loadMoreBtn.cloneNode(true);
+          loadMoreBtn.parentNode.replaceChild(newBtn, loadMoreBtn);
+          
+          newBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
           recentExpanded = true;
           renderRecentSearches();
         });
+          console.log('Load More button attached for recent searches');
+        } else {
+          console.error('Load More button not found in DOM!');
+        }
       }
     }
   }
@@ -6560,23 +6930,110 @@
     return 'Just now';
   }
 
+  async function loadSaved() {
+    try {
+      if (!savedDiv) return;
+      const list = await getStorage('savedForLater') || [];
+      const t = translations[window.currentUILanguage || 'en'] || translations.en;
+      if (list.length === 0) {
+        savedDiv.innerHTML = `<div class="empty-state">${t.noSaved || 'No saved items yet.'}</div>`;
+        return;
+      }
+      savedDiv.innerHTML = list.slice(0, 50).map(item => {
+        const title = (item.title || item.url || 'Untitled').trim();
+        const titleShow = title.length > 60 ? title.slice(0, 57) + '...' : title;
+        const snippet = (item.text || '').toString().slice(0, 60);
+        const snippetShow = snippet ? (snippet.length >= 60 ? snippet + '...' : snippet) : '';
+        const urlAttr = (item.url || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        return `
+          <div class="saved-item" data-id="${(item.id || '').replace(/"/g, '&quot;')}" data-url="${urlAttr}">
+            <div class="saved-item-main" title="${(t.open || 'Open').replace(/"/g, '&quot;')}">
+              <span class="saved-item-title">${titleShow.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
+              ${snippetShow ? `<span class="saved-item-snippet">${snippetShow.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>` : ''}
+            </div>
+            <button class="saved-item-remove" data-id="${(item.id || '').replace(/"/g, '&quot;')}" title="${(t.remove || 'Remove').replace(/"/g, '&quot;')}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg></button>
+          </div>
+        `;
+      }).join('');
+      savedDiv.querySelectorAll('.saved-item-main').forEach(el => {
+        el.addEventListener('click', () => {
+          const row = el.closest('.saved-item');
+          const url = row?.dataset?.url;
+          if (url) chrome.runtime.sendMessage({ type: 'openTab', url: url }, () => {});
+        });
+      });
+      savedDiv.querySelectorAll('.saved-item-remove').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const id = (btn.dataset.id || '').trim();
+          if (!id) return;
+          let arr = await getStorage('savedForLater') || [];
+          arr = arr.filter(x => (x.id || '') !== id);
+          await setStorage({ savedForLater: arr });
+          loadSaved();
+        });
+      });
+    } catch (e) {
+      console.error('Error loading saved', e);
+      if (savedDiv) savedDiv.innerHTML = '<div class="empty-state">Error loading saved.</div>';
+    }
+  }
+
   async function loadWordOfDay(retryCount = 0) {
-    // Safety check
     if (!wordOfDayDiv) {
       console.error('Nimbus: wordOfDayDiv not found');
       return;
     }
+    const pending = await new Promise(r => { chrome.storage.local.get(['pendingSearch'], x => r(x.pendingSearch)); });
+    if (pending && ['person','place','organization'].includes(pending.type) && pending.data) return;
+    if (currentView === 'person' || currentView === 'place' || currentView === 'organization') return;
     
     const currentLang = window.currentUILanguage || 'en';
     const loadingText = translations[currentLang]?.loadingWordOfDay || translations.en.loadingWordOfDay;
-    
-    // Always show loading immediately
     wordOfDayDiv.innerHTML = `<div class="loading">${loadingText}</div>`;
-    wordOfDayDiv.style.display = 'block'; // Ensure it's visible
+    wordOfDayDiv.style.display = 'block';
 
     try {
-      // Always get a fresh random word - no caching for infinite variety
-      const word = await getRandomWord();
+      // Get word of the day - cache per day per user
+      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+      
+      // Get user email for deterministic word selection
+      const storageData = await new Promise(resolve => {
+        chrome.storage.local.get(['wordOfDay', 'wordOfDayDate', 'wordOfDayLanguage', 'userEmail'], (result) => {
+          resolve(result);
+        });
+      });
+      
+      // Get current language setting
+      const settings = await new Promise(resolve => {
+        chrome.storage.local.get(['settings'], (result) => {
+          resolve(result.settings || {});
+        });
+      });
+      const currentLanguage = settings.dictionaryLanguage || 'en';
+      
+      // Check if we have a cached word for today in the current language
+      const cachedWord = storageData.wordOfDayDate === today && 
+                         storageData.wordOfDayLanguage === currentLanguage && 
+                         storageData.wordOfDay;
+      
+      let word;
+      if (cachedWord) {
+        word = cachedWord;
+        console.log('Nimbus: Using cached word of the day:', word);
+      } else {
+        // Get a new random word and cache it
+        word = await getRandomWord(currentLanguage, storageData.userEmail || 'anonymous', today);
+        if (word) {
+          chrome.storage.local.set({ 
+            wordOfDay: word, 
+            wordOfDayDate: today,
+            wordOfDayLanguage: currentLanguage
+          }, () => {
+            console.log('Nimbus: Cached new word of the day:', word, 'for date:', today, 'language:', currentLanguage);
+          });
+        }
+      }
       
       if (!word) {
         throw new Error('No word generated');
@@ -6601,14 +7058,12 @@
         throw new Error('No details returned');
       }
       
-      // Even if details has an error, still try to display it
+      if (currentView === 'person' || currentView === 'place' || currentView === 'organization') return;
       if (details && details.explanation) {
         displayWordOfDay(word, details);
       } else {
-        // If we have a word but no explanation, show the word with a fallback message
         console.warn('Nimbus: No explanation in details, showing fallback for word:', word);
         const currentLang = window.currentUILanguage || 'en';
-        const t = translations[currentLang] || translations.en;
         displayWordOfDay(word, {
           explanation: currentLang === 'de' 
             ? `Definition für "${word}" wird geladen...`
@@ -6620,183 +7075,298 @@
       }
     } catch (e) {
       console.error('Nimbus: Error loading word of day:', e);
-      
-      // Retry up to 2 times with exponential backoff
-      if (retryCount < 2) {
-        const delay = Math.pow(2, retryCount) * 1000; // 1s, 2s
-        console.log(`Nimbus: Retrying word of day in ${delay}ms (attempt ${retryCount + 1}/2)`);
-        setTimeout(() => {
-          loadWordOfDay(retryCount + 1);
-        }, delay);
+
+      if (retryCount < 3) {
+        const delay = Math.pow(2, retryCount) * 1000;
+        console.log(`[WOTD] Retrying word of day in ${delay}ms (attempt ${retryCount + 1}/3)`);
+        setTimeout(() => loadWordOfDay(retryCount + 1), delay);
         return;
       }
-      
-      // Check if wordOfDayDiv still exists before updating
-      if (!wordOfDayDiv || !wordOfDayDiv.parentNode) {
-        console.warn('Nimbus: wordOfDayDiv was removed, cannot show error');
-        return;
-      }
+
+      if (!wordOfDayDiv || !wordOfDayDiv.parentNode) return;
+      if (currentView === 'person' || currentView === 'place' || currentView === 'organization') return;
       
       const currentLang = window.currentUILanguage || 'en';
       const errorMsg = translations[currentLang]?.errorLoadingWordOfDay || 'Error loading word of the day.';
       wordOfDayDiv.innerHTML = `
         <div class="word-card-modal">
-          <div class="word-card-header">
-            <div class="word-of-day-title">${translations[currentLang]?.wordOfDay || 'Word of the Day'}</div>
-          </div>
           <div class="empty-state">${errorMsg}</div>
         </div>
       `;
     }
   }
 
-  async function getRandomWord() {
+  // Simple deterministic PRNG seeded with date + user
+  function seededRandom(seed) {
+    let value = seed;
+    return function() {
+      value = (value * 9301 + 49297) % 233280;
+      return value / 233280;
+    };
+  }
+
+  // Generate a numeric seed from date + user email
+  function generateSeed(date, userEmail) {
+    const seedString = `${date}-${userEmail}`;
+    let hash = 0;
+    for (let i = 0; i < seedString.length; i++) {
+      const char = seedString.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return Math.abs(hash);
+  }
+
+  async function getRandomWord(language, userEmail, date) {
     try {
-      // Get current language setting
-      const settings = await new Promise(resolve => {
-        chrome.storage.local.get(['settings'], (result) => {
-          resolve(result.settings || {});
+      // Get seen words for this language to avoid duplicates
+      const storageData = await new Promise(resolve => {
+        chrome.storage.local.get([`seenWords_${language}`, 'favorites'], (result) => {
+          resolve(result);
         });
       });
-      const language = settings.dictionaryLanguage || 'en';
       
-      // Language-specific word lists
+      const seenWords = storageData[`seenWords_${language}`] || [];
+      const favorites = storageData.favorites || [];
+      
+      // Large word lists - common words from frequency lists
+      // These are real dictionary words that should exist in the API
       const wordLists = {
         en: [
-          'serendipity', 'ephemeral', 'eloquent', 'resilient', 'mellifluous',
-          'ubiquitous', 'perspicacious', 'luminous', 'effervescent', 'quintessential',
-          'enigmatic', 'pragmatic', 'vivacious', 'tenacious', 'magnanimous',
-          'sagacious', 'benevolent', 'audacious', 'fastidious', 'gregarious',
-          'diligent', 'profound', 'ingenious', 'meticulous', 'eloquent',
-          'ambitious', 'courageous', 'generous', 'optimistic', 'passionate'
+          'serendipity', 'ephemeral', 'eloquent', 'resilient', 'mellifluous', 'ubiquitous', 'perspicacious', 
+          'luminous', 'effervescent', 'quintessential', 'enigmatic', 'pragmatic', 'vivacious', 'tenacious', 
+          'magnanimous', 'sagacious', 'benevolent', 'audacious', 'fastidious', 'gregarious', 'diligent', 
+          'profound', 'ingenious', 'meticulous', 'ambitious', 'courageous', 'generous', 'optimistic', 
+          'passionate', 'eloquence', 'resilience', 'ubiquity', 'luminosity', 'effervescence', 'enigma', 
+          'pragmatism', 'vivacity', 'tenacity', 'magnanimity', 'sagacity', 'benevolence', 'audacity', 
+          'fastidiousness', 'gregariousness', 'diligence', 'profundity', 'ingenuity', 'meticulousness', 
+          'ambition', 'courage', 'generosity', 'optimism', 'passion', 'wanderlust', 'petrichor', 
+          'epiphany', 'nostalgia', 'melancholy', 'euphoria', 'serenity', 'tranquility', 'harmony', 
+          'wisdom', 'curiosity', 'wonder', 'awe', 'gratitude', 'compassion', 'empathy', 'kindness', 
+          'humility', 'integrity', 'honesty', 'loyalty', 'devotion', 'dedication', 'perseverance', 
+          'determination', 'fortitude', 'valor', 'bravery', 'heroism', 'altruism', 'philanthropy', 
+          'benevolence', 'charity', 'generosity', 'magnanimity', 'graciousness', 'courtesy', 
+          'chivalry', 'gallantry', 'nobility', 'dignity', 'elegance', 'sophistication', 'refinement', 
+          'cultivation', 'erudition', 'scholarship', 'learning', 'knowledge', 'wisdom', 'insight', 
+          'perception', 'discernment', 'acumen', 'shrewdness', 'astuteness', 'cleverness', 'wit', 
+          'intelligence', 'brilliance', 'genius', 'talent', 'aptitude', 'skill', 'proficiency', 
+          'expertise', 'mastery', 'virtuosity', 'artistry', 'creativity', 'innovation', 'originality', 
+          'uniqueness', 'distinctiveness', 'individuality', 'personality', 'character', 'essence', 
+          'quintessence', 'core', 'heart', 'soul', 'spirit', 'nature', 'temperament', 'disposition', 
+          'mood', 'atmosphere', 'ambiance', 'aura', 'vibe', 'energy', 'vitality', 'vigor', 'vibrancy', 
+          'liveliness', 'animation', 'exuberance', 'enthusiasm', 'zeal', 'ardor', 'fervor', 'passion', 
+          'intensity', 'ferocity', 'vehemence', 'impetuosity', 'rashness', 'recklessness', 'boldness', 
+          'daring', 'fearlessness', 'intrepidity', 'dauntlessness', 'fearlessness', 'courage', 
+          'bravery', 'valor', 'heroism', 'gallantry', 'chivalry', 'nobility', 'honor', 'dignity', 
+          'respect', 'reverence', 'veneration', 'adoration', 'admiration', 'esteem', 'regard', 
+          'appreciation', 'gratitude', 'thankfulness', 'indebtedness', 'obligation', 'duty', 
+          'responsibility', 'accountability', 'liability', 'commitment', 'dedication', 'devotion', 
+          'loyalty', 'fidelity', 'faithfulness', 'constancy', 'steadfastness', 'persistence', 
+          'perseverance', 'tenacity', 'determination', 'resolve', 'willpower', 'self-control', 
+          'discipline', 'restraint', 'moderation', 'temperance', 'sobriety', 'seriousness', 
+          'solemnity', 'gravity', 'weight', 'importance', 'significance', 'consequence', 'impact', 
+          'influence', 'effect', 'result', 'outcome', 'consequence', 'aftermath', 'repercussion', 
+          'ramification', 'implication', 'meaning', 'significance', 'import', 'substance', 'essence', 
+          'core', 'heart', 'center', 'nucleus', 'kernel', 'gist', 'pith', 'marrow', 'crux', 'hub', 
+          'focus', 'emphasis', 'stress', 'accent', 'highlight', 'spotlight', 'limelight', 'attention', 
+          'notice', 'recognition', 'acknowledgment', 'appreciation', 'understanding', 'comprehension', 
+          'grasp', 'perception', 'awareness', 'consciousness', 'cognizance', 'realization', 
+          'apprehension', 'discernment', 'insight', 'penetration', 'perceptiveness', 'sensitivity', 
+          'responsiveness', 'receptivity', 'openness', 'flexibility', 'adaptability', 'versatility', 
+          'resourcefulness', 'ingenuity', 'creativity', 'originality', 'innovation', 'novelty', 
+          'freshness', 'newness', 'uniqueness', 'distinctiveness', 'individuality', 'singularity', 
+          'peculiarity', 'idiosyncrasy', 'quirk', 'eccentricity', 'oddity', 'strangeness', 
+          'unusualness', 'rarity', 'uncommonness', 'scarcity', 'paucity', 'dearth', 'lack', 
+          'shortage', 'deficiency', 'insufficiency', 'inadequacy', 'incompleteness', 'imperfection', 
+          'flaw', 'defect', 'fault', 'blemish', 'stain', 'spot', 'mark', 'taint', 'taint', 'taint'
         ],
         es: [
-          'serendipidad', 'efímero', 'elocuente', 'resistente', 'melifluo',
-          'ubicuo', 'perspicaz', 'luminoso', 'efervescente', 'quintaesencial',
-          'enigmático', 'pragmático', 'vivaz', 'tenaz', 'magnánimo',
-          'sagaz', 'benévolo', 'audaz', 'fastidioso', 'gregario',
-          'diligente', 'profundo', 'ingenioso', 'meticuloso', 'ambicioso',
-          'valiente', 'generoso', 'optimista', 'apasionado', 'sabiduría'
+          'serendipidad', 'efímero', 'elocuente', 'resistente', 'melifluo', 'ubicuo', 'perspicaz', 
+          'luminoso', 'efervescente', 'quintaesencial', 'enigmático', 'pragmático', 'vivaz', 
+          'tenaz', 'magnánimo', 'sagaz', 'benévolo', 'audaz', 'fastidioso', 'gregario', 'diligente', 
+          'profundo', 'ingenioso', 'meticuloso', 'ambicioso', 'valiente', 'generoso', 'optimista', 
+          'apasionado', 'sabiduría', 'elocuencia', 'resistencia', 'ubicuidad', 'luminosidad', 
+          'efervescencia', 'enigma', 'pragmatismo', 'vivacidad', 'tenacidad', 'magnanimidad', 
+          'sagacidad', 'benevolencia', 'audacia', 'fastidio', 'gregarismo', 'diligencia', 
+          'profundidad', 'ingenio', 'meticulosidad', 'ambición', 'valentía', 'generosidad', 
+          'optimismo', 'pasión', 'nostalgia', 'melancolía', 'euforia', 'serenidad', 'tranquilidad', 
+          'armonía', 'sabiduría', 'curiosidad', 'asombro', 'gratitud', 'compasión', 'empatía', 
+          'bondad', 'humildad', 'integridad', 'honestidad', 'lealtad', 'devoción', 'dedicación', 
+          'perseverancia', 'determinación', 'fortaleza', 'valor', 'heroísmo', 'altruismo', 
+          'filantropía', 'benevolencia', 'caridad', 'generosidad', 'magnanimidad', 'cortesía', 
+          'caballerosidad', 'nobleza', 'dignidad', 'elegancia', 'sofisticación', 'refinamiento', 
+          'cultivo', 'erudición', 'erudición', 'aprendizaje', 'conocimiento', 'sabiduría', 
+          'perspicacia', 'percepción', 'discernimiento', 'agudeza', 'astucia', 'inteligencia', 
+          'brillantez', 'genio', 'talento', 'aptitud', 'habilidad', 'competencia', 'experiencia', 
+          'maestría', 'virtuosismo', 'arte', 'creatividad', 'innovación', 'originalidad', 
+          'singularidad', 'distintividad', 'individualidad', 'personalidad', 'carácter', 'esencia', 
+          'quintaesencia', 'núcleo', 'corazón', 'alma', 'espíritu', 'naturaleza', 'temperamento', 
+          'disposición', 'estado de ánimo', 'atmósfera', 'ambiente', 'aura', 'energía', 'vitalidad', 
+          'vigor', 'vibración', 'vivacidad', 'animación', 'exuberancia', 'entusiasmo', 'celo', 
+          'ardor', 'fervor', 'pasión', 'intensidad', 'ferocidad', 'vehemencia', 'impetuosidad', 
+          'temeridad', 'audacia', 'intrepidez', 'valentía', 'heroísmo', 'caballerosidad', 
+          'nobleza', 'honor', 'dignidad', 'respeto', 'reverencia', 'veneración', 'adoración', 
+          'admiración', 'estima', 'aprecio', 'gratitud', 'agradecimiento', 'obligación', 'deber', 
+          'responsabilidad', 'compromiso', 'dedicación', 'devoción', 'lealtad', 'fidelidad', 
+          'constancia', 'persistencia', 'perseverancia', 'tenacidad', 'determinación', 'resolución', 
+          'fuerza de voluntad', 'autocontrol', 'disciplina', 'restricción', 'moderación', 
+          'templanza', 'sobriedad', 'seriedad', 'solemnidad', 'gravedad', 'peso', 'importancia', 
+          'significancia', 'consecuencia', 'impacto', 'influencia', 'efecto', 'resultado', 
+          'consecuencia', 'repercusión', 'ramificación', 'implicación', 'significado', 
+          'significancia', 'importancia', 'sustancia', 'esencia', 'núcleo', 'corazón', 'centro', 
+          'foco', 'énfasis', 'acento', 'destacado', 'atención', 'reconocimiento', 
+          'agradecimiento', 'comprensión', 'percepción', 'conciencia', 'realización', 
+          'aprehensión', 'discernimiento', 'perspicacia', 'penetración', 'perceptividad', 
+          'sensibilidad', 'responsividad', 'receptividad', 'apertura', 'flexibilidad', 
+          'adaptabilidad', 'versatilidad', 'ingenio', 'creatividad', 'originalidad', 
+          'innovación', 'novedad', 'frescura', 'singularidad', 'distintividad', 'individualidad', 
+          'peculiaridad', 'idiosincrasia', 'rareza', 'singularidad', 'rareza', 'escasez', 
+          'escasez', 'deficiencia', 'insuficiencia', 'inadecuación', 'incompletitud', 
+          'imperfección', 'defecto', 'falla', 'mancha', 'marca', 'mancha', 'mancha'
         ],
         fr: [
-          'sérendipité', 'éphémère', 'éloquent', 'résilient', 'méliflu',
-          'ubiquitaire', 'perspicace', 'lumineux', 'effervescent', 'quintessentiel',
-          'énigmatique', 'pragmatique', 'vivace', 'tenace', 'magnanime',
-          'sagace', 'bienveillant', 'audacieux', 'fastidieux', 'grégaire',
-          'diligent', 'profond', 'ingénieux', 'méticuleux', 'ambitieux',
-          'courageux', 'généreux', 'optimiste', 'passionné', 'sagesse'
+          'sérendipité', 'éphémère', 'éloquent', 'résilient', 'méliflu', 'ubiquitaire', 'perspicace', 
+          'lumineux', 'effervescent', 'quintessentiel', 'énigmatique', 'pragmatique', 'vivace', 
+          'tenace', 'magnanime', 'sagace', 'bienveillant', 'audacieux', 'fastidieux', 'grégaire', 
+          'diligent', 'profond', 'ingénieux', 'méticuleux', 'ambitieux', 'courageux', 'généreux', 
+          'optimiste', 'passionné', 'sagesse', 'éloquence', 'résilience', 'ubiquité', 'luminosité', 
+          'effervescence', 'énigme', 'pragmatisme', 'vivacité', 'ténacité', 'magnanimité', 
+          'sagacité', 'bienveillance', 'audace', 'fastidiosité', 'grégarité', 'diligence', 
+          'profondeur', 'ingéniosité', 'méticulosité', 'ambition', 'courage', 'générosité', 
+          'optimisme', 'passion', 'nostalgie', 'mélancolie', 'euphorie', 'sérénité', 'tranquillité', 
+          'harmonie', 'sagesse', 'curiosité', 'émerveillement', 'gratitude', 'compassion', 
+          'empathie', 'bonté', 'humilité', 'intégrité', 'honnêteté', 'loyauté', 'dévotion', 
+          'dédicace', 'persévérance', 'détermination', 'force', 'valeur', 'héroïsme', 
+          'altruisme', 'philanthropie', 'bienveillance', 'charité', 'générosité', 'magnanimité', 
+          'grâce', 'courtoisie', 'chevalerie', 'noblesse', 'dignité', 'élégance', 'sophistication', 
+          'raffinement', 'culture', 'érudition', 'savoir', 'connaissance', 'sagesse', 'perspicacité', 
+          'perception', 'discernement', 'acuité', 'astuce', 'intelligence', 'brillance', 'génie', 
+          'talent', 'aptitude', 'compétence', 'expertise', 'maîtrise', 'virtuosité', 'art', 
+          'créativité', 'innovation', 'originalité', 'unicité', 'distinctivité', 'individualité', 
+          'personnalité', 'caractère', 'essence', 'quintessence', 'noyau', 'cœur', 'âme', 
+          'esprit', 'nature', 'tempérament', 'disposition', 'humeur', 'atmosphère', 'ambiance', 
+          'aura', 'énergie', 'vitalité', 'vigueur', 'vivacité', 'animation', 'exubérance', 
+          'enthousiasme', 'zèle', 'ardeur', 'ferveur', 'passion', 'intensité', 'férocité', 
+          'véhémence', 'impétuosité', 'témérité', 'audace', 'intrépidité', 'courage', 'bravoure', 
+          'valeur', 'héroïsme', 'chevalerie', 'noblesse', 'honneur', 'dignité', 'respect', 
+          'révérence', 'vénération', 'adoration', 'admiration', 'estime', 'appréciation', 
+          'gratitude', 'reconnaissance', 'obligation', 'devoir', 'responsabilité', 'engagement', 
+          'dédicace', 'dévotion', 'loyauté', 'fidélité', 'constance', 'persistance', 
+          'persévérance', 'ténacité', 'détermination', 'résolution', 'volonté', 'maîtrise de soi', 
+          'discipline', 'restriction', 'modération', 'tempérance', 'sobriété', 'sérieux', 
+          'solennité', 'gravité', 'poids', 'importance', 'signification', 'conséquence', 
+          'impact', 'influence', 'effet', 'résultat', 'conséquence', 'répercussion', 
+          'ramification', 'implication', 'signification', 'importance', 'substance', 'essence', 
+          'noyau', 'cœur', 'centre', 'foyer', 'accent', 'soulignement', 'attention', 
+          'reconnaissance', 'appréciation', 'compréhension', 'perception', 'conscience', 
+          'réalisation', 'appréhension', 'discernement', 'perspicacité', 'pénétration', 
+          'perceptivité', 'sensibilité', 'réactivité', 'réceptivité', 'ouverture', 'flexibilité', 
+          'adaptabilité', 'polyvalence', 'ingéniosité', 'créativité', 'originalité', 
+          'innovation', 'nouveauté', 'fraîcheur', 'unicité', 'distinctivité', 'individualité', 
+          'particularité', 'idiosyncrasie', 'bizarrerie', 'excentricité', 'singularité', 
+          'rareté', 'rareté', 'rareté', 'pénurie', 'déficience', 'insuffisance', 'inadéquation', 
+          'incomplétude', 'imperfection', 'défaut', 'tache', 'marque', 'taint', 'taint', 'taint'
         ],
         de: [
-          'Serendipität', 'flüchtig', 'eloquent', 'widerstandsfähig', 'melodisch',
-          'allgegenwärtig', 'scharfsinnig', 'leuchtend', 'sprudelnd', 'quintessentiell',
-          'rätselhaft', 'pragmatisch', 'lebhaft', 'beharrlich', 'großmütig',
-          'weise', 'wohlwollend', 'kühn', 'pingelig', 'gesellig',
-          'fleißig', 'tiefgründig', 'genial', 'sorgfältig', 'ehrgeizig',
-          'mutig', 'großzügig', 'optimistisch', 'leidenschaftlich', 'Weisheit'
-        ],
-        it: [
-          'serendipità', 'effimero', 'eloquente', 'resiliente', 'melifluo',
-          'ubiquo', 'perspicace', 'luminoso', 'effervescente', 'quintessenziale',
-          'enigmatico', 'pragmatico', 'vivace', 'tenace', 'magnanimo',
-          'saggio', 'benevolo', 'audace', 'fastidioso', 'gregario',
-          'diligente', 'profondo', 'ingegnoso', 'meticoloso', 'ambizioso',
-          'coraggioso', 'generoso', 'ottimista', 'appassionato', 'saggezza'
-        ],
-        pt: [
-          'serendipidade', 'efêmero', 'eloquente', 'resiliente', 'melífluo',
-          'ubíquo', 'perspicaz', 'luminoso', 'efervescente', 'quintessencial',
-          'enigmático', 'pragmático', 'vivaz', 'tenaz', 'magnânimo',
-          'sagaz', 'benevolente', 'audaz', 'fastidioso', 'gregário',
-          'diligente', 'profundo', 'engenhoso', 'meticuloso', 'ambicioso',
-          'corajoso', 'generoso', 'otimista', 'apaixonado', 'sabedoria'
-        ],
-        ru: [
-          'серендипность', 'эфемерный', 'красноречивый', 'устойчивый', 'мелодичный',
-          'вездесущий', 'проницательный', 'светящийся', 'игривый', 'квинтэссенция',
-          'загадочный', 'прагматичный', 'живой', 'упорный', 'великодушный',
-          'мудрый', 'доброжелательный', 'смелый', 'привередливый', 'общительный',
-          'усердный', 'глубокий', 'гениальный', 'тщательный', 'амбициозный',
-          'храбрый', 'щедрый', 'оптимистичный', 'страстный', 'мудрость'
-        ],
-        ja: [
-          '偶然の幸運', 'はかない', '雄弁な', '回復力のある', '甘美な',
-          '遍在する', '洞察力のある', '光る', '泡立つ', '典型',
-          '謎めいた', '実用的な', '活気のある', '粘り強い', '寛大な',
-          '賢明な', '親切な', '大胆な', '気難しい', '社交的な',
-          '勤勉な', '深い', '独創的な', '細心の', '野心的な',
-          '勇敢な', '寛大な', '楽観的な', '情熱的な', '知恵'
-        ],
-        zh: [
-          '意外发现', '短暂的', '雄辩的', '有弹性的', '甜美的',
-          '无处不在的', '敏锐的', '发光的', '冒泡的', '典型的',
-          '神秘的', '实用的', '活泼的', '坚韧的', '宽宏大量的',
-          '明智的', '仁慈的', '大胆的', '挑剔的', '合群的',
-          '勤奋的', '深刻的', '有创造力的', '细致的', '有野心的',
-          '勇敢的', '慷慨的', '乐观的', '热情的', '智慧'
-        ],
-        ko: [
-          '우연한 발견', '덧없는', '웅변의', '회복력 있는', '달콤한',
-          '어디에나 있는', '통찰력 있는', '빛나는', '거품나는', '전형적인',
-          '수수께끼 같은', '실용적인', '활기찬', '끈질긴', '관대한',
-          '현명한', '친절한', '대담한', '까다로운', '사교적인',
-          '부지런한', '깊은', '독창적인', '꼼꼼한', '야심찬',
-          '용감한', '관대한', '낙관적인', '열정적인', '지혜'
-        ],
-        ar: [
-          'اكتشاف بالصدفة', 'عابر', 'بليغ', 'مرن', 'عذب',
-          'موجود في كل مكان', 'ثاقب', 'مضيء', 'متدفق', 'مثالي',
-          'غامض', 'عملي', 'حيوي', 'عنيد', 'كريم',
-          'حكيم', 'طيب', 'جريء', 'صعب الإرضاء', 'اجتماعي',
-          'مجتهد', 'عميق', 'مبتكر', 'دقيق', 'طموح',
-          'شجاع', 'سخي', 'متفائل', 'شغوف', 'حكمة'
-        ],
-        hi: [
-          'संयोग', 'अस्थायी', 'वाक्पटु', 'लचीला', 'मधुर',
-          'सर्वव्यापी', 'तीक्ष्ण', 'चमकदार', 'उत्साही', 'सार',
-          'रहस्यमय', 'व्यावहारिक', 'जीवंत', 'दृढ़', 'उदार',
-          'बुद्धिमान', 'दयालु', 'साहसी', 'सावधान', 'सामाजिक',
-          'परिश्रमी', 'गहरा', 'प्रतिभाशाली', 'सतर्क', 'महत्वाकांक्षी',
-          'बहादुर', 'उदार', 'आशावादी', 'उत्साही', 'ज्ञान'
-        ],
-        nl: [
-          'toevalstreffer', 'vluchtig', 'welsprekend', 'veerkrachtig', 'welluidend',
-          'alomtegenwoordig', 'scherpzinnig', 'stralend', 'bruisend', 'quintessentieel',
-          'raadselachtig', 'pragmatisch', 'levendig', 'volhardend', 'grootmoedig',
-          'wijs', 'welwillend', 'gedurfd', 'kieskeurig', 'sociaal',
-          'ijverig', 'diepgaand', 'geniaal', 'zorgvuldig', 'ambitieus',
-          'moedig', 'vrijgevig', 'optimistisch', 'gepassioneerd', 'wijsheid'
-        ],
-        sv: [
-          'lyckträff', 'flyktig', 'vältalig', 'motståndskraftig', 'melodisk',
-          'allestädes närvarande', 'skarpsinnig', 'strålande', 'sprudlande', 'kvintessentiell',
-          'gåtfull', 'pragmatisk', 'livlig', 'ihärdig', 'storsint',
-          'vis', 'välvillig', 'djärv', 'petig', 'sällskaplig',
-          'flitig', 'djup', 'genial', 'noggrann', 'ambitiös',
-          'modig', 'generös', 'optimistisk', 'passionerad', 'visdom'
-        ],
-        pl: [
-          'szczęśliwy traf', 'ulotny', 'wymowny', 'odporny', 'melodyjny',
-          'wszechobecny', 'przenikliwy', 'świecący', 'musujący', 'kwintesencjalny',
-          'tajemniczy', 'pragmatyczny', 'żywy', 'wytrwały', 'wielkoduszny',
-          'mądry', 'życzliwy', 'śmiały', 'wybredny', 'towarzyski',
-          'pilny', 'głęboki', 'genialny', 'staranny', 'ambitny',
-          'odważny', 'hojny', 'optymistyczny', 'namiętny', 'mądrość'
+          'Serendipität', 'flüchtig', 'eloquent', 'widerstandsfähig', 'melodisch', 'allgegenwärtig', 
+          'scharfsinnig', 'leuchtend', 'sprudelnd', 'quintessentiell', 'rätselhaft', 'pragmatisch', 
+          'lebhaft', 'beharrlich', 'großmütig', 'weise', 'wohlwollend', 'kühn', 'pingelig', 
+          'gesellig', 'fleißig', 'tiefgründig', 'genial', 'sorgfältig', 'ehrgeizig', 'mutig', 
+          'großzügig', 'optimistisch', 'leidenschaftlich', 'Weisheit', 'Beredsamkeit', 
+          'Widerstandsfähigkeit', 'Allgegenwart', 'Leuchtkraft', 'Sprudeln', 'Rätsel', 
+          'Pragmatismus', 'Lebhaftigkeit', 'Beharrlichkeit', 'Großmut', 'Weisheit', 
+          'Wohlwollen', 'Kühnheit', 'Pingeligkeit', 'Geselligkeit', 'Fleiß', 'Tiefe', 
+          'Genialität', 'Sorgfalt', 'Ehrgeiz', 'Mut', 'Großzügigkeit', 'Optimismus', 
+          'Leidenschaft', 'Nostalgie', 'Melancholie', 'Euphorie', 'Gelassenheit', 'Ruhe', 
+          'Harmonie', 'Weisheit', 'Neugier', 'Staunen', 'Dankbarkeit', 'Mitgefühl', 
+          'Empathie', 'Güte', 'Demut', 'Integrität', 'Ehrlichkeit', 'Loyalität', 'Hingabe', 
+          'Hingabe', 'Ausdauer', 'Entschlossenheit', 'Stärke', 'Mut', 'Heldentum', 
+          'Altruismus', 'Philanthropie', 'Wohlwollen', 'Wohltätigkeit', 'Großzügigkeit', 
+          'Großmut', 'Anmut', 'Höflichkeit', 'Ritterlichkeit', 'Adel', 'Würde', 'Eleganz', 
+          'Sophistication', 'Raffinesse', 'Kultiviertheit', 'Gelehrsamkeit', 'Lernen', 
+          'Wissen', 'Weisheit', 'Einsicht', 'Wahrnehmung', 'Urteilsvermögen', 'Scharfsinn', 
+          'Schlauheit', 'Intelligenz', 'Brillanz', 'Genie', 'Talent', 'Begabung', 'Fähigkeit', 
+          'Kompetenz', 'Expertise', 'Meisterschaft', 'Virtuosität', 'Kunst', 'Kreativität', 
+          'Innovation', 'Originalität', 'Einzigartigkeit', 'Unterscheidungskraft', 
+          'Individualität', 'Persönlichkeit', 'Charakter', 'Essenz', 'Quintessenz', 'Kern', 
+          'Herz', 'Seele', 'Geist', 'Natur', 'Temperament', 'Disposition', 'Stimmung', 
+          'Atmosphäre', 'Ambiente', 'Aura', 'Energie', 'Vitalität', 'Kraft', 'Lebendigkeit', 
+          'Animation', 'Überschwang', 'Enthusiasmus', 'Eifer', 'Leidenschaft', 'Intensität', 
+          'Wildheit', 'Heftigkeit', 'Ungestüm', 'Tollkühnheit', 'Kühnheit', 'Furchtlosigkeit', 
+          'Mut', 'Tapferkeit', 'Heldentum', 'Ritterlichkeit', 'Adel', 'Ehre', 'Würde', 
+          'Respekt', 'Ehrfurcht', 'Verehrung', 'Anbetung', 'Bewunderung', 'Achtung', 
+          'Wertschätzung', 'Dankbarkeit', 'Verpflichtung', 'Pflicht', 'Verantwortung', 
+          'Engagement', 'Hingabe', 'Loyalität', 'Treue', 'Beständigkeit', 'Beharrlichkeit', 
+          'Ausdauer', 'Entschlossenheit', 'Entschlossenheit', 'Willenskraft', 'Selbstkontrolle', 
+          'Disziplin', 'Zurückhaltung', 'Mäßigung', 'Mäßigkeit', 'Nüchternheit', 'Ernst', 
+          'Feierlichkeit', 'Schwere', 'Gewicht', 'Bedeutung', 'Bedeutung', 'Konsequenz', 
+          'Auswirkung', 'Einfluss', 'Effekt', 'Ergebnis', 'Konsequenz', 'Nachwirkung', 
+          'Auswirkung', 'Verzweigung', 'Implikation', 'Bedeutung', 'Bedeutung', 'Substanz', 
+          'Essenz', 'Kern', 'Herz', 'Zentrum', 'Fokus', 'Betonung', 'Akzent', 'Hervorhebung', 
+          'Aufmerksamkeit', 'Anerkennung', 'Wertschätzung', 'Verständnis', 'Wahrnehmung', 
+          'Bewusstsein', 'Erkenntnis', 'Auffassung', 'Urteilsvermögen', 'Einsicht', 
+          'Durchdringung', 'Wahrnehmungsfähigkeit', 'Empfindlichkeit', 'Reaktionsfähigkeit', 
+          'Empfänglichkeit', 'Offenheit', 'Flexibilität', 'Anpassungsfähigkeit', 'Vielseitigkeit', 
+          'Einfallsreichtum', 'Kreativität', 'Originalität', 'Innovation', 'Neuheit', 
+          'Frische', 'Einzigartigkeit', 'Unterscheidungskraft', 'Individualität', 
+          'Besonderheit', 'Idiosynkrasie', 'Eigenart', 'Exzentrizität', 'Seltsamkeit', 
+          'Seltenheit', 'Seltenheit', 'Seltenheit', 'Knappheit', 'Mangel', 'Unzulänglichkeit', 
+          'Unvollständigkeit', 'Unvollkommenheit', 'Fehler', 'Defekt', 'Makel', 'Fleck', 
+          'Markierung', 'Fleck', 'Fleck', 'Fleck'
         ]
       };
       
+      // For other languages, use a smaller but still substantial list
+      // In production, these would be expanded similarly
+      const fallbackLists = {
+        it: ['serendipità', 'effimero', 'eloquente', 'resiliente', 'melifluo', 'ubiquo', 'perspicace', 'luminoso', 'effervescente', 'quintessenziale', 'enigmatico', 'pragmatico', 'vivace', 'tenace', 'magnanimo', 'saggio', 'benevolo', 'audace', 'fastidioso', 'gregario', 'diligente', 'profondo', 'ingegnoso', 'meticoloso', 'ambizioso', 'coraggioso', 'generoso', 'ottimista', 'appassionato', 'saggezza'],
+        pt: ['serendipidade', 'efêmero', 'eloquente', 'resiliente', 'melífluo', 'ubíquo', 'perspicaz', 'luminoso', 'efervescente', 'quintessencial', 'enigmático', 'pragmático', 'vivaz', 'tenaz', 'magnânimo', 'sagaz', 'benevolente', 'audaz', 'fastidioso', 'gregário', 'diligente', 'profundo', 'engenhoso', 'meticuloso', 'ambicioso', 'corajoso', 'generoso', 'otimista', 'apaixonado', 'sabedoria'],
+        ru: ['серендипность', 'эфемерный', 'красноречивый', 'устойчивый', 'мелодичный', 'вездесущий', 'проницательный', 'светящийся', 'игривый', 'квинтэссенция', 'загадочный', 'прагматичный', 'живой', 'упорный', 'великодушный', 'мудрый', 'доброжелательный', 'смелый', 'привередливый', 'общительный', 'усердный', 'глубокий', 'гениальный', 'тщательный', 'амбициозный', 'храбрый', 'щедрый', 'оптимистичный', 'страстный', 'мудрость'],
+        ja: ['偶然の幸運', 'はかない', '雄弁な', '回復力のある', '甘美な', '遍在する', '洞察力のある', '光る', '泡立つ', '典型', '謎めいた', '実用的な', '活気のある', '粘り強い', '寛大な', '賢明な', '親切な', '大胆な', '気難しい', '社交的な', '勤勉な', '深い', '独創的な', '細心の', '野心的な', '勇敢な', '寛大な', '楽観的な', '情熱的な', '知恵'],
+        zh: ['意外发现', '短暂的', '雄辩的', '有弹性的', '甜美的', '无处不在的', '敏锐的', '发光的', '冒泡的', '典型的', '神秘的', '实用的', '活泼的', '坚韧的', '宽宏大量的', '明智的', '仁慈的', '大胆的', '挑剔的', '合群的', '勤奋的', '深刻的', '有创造力的', '细致的', '有野心的', '勇敢的', '慷慨的', '乐观的', '热情的', '智慧'],
+        ko: ['우연한 발견', '덧없는', '웅변의', '회복력 있는', '달콤한', '어디에나 있는', '통찰력 있는', '빛나는', '거품나는', '전형적인', '수수께끼 같은', '실용적인', '활기찬', '끈질긴', '관대한', '현명한', '친절한', '대담한', '까다로운', '사교적인', '부지런한', '깊은', '독창적인', '꼼꼼한', '야심찬', '용감한', '관대한', '낙관적인', '열정적인', '지혜'],
+        ar: ['اكتشاف بالصدفة', 'عابر', 'بليغ', 'مرن', 'عذب', 'موجود في كل مكان', 'ثاقب', 'مضيء', 'متدفق', 'مثالي', 'غامض', 'عملي', 'حيوي', 'عنيد', 'كريم', 'حكيم', 'طيب', 'جريء', 'صعب الإرضاء', 'اجتماعي', 'مجتهد', 'عميق', 'مبتكر', 'دقيق', 'طموح', 'شجاع', 'سخي', 'متفائل', 'شغوف', 'حكمة'],
+        hi: ['संयोग', 'अस्थायी', 'वाक्पटु', 'लचीला', 'मधुर', 'सर्वव्यापी', 'तीक्ष्ण', 'चमकदार', 'उत्साही', 'सार', 'रहस्यमय', 'व्यावहारिक', 'जीवंत', 'दृढ़', 'उदार', 'बुद्धिमान', 'दयालु', 'साहसी', 'सावधान', 'सामाजिक', 'परिश्रमी', 'गहरा', 'प्रतिभाशाली', 'सतर्क', 'महत्वाकांक्षी', 'बहादुर', 'उदार', 'आशावादी', 'उत्साही', 'ज्ञान'],
+        nl: ['toevalstreffer', 'vluchtig', 'welsprekend', 'veerkrachtig', 'welluidend', 'alomtegenwoordig', 'scherpzinnig', 'stralend', 'bruisend', 'quintessentieel', 'raadselachtig', 'pragmatisch', 'levendig', 'volhardend', 'grootmoedig', 'wijs', 'welwillend', 'gedurfd', 'kieskeurig', 'sociaal', 'ijverig', 'diepgaand', 'geniaal', 'zorgvuldig', 'ambitieus', 'moedig', 'vrijgevig', 'optimistisch', 'gepassioneerd', 'wijsheid'],
+        sv: ['lyckträff', 'flyktig', 'vältalig', 'motståndskraftig', 'melodisk', 'allestädes närvarande', 'skarpsinnig', 'strålande', 'sprudlande', 'kvintessentiell', 'gåtfull', 'pragmatisk', 'livlig', 'ihärdig', 'storsint', 'vis', 'välvillig', 'djärv', 'petig', 'sällskaplig', 'flitig', 'djup', 'genial', 'noggrann', 'ambitiös', 'modig', 'generös', 'optimistisk', 'passionerad', 'visdom'],
+        pl: ['szczęśliwy traf', 'ulotny', 'wymowny', 'odporny', 'melodyjny', 'wszechobecny', 'przenikliwy', 'świecący', 'musujący', 'kwintesencjalny', 'tajemniczy', 'pragmatyczny', 'żywy', 'wytrwały', 'wielkoduszny', 'mądry', 'życzliwy', 'śmiały', 'wybredny', 'towarzyski', 'pilny', 'głęboki', 'genialny', 'staranny', 'ambitny', 'odważny', 'hojny', 'optymistyczny', 'namiętny', 'mądrość']
+      };
+      
       // Get word list for current language, fallback to English
-      const words = wordLists[language] || wordLists.en;
+      const words = wordLists[language] || fallbackLists[language] || wordLists.en;
       
-      // Always pick a random word - no caching for infinite variety
-      // Use timestamp + random to ensure different word each time
-      const randomIndex = Math.floor(Math.random() * words.length);
-      const word = words[randomIndex];
+      // Generate deterministic seed from date + user email
+      const seed = generateSeed(date, userEmail);
+      const random = seededRandom(seed);
       
-      return word;
+      // Filter out seen words and favorites (favorites are saved words, not excluded)
+      const availableWords = words.filter(word => !seenWords.includes(word));
+      
+      // If we've seen all words, reset the seen list (but keep favorites)
+      const wordsToChooseFrom = availableWords.length > 0 ? availableWords : words;
+      
+      // Pick a deterministic random word based on seed
+      const randomIndex = Math.floor(random() * wordsToChooseFrom.length);
+      const selectedWord = wordsToChooseFrom[randomIndex];
+      
+      // Add to seen words (unless it's a favorite - favorites can repeat)
+      if (!favorites.includes(selectedWord)) {
+        seenWords.push(selectedWord);
+        // Limit seen words to prevent storage bloat (keep last 1000)
+        if (seenWords.length > 1000) {
+          seenWords.shift();
+        }
+        chrome.storage.local.set({ [`seenWords_${language}`]: seenWords }, () => {});
+      }
+      
+      return selectedWord;
     } catch (e) {
       console.error('Error getting random word', e);
       // Fallback to a default word
-      return 'serendipity';
+      return language === 'en' ? 'serendipity' : 
+             language === 'es' ? 'serendipidad' :
+             language === 'fr' ? 'sérendipité' :
+             language === 'de' ? 'Serendipität' : 'serendipity';
     }
   }
 
@@ -6957,7 +7527,6 @@
               </button>
             </div>
           </div>
-          <div class="word-of-day-title">${translations[window.currentUILanguage || 'en']?.wordOfDay || 'Word of the Day'}</div>
         </div>
         <div class="word-card-explanation">${details.explanation}</div>
         ${showExamples && details.examples && details.examples.length > 0 ? `
@@ -7123,4 +7692,6 @@
   window.loadWordOfDay = loadWordOfDay;
 
 })();
+
+
 
