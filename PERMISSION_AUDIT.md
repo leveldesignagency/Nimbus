@@ -1,12 +1,22 @@
 # Permission Audit - Chrome Web Store Compliance
 
-## Current Manifest Permissions (v1.0.1)
+## Current Manifest Permissions (v1.0.23)
 
 ### Standard Permissions
 - ✅ **`storage`** - REQUIRED and USED
   - Used in: `popup.js`, `background.js`, `contentScript.js`, `options.js`
-  - Purpose: Save favorites, conversations, settings, recent searches
+  - Purpose: Save favorites, conversations, settings, recent searches, subscription status
   - Status: **KEEP** - Essential for functionality
+
+- ✅ **`identity`** - REQUIRED and USED
+  - Used in: `popup.js`
+  - Purpose: Access user email for subscription verification
+  - Status: **KEEP**
+
+- ✅ **`tabs`** - REQUIRED and USED
+  - Used in: `background.js`, `popup.js`
+  - Purpose: Open popup, monitor Stripe redirects, message active tab
+  - Status: **KEEP**
 
 ### Host Permissions
 - ✅ **`https://api.dictionaryapi.dev/*`** - USED
@@ -44,10 +54,12 @@
   - Purpose: Vercel API proxy for OpenAI
   - Status: **KEEP**
 
-## Removed Permissions (NOT in manifest)
+- ✅ **`https://www.googleapis.com/*`** - USED
+  - Used in: `popup.js`
+  - Purpose: Fetch user info for identity token flows
+  - Status: **KEEP**
 
-- ❌ **`identity`** - REMOVED
-  - Status: **NOT PRESENT** - Was never used, correctly removed
+## Removed Permissions (NOT in manifest)
 
 - ❌ **`activeTab`** - REMOVED
   - Status: **NOT PRESENT** - Not needed with content scripts using `<all_urls>`
@@ -71,7 +83,7 @@
 
 Before submitting to Chrome Web Store:
 
-- [x] No `identity` permission in manifest.json
+- [x] `identity` permission declared and used
 - [x] No `activeTab` permission in manifest.json
 - [x] No unused host permissions
 - [x] All host permissions are actively used in code
@@ -100,8 +112,8 @@ Before submitting to Chrome Web Store:
 ```json
 {
   "manifest_version": 3,
-  "version": "1.0.1",
-  "permissions": ["storage"],
+  "version": "1.0.23",
+  "permissions": ["storage", "identity", "tabs"],
   "host_permissions": [
     "https://api.dictionaryapi.dev/*",
     "https://en.wiktionary.org/*",
@@ -109,7 +121,8 @@ Before submitting to Chrome Web Store:
     "https://api.mymemory.translated.net/*",
     "https://en.wikipedia.org/*",
     "https://news.google.com/*",
-    "https://nimbus-api-ten.vercel.app/*"
+    "https://nimbus-api-ten.vercel.app/*",
+    "https://www.googleapis.com/*"
   ]
 }
 ```

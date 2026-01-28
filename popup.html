@@ -10,20 +10,20 @@
     :root {
       --bg-primary: #0d0d3a;
       --bg-secondary: #0d0d3a;
-      --bg-gradient: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a;
+      --bg-gradient: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(5,0,127,0.25) 50%, rgba(5,0,127,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(31,127,255,0.25) 50%, rgba(31,127,255,0) 68%), linear-gradient(to bottom, transparent 0%, transparent 70%, rgba(0,0,0,0.3) 85%, rgba(0,0,0,0.6) 95%, rgba(0,0,0,0.85) 100%), #05007f;
       --bg-header: var(--bg-gradient);
       --bg-hub: var(--bg-gradient);
       --text-primary: #ffffff;
       --text-secondary: #e2e8f0;
       --text-muted: #cbd5e1;
       --text-inverse: #ffffff;
-      --border-color: rgba(31, 127, 255, 0.35);
-      --border-strong: rgba(31, 127, 255, 0.5);
-      --card-bg: rgba(44, 60, 160, 0.58);
+      --border-color: rgba(31, 127, 255, 0.4);
+      --border-strong: rgba(31, 127, 255, 0.65);
+      --card-bg: rgba(15, 23, 42, 0.85);
       --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
       --card-shadow-inner: inset 0 2px 4px rgba(0, 0, 0, 0.4);
       --accent-blue: #1f7fff;
-      --accent-blue-light: #4d9aff;
+      --accent-blue-light: #3b82f6;
     }
     
     * {
@@ -71,7 +71,7 @@
     
     .header {
       background: transparent;
-      color: var(--text-inverse);
+      color: #ffffff;
       padding: 24px 20px 20px 20px;
       display: flex;
       align-items: center;
@@ -164,23 +164,23 @@
     .search-input {
       width: 100%;
       padding: 12px 44px 12px 16px;
-      border: 2px solid var(--border-color);
+      border: none;
       border-radius: 12px;
       font-size: 14px;
-      background: var(--card-bg);
-      color: var(--text-primary);
-      box-shadow: var(--card-shadow-inner), 0 2px 8px rgba(0, 0, 0, 0.1);
+      background: #ffffff;
+      color: #05007f;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
       transition: all 0.2s ease;
     }
     
     .search-input::placeholder {
-      color: var(--text-muted);
+      color: #05007f;
+      opacity: 0.5;
     }
     
     .search-input:focus {
       outline: none;
-      border-color: var(--accent-blue);
-      box-shadow: var(--card-shadow-inner), 0 4px 12px rgba(30, 58, 138, 0.2);
+      box-shadow: 0 0 0 3px rgba(5, 0, 127, 0.15), 0 4px 12px rgba(5, 0, 127, 0.2);
     }
     
     .search-icon-btn {
@@ -282,7 +282,7 @@
     .section-title {
       font-size: 16px;
       font-weight: 700;
-      color: var(--text-inverse);
+      color: #ffffff;
       margin-bottom: 12px;
       display: flex;
       align-items: center;
@@ -291,7 +291,7 @@
     }
     
     body.hub-search-mode .section-title {
-      color: var(--text-primary);
+      color: #ffffff;
     }
     
     .section-title svg {
@@ -309,7 +309,7 @@
     .word-list {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 12px;
     }
     
     .word-item {
@@ -324,6 +324,11 @@
       align-items: center;
       box-shadow: var(--card-shadow-inner), var(--card-shadow);
       position: relative;
+      margin-bottom: 12px;
+    }
+    
+    .word-item:last-child {
+      margin-bottom: 0;
     }
     
     .word-item::before {
@@ -352,7 +357,7 @@
     
     .word-item .word {
       font-weight: 700;
-      color: var(--text-primary);
+      color: #ffffff;
       font-size: 15px;
     }
     
@@ -438,18 +443,132 @@
       border-bottom: 1px solid rgba(255, 255, 255, 0.12);
     }
     .word-of-day-top .section-title {
-      color: var(--text-inverse);
+      color: #ffffff;
+    }
+    
+    .word-of-day-top .section-title svg {
+      color: #ffffff;
     }
     
     body.hub-search-mode .word-of-day-top .section-title {
-      color: var(--text-primary);
+      color: #ffffff;
     }
     body.hub-search-mode #wordOfDayHeader {
       display: none;
     }
     
     .word-of-day-top .word-card-modal {
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), 0 0 20px rgba(5, 0, 127, 0.15);
+      background: #ffffff;
+      border: none !important;
+      animation: wordOfDayPop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+      position: relative;
+    }
+    
+    .word-of-day-top .word-card-modal::before {
+      content: '';
+      position: absolute;
+      inset: -2px;
+      border-radius: 18px;
+      background: linear-gradient(135deg, rgba(5, 0, 127, 0.3), rgba(5, 0, 127, 0.1));
+      opacity: 0;
+      z-index: -1;
+      animation: wordOfDayGlow 2s ease-in-out infinite;
+    }
+    
+    @keyframes wordOfDayPop {
+      0% {
+        transform: scale(0.95);
+        opacity: 0;
+      }
+      50% {
+        transform: scale(1.02);
+      }
+      100% {
+        transform: scale(1);
+        opacity: 1;
+      }
+    }
+    
+    @keyframes wordOfDayGlow {
+      0%, 100% {
+        opacity: 0;
+      }
+      50% {
+        opacity: 0.4;
+      }
+    }
+    
+    .word-of-day-top .word-card-word {
+      color: #05007f !important;
+    }
+    
+    .word-of-day-top .word-card-phonetic {
+      color: #05007f;
+    }
+    
+    .word-of-day-top .word-card-explanation {
+      color: #05007f;
+    }
+    
+    .word-of-day-top .word-card-header {
+      background: #ffffff !important;
+      border-bottom: 2px solid rgba(5, 0, 127, 0.2);
+      padding: 20px 20px 16px;
+    }
+    
+    .word-of-day-top .word-card-copy-btn,
+    .word-of-day-top .word-card-tts-btn {
+      color: #05007f;
+    }
+    
+    .word-of-day-top .word-card-copy-btn:hover,
+    .word-of-day-top .word-card-tts-btn:hover {
+      background: rgba(5, 0, 127, 0.1);
+      color: #05007f;
+    }
+    
+    .word-of-day-top .word-card-examples-label {
+      color: #05007f;
+    }
+    
+    .word-of-day-top .word-card-example-item {
+      color: #05007f;
+      background: rgba(5, 0, 127, 0.05);
+      border-left: 3px solid #05007f;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      transition: all 0.2s ease;
+    }
+    
+    .word-of-day-top .word-card-example-item:hover {
+      background: rgba(5, 0, 127, 0.12);
+      transform: translateX(4px);
+    }
+    
+    .word-of-day-top .word-card-example-item:last-child {
+      margin-bottom: 0;
+    }
+    
+    .word-of-day-top .word-card-synonyms-label {
+      color: #05007f;
+    }
+    
+    .word-of-day-top .word-card-synonym-tag {
+      background: rgba(5, 0, 127, 0.05);
+      color: #05007f;
+      border: 2px solid rgba(5, 0, 127, 0.3);
+      transition: all 0.2s ease;
+      margin-bottom: 8px;
+    }
+    
+    .word-of-day-top .word-card-synonym-tag:hover {
+      background: #05007f;
+      color: #ffffff;
+      border-color: #05007f;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(5, 0, 127, 0.3);
     }
     
     .word-of-day {
@@ -543,7 +662,7 @@
     .loading {
       text-align: center;
       padding: 20px;
-      color: #64748b;
+      color: rgba(255, 255, 255, 0.8);
     }
     
     .load-more-btn,
@@ -586,12 +705,12 @@
       align-items: center;
       font-size: 14px;
       font-weight: 700;
-      color: var(--text-inverse);
+      color: #ffffff;
       margin-bottom: 12px;
     }
     
     body.hub-search-mode .recent-table-header {
-      color: var(--text-primary);
+      color: #ffffff;
     }
     
     .clear-all-btn {
@@ -686,14 +805,14 @@
     .recent-table-word {
       flex: 1;
       font-weight: 700;
-      color: var(--text-primary);
+      color: #ffffff;
       pointer-events: none;
       font-size: 15px;
     }
     
     .recent-table-time {
       font-size: 12px;
-      color: var(--text-muted);
+      color: rgba(255, 255, 255, 0.7);
       min-width: 70px;
       text-align: right;
       pointer-events: none;
@@ -849,6 +968,44 @@
       color: #10b981;
       box-shadow: 0 0 15px rgba(16, 185, 129, 0.4), 0 0 30px rgba(16, 185, 129, 0.2);
       opacity: 1;
+      transform: scale(1.15);
+    }
+    
+    .word-card-copy-btn svg {
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    .word-card-copy-btn.copied svg {
+      transform: rotate(15deg) scale(1.1);
+    }
+    
+    .word-card-tts-btn {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      background: transparent;
+      border: none;
+      border-radius: 6px;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+      opacity: 0.7;
+    }
+    
+    .word-card-tts-btn:hover {
+      background: var(--bg-secondary);
+      opacity: 1;
+      color: var(--text-secondary);
+      box-shadow: 0 0 15px rgba(30, 58, 138, 0.4), 0 0 30px rgba(30, 58, 138, 0.2);
+    }
+    
+    .word-card-tts-btn.speaking {
+      color: var(--accent-blue);
+      box-shadow: 0 0 15px rgba(31, 127, 255, 0.4), 0 0 30px rgba(31, 127, 255, 0.2);
+      opacity: 1;
     }
     
     .word-card-explanation {
@@ -889,6 +1046,9 @@
       padding: 10px 14px;
       background: var(--bg-secondary);
       border-left: 3px solid var(--accent-blue);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      transition: all 0.2s ease;
       border-radius: 8px;
       font-style: italic;
       font-weight: 500;

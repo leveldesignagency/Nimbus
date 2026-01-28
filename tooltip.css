@@ -2,10 +2,10 @@
 
 /* Global Nimbus variables – containers, icons, consistency */
 :root {
-  --nimbus-surface: rgba(42, 58, 155, 0.48);
-  --nimbus-surface-strong: rgba(48, 68, 165, 0.78);
-  --nimbus-surface-solid: rgba(46, 62, 160, 0.92);
-  --nimbus-surface-overlay: rgba(38, 52, 145, 0.6);
+  --nimbus-surface: rgba(15, 23, 42, 0.75);
+  --nimbus-surface-strong: rgba(15, 23, 42, 0.9);
+  --nimbus-surface-solid: rgba(15, 23, 42, 0.95);
+  --nimbus-surface-overlay: rgba(15, 23, 42, 0.8);
   --nimbus-icon-opacity: 0.95;
   --nimbus-icon: #94a3b8;
   --nimbus-icon-hover: #e2e8f0;
@@ -20,13 +20,14 @@
   padding: 8px 16px;
   font-size: 13px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a;
+  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(5,0,127,0.25) 50%, rgba(5,0,127,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(31,127,255,0.25) 50%, rgba(31,127,255,0) 68%), linear-gradient(to bottom, transparent 0%, transparent 70%, rgba(0,0,0,0.3) 85%, rgba(0,0,0,0.6) 95%, rgba(0,0,0,0.85) 100%), #05007f;
   color: #e2e8f0;
   border: 2px solid rgba(31, 127, 255, 0.5);
   border-radius: 10px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(31, 127, 255, 0.2);
-  transition: opacity 0.3s;
+  transition: opacity 0.3s, width 0.3s;
   pointer-events: none;
+  min-width: fit-content;
 }
 
 .cursoriq-tooltip {
@@ -68,7 +69,7 @@
 }
 
 .cursoriq-tooltip.warning {
-  background: radial-gradient(ellipse 110% 110% at 0% 100%, #04045a 0%, rgba(4,4,90,0.6) 25%, rgba(4,4,90,0.2) 45%, rgba(4,4,90,0) 65%), radial-gradient(ellipse 110% 110% at 100% 0%, #05007f 0%, rgba(5,0,127,0.6) 25%, rgba(4,4,90,0.2) 45%, rgba(4,4,90,0) 65%), #04045a !important;
+  background: radial-gradient(ellipse 110% 110% at 0% 100%, #05007f 0%, rgba(5,0,127,0.6) 25%, rgba(5,0,127,0.2) 45%, rgba(5,0,127,0) 65%), radial-gradient(ellipse 110% 110% at 100% 0%, #1f7fff 0%, rgba(31,127,255,0.6) 25%, rgba(31,127,255,0.2) 45%, rgba(31,127,255,0) 65%), linear-gradient(to bottom, transparent 0%, transparent 70%, rgba(0,0,0,0.3) 85%, rgba(0,0,0,0.6) 95%, rgba(0,0,0,0.85) 100%), #05007f !important;
   border-color: rgba(251, 191, 36, 0.6) !important;
 }
 
@@ -477,12 +478,21 @@
 .cursoriq-copy-explanation-btn:active {
   transform: scale(0.95);
 }
+.cursoriq-copy-explanation-btn {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 .cursoriq-copy-explanation-btn.copied {
   color: #34d399;
   opacity: 1;
+  transform: scale(1.15);
 }
 .cursoriq-copy-explanation-btn svg {
   display: block;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.cursoriq-copy-explanation-btn.copied svg {
+  transform: rotate(15deg) scale(1.1);
 }
 
 .cursoriq-explanation {
@@ -613,7 +623,7 @@
 }
 
 .cursoriq-google-btn:hover {
-  background: linear-gradient(135deg, #1f7fff 0%, #4d9aff 100%);
+  background: linear-gradient(135deg, #1f7fff 0%, #3b82f6 100%);
   transform: translateY(-1px);
   box-shadow: 0 6px 16px rgba(31, 127, 255, 0.4);
 }
@@ -626,21 +636,26 @@
 .cursoriq-synonyms-container {
   margin-top: 0;
   padding: 16px 18px;
-  background: var(--nimbus-surface);
+  background: rgba(31, 127, 255, 0.15);
   border-top: 1px solid rgba(31, 127, 255, 0.25);
-  border-radius: 0 0 10px 10px;
+  border-radius: 0;
 }
 
 .cursoriq-synonyms-label {
   font-size: 11px;
   font-weight: 700;
-  color: #94a3b8;
+  color: #ffffff;
   margin-bottom: 10px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.cursoriq-synonyms-label svg {
+  opacity: 1;
+  color: #ffffff;
 }
 
 .cursoriq-synonyms-label svg {
@@ -668,8 +683,8 @@
   display: inline-flex;
   align-items: center;
   padding: 6px 14px;
-  background: var(--nimbus-surface-strong);
-  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.4);
+  color: #ffffff;
   border-radius: 8px;
   font-size: 12px;
   font-weight: 500;
@@ -698,13 +713,18 @@
 .cursoriq-examples-label {
   font-size: 11px;
   font-weight: 600;
-  color: #94a3b8;
+  color: #ffffff;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 8px;
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.cursoriq-examples-label svg {
+  opacity: 1;
+  color: #ffffff;
 }
 
 .cursoriq-examples-list {
@@ -715,13 +735,30 @@
 
 .cursoriq-example-item {
   font-size: 13px;
-  color: #cbd5e1;
+  color: #ffffff;
   line-height: 1.5;
-  padding: 8px 12px;
-  background: var(--nimbus-surface-overlay);
-  border-left: 3px solid rgba(31, 127, 255, 0.6);
-  border-radius: 6px;
+  padding: 12px 16px;
+  background: rgba(15, 23, 42, 0.4);
+  border-left: 3px solid #ffffff;
+  border-radius: 8px;
   font-style: italic;
+  transition: all 0.2s ease;
+  margin-bottom: 8px;
+}
+
+.cursoriq-example-item:last-child {
+  margin-bottom: 0;
+}
+
+.cursoriq-example-item:hover {
+  background: rgba(15, 23, 42, 0.6);
+  transform: translateX(4px);
+}
+
+.cursoriq-example-item svg,
+.cursoriq-example-item .cursoriq-icon {
+  opacity: 1;
+  color: #ffffff;
 }
 
 /* Mini window overlay */
@@ -746,7 +783,7 @@
 }
 
 .cursoriq-mini-window {
-  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a;
+  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(5,0,127,0.25) 50%, rgba(5,0,127,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(31,127,255,0.25) 50%, rgba(31,127,255,0) 68%), linear-gradient(to bottom, transparent 0%, transparent 70%, rgba(0,0,0,0.3) 85%, rgba(0,0,0,0.6) 95%, rgba(0,0,0,0.85) 100%), #05007f;
   border-radius: 10px;
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(31, 127, 255, 0.25);
   max-width: 520px;
@@ -850,7 +887,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s, color 0.2s, opacity 0.2s, transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background 0.2s, color 0.2s, opacity 0.2s, transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   flex-shrink: 0;
 }
 
@@ -869,6 +906,15 @@
   color: #34d399;
   border-color: rgba(52, 211, 153, 0.6);
   background: rgba(52, 211, 153, 0.15);
+  transform: scale(1.15);
+}
+
+.cursoriq-icon-btn svg {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.cursoriq-icon-btn.copied svg {
+  transform: rotate(15deg) scale(1.1);
 }
 
 .cursoriq-icon-btn.playing {
@@ -963,11 +1009,50 @@
   align-items: center;
   gap: 2px;
   padding: 8px 10px 8px 8px;
-  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a;
+  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(5,0,127,0.25) 50%, rgba(5,0,127,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(31,127,255,0.25) 50%, rgba(31,127,255,0) 68%), linear-gradient(to bottom, transparent 0%, transparent 70%, rgba(0,0,0,0.3) 85%, rgba(0,0,0,0.6) 95%, rgba(0,0,0,0.85) 100%), #05007f;
   border: 2px solid rgba(31, 127, 255, 0.55);
   border-radius: 10px;
   box-shadow: 0 6px 28px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(31, 127, 255, 0.25), 0 0 24px rgba(31, 127, 255, 0.12);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Paste toolbar shown after extension copy */
+.cursoriq-paste-toolbar {
+  position: fixed;
+  z-index: 2147483642;
+  display: flex;
+  align-items: center;
+  padding: 6px;
+  background: linear-gradient(135deg, rgba(5, 0, 127, 0.95) 0%, rgba(31, 127, 255, 0.95) 100%);
+  border: 1px solid rgba(31, 127, 255, 0.6);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.cursoriq-paste-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(5, 0, 127, 0.9);
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.cursoriq-paste-btn:hover {
+  opacity: 0.95;
+  transform: translateY(-1px);
+}
+
+.cursoriq-paste-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 .cursoriq-float-grip {
@@ -1025,7 +1110,7 @@
   min-width: 260px;
   max-width: 360px;
   padding: 14px 16px;
-  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a;
+  background: radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(5,0,127,0.25) 50%, rgba(5,0,127,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(31,127,255,0.25) 50%, rgba(31,127,255,0) 68%), linear-gradient(to bottom, transparent 0%, transparent 70%, rgba(0,0,0,0.3) 85%, rgba(0,0,0,0.6) 95%, rgba(0,0,0,0.85) 100%), #05007f;
   border: 2px solid rgba(31, 127, 255, 0.5);
   border-radius: 10px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(31, 127, 255, 0.2);

@@ -9,6 +9,35 @@
   const nimbusTitle = document.getElementById('nimbusTitle');
   let navigationHistory = []; // Stack for back button
   let currentView = 'hub'; // 'hub' or 'word'
+
+  function notifyCopyToActiveTab() {
+    try {
+      if (!chrome || !chrome.tabs) return;
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tab = tabs && tabs[0];
+        if (!tab || typeof tab.id !== 'number') return;
+        chrome.tabs.sendMessage(tab.id, { action: 'nimbusCopyAction' }, () => {});
+      });
+    } catch (e) {
+      // Ignore messaging failures
+    }
+  }
+
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      const originalWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
+      navigator.clipboard.writeText = (text) => {
+        notifyCopyToActiveTab();
+        return originalWriteText(text);
+      };
+    }
+  } catch (e) {
+    // Ignore clipboard wrapper failures
+  }
+
+  document.addEventListener('copy', () => {
+    notifyCopyToActiveTab();
+  });
   
   // Notification system
   // Usage limits configuration
@@ -1084,8 +1113,9 @@
       // Hosted fallback URLs - try these if local files fail
       // You can host the logo on GitHub, Vercel, or any CDN and update these URLs
       const hostedFallbacks = [
-        'https://raw.githubusercontent.com/yourusername/yourrepo/main/NimbusLogo.svg', // GitHub raw URL
-        'https://nimbus-api-ten.vercel.app/NimbusLogo.svg', // Vercel static hosting
+        'https://leveldesignagency.github.io/Nimbus/NimbusLogo.svg', // GitHub Pages
+        'https://raw.githubusercontent.com/leveldesignagency/Nimbus/main/NimbusLogo.svg', // GitHub raw
+        'https://cdn.jsdelivr.net/gh/leveldesignagency/Nimbus@main/NimbusLogo.svg', // jsDelivr CDN
         // Add more fallback URLs here if needed
       ];
       
@@ -2025,6 +2055,7 @@
       examplesLabel: 'Examples',
       synonymsLabel: 'Synonyms',
       copyWord: 'Copy word',
+      speakWord: 'Speak word',
       addToFavorites: 'Add to favorites',
       removeFromFavorites: 'Remove from favorites',
       search: 'Search',
@@ -2122,6 +2153,7 @@
       examplesLabel: 'Ejemplos',
       synonymsLabel: 'Sinónimos',
       copyWord: 'Copiar palabra',
+      speakWord: 'Pronunciar palabra',
       addToFavorites: 'Agregar a favoritos',
       removeFromFavorites: 'Quitar de favoritos',
       search: 'Buscar',
@@ -2210,6 +2242,7 @@
       examplesLabel: 'Exemples',
       synonymsLabel: 'Synonymes',
       copyWord: 'Copier le mot',
+      speakWord: 'Prononcer le mot',
       addToFavorites: 'Ajouter aux favoris',
       removeFromFavorites: 'Retirer des favoris',
       search: 'Rechercher',
@@ -2303,6 +2336,7 @@
       examplesLabel: 'Beispiele',
       synonymsLabel: 'Synonyme',
       copyWord: 'Wort kopieren',
+      speakWord: 'Wort aussprechen',
       addToFavorites: 'Zu Favoriten hinzufügen',
       removeFromFavorites: 'Aus Favoriten entfernen',
       search: 'Suchen',
@@ -2396,6 +2430,7 @@
       examplesLabel: 'Esempi',
       synonymsLabel: 'Sinonimi',
       copyWord: 'Copia parola',
+      speakWord: 'Pronuncia parola',
       addToFavorites: 'Aggiungi ai preferiti',
       removeFromFavorites: 'Rimuovi dai preferiti',
       search: 'Cerca',
@@ -2489,6 +2524,7 @@
       examplesLabel: 'Exemplos',
       synonymsLabel: 'Sinônimos',
       copyWord: 'Copiar palavra',
+      speakWord: 'Pronunciar palavra',
       addToFavorites: 'Adicionar aos favoritos',
       removeFromFavorites: 'Remover dos favoritos',
       search: 'Pesquisar',
@@ -2582,6 +2618,7 @@
       examplesLabel: 'Примеры',
       synonymsLabel: 'Синонимы',
       copyWord: 'Копировать слово',
+      speakWord: 'Произнести слово',
       addToFavorites: 'Добавить в избранное',
       removeFromFavorites: 'Удалить из избранного',
       search: 'Поиск',
@@ -2675,6 +2712,7 @@
       examplesLabel: '例',
       synonymsLabel: '同義語',
       copyWord: '単語をコピー',
+      speakWord: '単語を発音',
       addToFavorites: 'お気に入りに追加',
       removeFromFavorites: 'お気に入りから削除',
       search: '検索',
@@ -2768,6 +2806,7 @@
       examplesLabel: '例子',
       synonymsLabel: '同义词',
       copyWord: '复制单词',
+      speakWord: '朗读单词',
       addToFavorites: '添加到收藏',
       removeFromFavorites: '从收藏中移除',
       search: '搜索',
@@ -2861,6 +2900,7 @@
       examplesLabel: '예',
       synonymsLabel: '동의어',
       copyWord: '단어 복사',
+      speakWord: '단어 발음',
       addToFavorites: '즐겨찾기에 추가',
       removeFromFavorites: '즐겨찾기에서 제거',
       search: '검색',
@@ -2954,6 +2994,7 @@
       examplesLabel: 'أمثلة',
       synonymsLabel: 'مرادفات',
       copyWord: 'نسخ الكلمة',
+      speakWord: 'نطق الكلمة',
       addToFavorites: 'إضافة إلى المفضلة',
       removeFromFavorites: 'إزالة من المفضلة',
       search: 'بحث',
@@ -3047,6 +3088,7 @@
       examplesLabel: 'उदाहरण',
       synonymsLabel: 'समानार्थी',
       copyWord: 'शब्द कॉपी करें',
+      speakWord: 'शब्द बोलें',
       addToFavorites: 'पसंदीदा में जोड़ें',
       removeFromFavorites: 'पसंदीदा से हटाएं',
       search: 'खोजें',
@@ -3140,6 +3182,7 @@
       examplesLabel: 'Voorbeelden',
       synonymsLabel: 'Synoniemen',
       copyWord: 'Woord kopiëren',
+      speakWord: 'Woord uitspreken',
       addToFavorites: 'Toevoegen aan favorieten',
       removeFromFavorites: 'Verwijderen uit favorieten',
       search: 'Zoeken',
@@ -3220,6 +3263,7 @@
       examplesLabel: 'Exempel',
       synonymsLabel: 'Synonymer',
       copyWord: 'Kopiera ord',
+      speakWord: 'Uttala ord',
       addToFavorites: 'Lägg till i favoriter',
       removeFromFavorites: 'Ta bort från favoriter',
       search: 'Sök',
@@ -3313,6 +3357,7 @@
       examplesLabel: 'Przykłady',
       synonymsLabel: 'Synonimy',
       copyWord: 'Kopiuj słowo',
+      speakWord: 'Wymów słowo',
       addToFavorites: 'Dodaj do ulubionych',
       removeFromFavorites: 'Usuń z ulubionych',
       search: 'Szukaj',
@@ -3409,6 +3454,7 @@
       examplesLabel: 'Örnekler',
       synonymsLabel: 'Eş Anlamlılar',
       copyWord: 'Kelimeyi kopyala',
+      speakWord: 'Kelimeyi söyle',
       addToFavorites: 'Favorilere ekle',
       removeFromFavorites: 'Favorilerden kaldır',
       search: 'Ara',
@@ -5052,10 +5098,8 @@
       copyBtn.addEventListener('click', async () => {
         try {
           await navigator.clipboard.writeText(locationTerm);
-          copyBtn.style.transform = 'scale(0.9)';
-          setTimeout(() => {
-            copyBtn.style.transform = 'scale(1)';
-          }, 200);
+          copyBtn.classList.add('copied');
+          setTimeout(() => copyBtn.classList.remove('copied'), 300);
         } catch (err) {
           console.error('Failed to copy:', err);
         }
@@ -7525,6 +7569,12 @@
                   <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path>
                 </svg>
               </button>
+              <button class="word-card-tts-btn" id="wotdTtsBtn" title="${translations[window.currentUILanguage || 'en']?.speakWord || 'Speak word'}">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                </svg>
+              </button>
             </div>
           </div>
         </div>
@@ -7597,11 +7647,103 @@
       window.open(`https://www.google.com/search?q=${encodeURIComponent(word)}`, '_blank');
     });
     
+    const ttsBtn = document.getElementById('wotdTtsBtn');
+    ttsBtn.addEventListener('click', () => {
+      speakWord(word, details.pronunciation, ttsBtn);
+    });
+    
     // Make synonyms clickable
     wordOfDayDiv.querySelectorAll('.word-card-synonym-tag').forEach(tag => {
       tag.addEventListener('click', () => {
         showWordDetails(tag.dataset.synonym);
       });
+    });
+  }
+
+  // Text-to-speech function
+  function speakWord(word, pronunciation, buttonElement = null) {
+    if (!('speechSynthesis' in window)) {
+      console.warn('Speech synthesis not supported');
+      if (buttonElement) {
+        buttonElement.classList.remove('speaking');
+      }
+      return;
+    }
+    
+    // Stop any ongoing speech
+    window.speechSynthesis.cancel();
+    
+    // Get settings for language
+    chrome.storage.local.get(['settings'], (result) => {
+      const settings = result.settings || {};
+      const lang = settings.dictionaryLanguage || 'en';
+      
+      // Map language codes to speech synthesis voices
+      const langMap = {
+        'en': 'en-US',
+        'es': 'es-ES',
+        'fr': 'fr-FR',
+        'de': 'de-DE',
+        'it': 'it-IT',
+        'pt': 'pt-PT',
+        'ru': 'ru-RU',
+        'ja': 'ja-JP',
+        'zh': 'zh-CN',
+        'ko': 'ko-KR',
+        'ar': 'ar-SA',
+        'hi': 'hi-IN',
+        'nl': 'nl-NL',
+        'sv': 'sv-SE',
+        'pl': 'pl-PL',
+        'tr': 'tr-TR'
+      };
+      
+      const utterance = new SpeechSynthesisUtterance(word);
+      utterance.lang = langMap[lang] || 'en-US';
+      utterance.rate = 0.9;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      
+      // Function to set voice and speak
+      const speakWithVoice = () => {
+        const voices = window.speechSynthesis.getVoices();
+        const preferredVoice = voices.find(v => v.lang.startsWith(langMap[lang] || 'en-US'));
+        if (preferredVoice) {
+          utterance.voice = preferredVoice;
+        }
+        
+        // Visual feedback
+        if (buttonElement) {
+          buttonElement.classList.add('speaking');
+        }
+        
+        utterance.onend = () => {
+          if (buttonElement) {
+            buttonElement.classList.remove('speaking');
+          }
+        };
+        
+        utterance.onerror = (e) => {
+          console.error('Speech synthesis error:', e);
+          if (buttonElement) {
+            buttonElement.classList.remove('speaking');
+          }
+        };
+        
+        window.speechSynthesis.speak(utterance);
+      };
+      
+      // Voices may not be loaded immediately, wait for them
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        speakWithVoice();
+      } else {
+        // Wait for voices to load
+        window.speechSynthesis.onvoiceschanged = () => {
+          speakWithVoice();
+          window.speechSynthesis.onvoiceschanged = null; // Remove listener after first call
+        };
+      }
     });
   }
 

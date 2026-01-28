@@ -25,6 +25,11 @@
   let currentUtterance = null; // Current speech synthesis utterance
   let audioState = 'idle'; // 'idle', 'playing', 'paused'
   let pausedText = ''; // Text that was paused (for resume)
+  let pasteToolbarEnabled = false;
+  let pasteToolbarLastCopyAt = 0;
+  let pasteToolbarTarget = null;
+  let pasteToolbarEl = null;
+  const PASTE_TOOLBAR_TIMEOUT_MS = 5 * 60 * 1000;
 
   // Function to find the best available voice for TTS
   function getBestVoice(lang = 'en-US') {
@@ -89,6 +94,39 @@
     
     // Last resort: return first matching voice
     return matchingVoices[0] || voices[0];
+  }
+
+  function markExtensionCopy() {
+    pasteToolbarEnabled = true;
+    pasteToolbarLastCopyAt = Date.now();
+    try {
+      chrome.storage.local.set({ nimbusLastCopyAt: pasteToolbarLastCopyAt });
+      chrome.runtime.sendMessage({ action: 'nimbusCopyAction', at: pasteToolbarLastCopyAt }, () => {});
+    } catch (e) {
+      // Ignore storage or messaging failures
+    }
+    // If user is already focused in an editable field, show immediately
+    try {
+      const active = document.activeElement;
+      if (isEditableElement(active)) {
+        showPasteToolbar(active);
+      }
+    } catch (e) {
+      // Ignore focus errors
+    }
+  }
+
+  // Track extension-initiated clipboard writes for paste toolbar
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      const originalWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
+      navigator.clipboard.writeText = (text) => {
+        markExtensionCopy();
+        return originalWriteText(text);
+      };
+    }
+  } catch (e) {
+    // Ignore clipboard wrapper failures
   }
 
   // Translate modal: from/to languages (matches background + Turkish)
@@ -424,6 +462,10 @@
     if (chrome && chrome.storage && chrome.storage.onChanged) {
       chrome.storage.onChanged.addListener((changes, areaName) => {
         if (areaName === 'local') {
+          if (changes.nimbusLastCopyAt && changes.nimbusLastCopyAt.newValue) {
+            pasteToolbarLastCopyAt = changes.nimbusLastCopyAt.newValue;
+            pasteToolbarEnabled = true;
+          }
           if (changes.usage) {
             usage = changes.usage.newValue || usage;
           }
@@ -458,6 +500,11 @@
   try {
     if (chrome && chrome.runtime && chrome.runtime.onMessage) {
       chrome.runtime.onMessage.addListener((msg) => {
+        if (msg && msg.action === 'nimbusCopyAction') {
+          pasteToolbarEnabled = true;
+          pasteToolbarLastCopyAt = msg.at || Date.now();
+          return true;
+        }
         if (msg && msg.action === 'subscriptionActivated') {
           console.log('Nimbus: Received subscription activation message');
           checkSubscription().then((isActive) => {
@@ -1663,7 +1710,7 @@
     if (isHtml) {
       // Skip header for subscribe prompts - show content directly
       // Override tooltip background to blue gradient for subscribe prompts
-      tooltipEl.style.background = 'radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #0000eb 0%, rgba(0,0,235,0.92) 15%, rgba(0,0,235,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 0% 100%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), radial-gradient(ellipse 115% 115% at 100% 100%, #04045a 0%, rgba(4,4,90,0.92) 15%, rgba(4,4,90,0.6) 32%, rgba(4,4,90,0.25) 50%, rgba(4,4,90,0) 68%), #04045a !important';
+      tooltipEl.style.background = 'radial-gradient(ellipse 115% 115% at 0% 0%, #05007f 0%, rgba(5,0,127,0.92) 15%, rgba(5,0,127,0.6) 32%, rgba(5,0,127,0.25) 50%, rgba(5,0,127,0) 68%), radial-gradient(ellipse 115% 115% at 100% 0%, #1f7fff 0%, rgba(31,127,255,0.92) 15%, rgba(31,127,255,0.6) 32%, rgba(31,127,255,0.25) 50%, rgba(31,127,255,0) 68%), linear-gradient(to bottom, transparent 0%, transparent 70%, rgba(0,0,0,0.3) 85%, rgba(0,0,0,0.6) 95%, rgba(0,0,0,0.85) 100%), #05007f !important';
       tooltipEl.style.border = 'none !important';
       tooltipEl.style.boxShadow = '0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1) !important';
       
@@ -1752,7 +1799,7 @@
           try { document.execCommand('copy'); } catch (_) {}
           document.body.removeChild(textArea);
         }
-        setTimeout(() => copyExplanationBtn.classList.remove('copied'), 2000);
+        setTimeout(() => copyExplanationBtn.classList.remove('copied'), 300);
       });
       explanationContainer.appendChild(copyExplanationBtn);
       tooltipEl.appendChild(explanationContainer);
@@ -3160,8 +3207,179 @@
   // Load settings on initialization
   loadModalSettings();
 
+  // Restore recent copy state (for paste toolbar across tabs)
+  try {
+    chrome.storage.local.get(['nimbusLastCopyAt'], (res) => {
+      const ts = res.nimbusLastCopyAt;
+      if (ts && typeof ts === 'number') {
+        pasteToolbarLastCopyAt = ts;
+        pasteToolbarEnabled = true;
+      }
+    });
+  } catch (e) {
+    // Ignore storage errors
+  }
+
   // Floating quick-action toolbar on every page
   let readerModeOn = false;
+
+  function isNimbusCopyButton(el) {
+    if (!el || !el.closest) return false;
+    return !!el.closest(
+      '.cursoriq-copy-btn,' +
+      '.cursoriq-copy-explanation-btn,' +
+      '.cursoriq-summary-copy,' +
+      '.cursoriq-copy-icon-btn,' +
+      '.cursoriq-location-copy-btn,' +
+      '.cursoriq-float-popover-copy'
+    );
+  }
+
+  function canShowPasteToolbar() {
+    if (!pasteToolbarEnabled) return false;
+    if (Date.now() - pasteToolbarLastCopyAt > PASTE_TOOLBAR_TIMEOUT_MS) {
+      pasteToolbarEnabled = false;
+      return false;
+    }
+    return true;
+  }
+
+  function refreshPasteToolbarStateFromStorage(onDone) {
+    try {
+      chrome.storage.local.get(['nimbusLastCopyAt'], (res) => {
+        const ts = res.nimbusLastCopyAt;
+        if (ts && typeof ts === 'number') {
+          pasteToolbarLastCopyAt = ts;
+          pasteToolbarEnabled = true;
+        }
+        if (typeof onDone === 'function') onDone();
+      });
+    } catch (e) {
+      if (typeof onDone === 'function') onDone();
+    }
+  }
+
+  function isEditableElement(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    if (tag === 'textarea') return true;
+    if (tag === 'input') {
+      const type = (el.getAttribute('type') || 'text').toLowerCase();
+      const blockedTypes = new Set([
+        'button', 'submit', 'reset', 'checkbox', 'radio', 'file',
+        'color', 'range', 'image', 'hidden'
+      ]);
+      return !blockedTypes.has(type);
+    }
+    if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') return true;
+    const role = el.getAttribute && el.getAttribute('role');
+    if (role && role.toLowerCase() === 'textbox') return true;
+    return false;
+  }
+
+  function ensurePasteToolbar() {
+    if (pasteToolbarEl) return pasteToolbarEl;
+    const bar = document.createElement('div');
+    bar.id = 'cursoriq-paste-toolbar';
+    bar.className = 'cursoriq-paste-toolbar';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cursoriq-paste-btn';
+    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H7a2 2 0 0 1-2-2V7"/><rect x="7" y="3" width="12" height="14" rx="2" ry="2"/><path d="M9 7h6"/><path d="M12 11v6"/><path d="M9 14h6"/></svg><span>Paste</span>';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      pasteFromClipboard(pasteToolbarTarget);
+    });
+    bar.appendChild(btn);
+    bar.style.display = 'none';
+    document.body.appendChild(bar);
+    pasteToolbarEl = bar;
+    return bar;
+  }
+
+  function positionPasteToolbar(target) {
+    if (!pasteToolbarEl || !target) return;
+    const rect = target.getBoundingClientRect();
+    const toolbarRect = pasteToolbarEl.getBoundingClientRect();
+    const margin = 8;
+    let top = rect.bottom + margin;
+    let left = rect.left;
+    if (top + toolbarRect.height > window.innerHeight - margin) {
+      top = rect.top - toolbarRect.height - margin;
+    }
+    if (left + toolbarRect.width > window.innerWidth - margin) {
+      left = window.innerWidth - toolbarRect.width - margin;
+    }
+    if (left < margin) left = margin;
+    pasteToolbarEl.style.top = Math.max(margin, top) + 'px';
+    pasteToolbarEl.style.left = left + 'px';
+  }
+
+  function showPasteToolbar(target) {
+    if (!canShowPasteToolbar() || !isEditableElement(target)) {
+      hidePasteToolbar();
+      return;
+    }
+    ensurePasteToolbar();
+    pasteToolbarTarget = target;
+    pasteToolbarEl.style.display = 'flex';
+    requestAnimationFrame(() => positionPasteToolbar(target));
+  }
+
+  function hidePasteToolbar() {
+    if (pasteToolbarEl) {
+      pasteToolbarEl.style.display = 'none';
+    }
+    pasteToolbarTarget = null;
+  }
+
+  async function pasteFromClipboard(target) {
+    const el = isEditableElement(target) ? target : document.activeElement;
+    if (!isEditableElement(el)) return;
+    let text = '';
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        text = await navigator.clipboard.readText();
+      }
+    } catch (e) {
+      // Ignore readText errors, fall back below
+    }
+    if (!text) {
+      try {
+        el.focus();
+        document.execCommand('paste');
+      } catch (e) {
+        // Some sites block programmatic paste
+      }
+      return;
+    }
+    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea') {
+      const value = el.value || '';
+      const start = typeof el.selectionStart === 'number' ? el.selectionStart : value.length;
+      const end = typeof el.selectionEnd === 'number' ? el.selectionEnd : value.length;
+      el.value = value.slice(0, start) + text + value.slice(end);
+      const newPos = start + text.length;
+      if (el.setSelectionRange) el.setSelectionRange(newPos, newPos);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    } else if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
+      el.focus();
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        range.deleteContents();
+        range.insertNode(document.createTextNode(text));
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      } else {
+        el.textContent = (el.textContent || '') + text;
+      }
+    }
+    showToast('Pasted');
+  }
 
   function getPageTextForSummarize() {
     const el = document.querySelector('article, main, [role="main"], .post-content, .article-body, .entry-content, .content-column, [class*="article"]');
@@ -3294,6 +3512,49 @@
 
   setTimeout(createFloatingToolbar, 300);
 
+  document.addEventListener('focusin', (e) => {
+    if (isEditableElement(e.target)) {
+      if (canShowPasteToolbar()) {
+        showPasteToolbar(e.target);
+      } else {
+        refreshPasteToolbarStateFromStorage(() => {
+          if (canShowPasteToolbar()) {
+            showPasteToolbar(e.target);
+          } else {
+            hidePasteToolbar();
+          }
+        });
+      }
+    } else {
+      hidePasteToolbar();
+    }
+  }, true);
+
+  document.addEventListener('click', (e) => {
+    if (isNimbusCopyButton(e.target)) {
+      markExtensionCopy();
+      return;
+    }
+  });
+
+  document.addEventListener('mousedown', (e) => {
+    if (pasteToolbarEl && pasteToolbarEl.contains(e.target)) return;
+    if (isEditableElement(e.target)) return;
+    hidePasteToolbar();
+  });
+
+  document.addEventListener('scroll', () => {
+    if (pasteToolbarTarget && pasteToolbarEl && pasteToolbarEl.style.display !== 'none') {
+      positionPasteToolbar(pasteToolbarTarget);
+    }
+  }, true);
+
+  window.addEventListener('resize', () => {
+    if (pasteToolbarTarget && pasteToolbarEl && pasteToolbarEl.style.display !== 'none') {
+      positionPasteToolbar(pasteToolbarTarget);
+    }
+  });
+
   // Only block when selection clearly contains media (img, video, iframe). Very permissive.
   function isValidTextSelection(selection, range) {
     if (!selection || !range) return false;
@@ -3338,8 +3599,9 @@
     if (tb) {
       const r = tb.getBoundingClientRect();
       el.style.top = (r.bottom + 8) + 'px';
-      el.style.left = (r.left + r.width / 2) + 'px';
-      el.style.transform = 'translateX(-50%)';
+      el.style.left = r.left + 'px';
+      el.style.width = r.width + 'px';
+      el.style.transform = 'none';
       el.style.right = 'auto';
       el.style.bottom = 'auto';
     } else {
@@ -3348,6 +3610,7 @@
       el.style.left = 'auto';
       el.style.bottom = 'auto';
       el.style.transform = 'none';
+      el.style.width = 'auto';
     }
     setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 1800);
   }

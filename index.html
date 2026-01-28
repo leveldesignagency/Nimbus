@@ -35,7 +35,7 @@
 </head>
 <body>
     <h1>Nimbus Privacy Policy</h1>
-    <p class="last-updated"><strong>Last Updated:</strong> January 2025</p>
+    <p class="last-updated"><strong>Last Updated:</strong> January 27, 2026</p>
 
     <h2>Overview</h2>
     <p>Nimbus ("we", "our", or "us") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, and safeguard your information when you use our Chrome extension.</p>
@@ -47,38 +47,47 @@
         <li><strong>Word Searches</strong>: Words you select are saved locally in your browser's storage for recent searches and favorites</li>
         <li><strong>Favorites</strong>: Words you mark as favorites are stored locally</li>
         <li><strong>Settings</strong>: Your preferences (API keys, explanation style) are stored locally in your browser</li>
+        <li><strong>Subscription Status</strong>: Subscription ID, expiry, and status (if you subscribe) are stored locally</li>
+        <li><strong>Saved Items</strong>: Pages or snippets you choose to save are stored locally</li>
     </ul>
 
     <h3>Data We Do NOT Collect</h3>
     <ul>
-        <li>We do NOT collect personal information</li>
         <li>We do NOT track your browsing history</li>
-        <li>We do NOT share your data with third parties</li>
         <li>We do NOT use analytics or tracking services</li>
     </ul>
 
     <h2>How We Use Your Data</h2>
     <ul>
         <li><strong>Local Storage</strong>: All data (favorites, recent searches, settings) is stored locally in your browser using Chrome's storage API</li>
-        <li><strong>API Calls</strong>: When you look up a word, we may send the word to:
+        <li><strong>API Calls</strong>: When you look up a word or request summaries, we may send the selected text to:
             <ul>
                 <li><strong>Free Dictionary API</strong> (dictionaryapi.dev) - for word definitions</li>
-                <li><strong>OpenAI API</strong> (if you provide your own API key) - for enhanced explanations</li>
+                <li><strong>Translation APIs</strong> (LibreTranslate and MyMemory) - for translations</li>
+                <li><strong>Wikipedia/Wikidata/News APIs</strong> - for entity/context info</li>
+                <li><strong>Nimbus API</strong> (nimbus-api-ten.vercel.app) - to proxy AI requests and subscription verification</li>
+                <li><strong>OpenAI API</strong> (if you provide your own API key, via Nimbus API) - for enhanced explanations</li>
             </ul>
         </li>
         <li><strong>Incognito Mode</strong>: In incognito/private browsing mode, we do not save any data</li>
+        <li><strong>Account/Subscription</strong>: If you subscribe, we use your email address to verify your subscription status</li>
+        <li><strong>Contact Form</strong>: If you contact support, we use your name, email, and message to respond</li>
     </ul>
 
     <h2>Third-Party Services</h2>
     <ul>
-        <li><strong>Free Dictionary API</strong>: We use dictionaryapi.dev to fetch word definitions. This service may receive the words you search for.</li>
-        <li><strong>OpenAI API</strong>: If you provide your own OpenAI API key, word lookups may be sent to OpenAI. We do not store or have access to your API key.</li>
+        <li><strong>Free Dictionary API</strong>: We use dictionaryapi.dev to fetch word definitions. This service receives the words you search for.</li>
+        <li><strong>LibreTranslate / MyMemory</strong>: Used for translations. These services receive the text you request to translate.</li>
+        <li><strong>Wikipedia / Wikidata / Google News</strong>: Used for definitions, background info, and related links. These services may receive the selected word or entity.</li>
+        <li><strong>Nimbus API (Vercel)</strong>: Used to proxy AI requests and verify subscriptions. It may receive the selected text and your email for subscription verification.</li>
+        <li><strong>OpenAI API</strong>: If you provide your own OpenAI API key, your selected text may be sent to OpenAI via Nimbus API. We do not store or have access to your API key.</li>
+        <li><strong>Google Identity</strong>: Used to access your email address for subscription verification and account recovery.</li>
     </ul>
 
     <h2>Data Security</h2>
     <ul>
         <li>All data is stored locally in your browser</li>
-        <li>We do not transmit your browsing data to our servers</li>
+        <li>We do not transmit your browsing history to our servers</li>
         <li>API keys are stored locally and encrypted by Chrome's storage system</li>
     </ul>
 

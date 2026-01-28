@@ -92,6 +92,20 @@ const VERCEL_API_URL = 'https://nimbus-api-ten.vercel.app/api/chat';
 
 // CRITICAL: Set up message listener IMMEDIATELY
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.action === 'nimbusCopyAction') {
+    const ts = Date.now();
+    chrome.storage.local.set({ nimbusLastCopyAt: ts });
+    // Broadcast to all tabs so other pages can react
+    chrome.tabs.query({}, (tabs) => {
+      tabs.forEach((t) => {
+        if (typeof t.id === 'number') {
+          chrome.tabs.sendMessage(t.id, { action: 'nimbusCopyAction', at: ts }, () => {});
+        }
+      });
+    });
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg && msg.type === 'openTab' && msg.url) {
     chrome.tabs.create({ url: msg.url }, () => {
       sendResponse(chrome.runtime.lastError ? { success: false, error: String(chrome.runtime.lastError.message) } : { success: true });
@@ -2041,11 +2055,35 @@ async function fetchOrganizationFromWikipedia(name) {
       clearTimeout(timeoutId);
       
       if (!response.ok) {
+        const resolvedTitle = await resolveWikipediaTitleBySearch(name.trim());
+        if (resolvedTitle) {
+          const resolvedSlug = resolvedTitle.replace(/\s+/g, '_');
+          const sumUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(resolvedSlug)}`;
+          const sumResponse = await fetch(sumUrl, { signal: controller.signal });
+          if (sumResponse.ok) {
+            const sumData = await sumResponse.json();
+            return parseWikipediaOrganizationData(sumData, name);
+          }
+        }
         return null;
       }
       
       const data = await response.json();
-      return parseWikipediaOrganizationData(data, name);
+      let parsed = parseWikipediaOrganizationData(data, name);
+      if (parsed) return parsed;
+      // If exact match isn't a clear organization (or disambiguation), try resolved title
+      const resolvedTitle = await resolveWikipediaTitleBySearch(name.trim());
+      const resolvedSlug = resolvedTitle ? resolvedTitle.replace(/\s+/g, '_') : null;
+      if (resolvedSlug && resolvedSlug !== searchName) {
+        const sumUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(resolvedSlug)}`;
+        const sumResponse = await fetch(sumUrl, { signal: controller.signal });
+        if (sumResponse.ok) {
+          const sumData = await sumResponse.json();
+          parsed = parseWikipediaOrganizationData(sumData, name);
+          if (parsed) return parsed;
+        }
+      }
+      return null;
     } catch (err) {
       clearTimeout(timeoutId);
       if (err.name === 'AbortError') {
@@ -2072,6 +2110,20 @@ function parseWikipediaOrganizationData(data, originalName) {
     content.toLowerCase().includes('company'),
     content.toLowerCase().includes('corporation'),
     content.toLowerCase().includes('organization'),
+    content.toLowerCase().includes('organisation'),
+    content.toLowerCase().includes('government agency'),
+    content.toLowerCase().includes('government department'),
+    content.toLowerCase().includes('public service'),
+    content.toLowerCase().includes('publicly funded'),
+    content.toLowerCase().includes('health service'),
+    content.toLowerCase().includes('healthcare system'),
+    content.toLowerCase().includes('agency'),
+    content.toLowerCase().includes('ministry'),
+    content.toLowerCase().includes('department'),
+    content.toLowerCase().includes('authority'),
+    content.toLowerCase().includes('charity'),
+    content.toLowerCase().includes('non-profit'),
+    content.toLowerCase().includes('nonprofit'),
     content.toLowerCase().includes('founded'),
     content.toLowerCase().includes('established'),
     content.toLowerCase().includes('headquarters'),
@@ -2287,44 +2339,82 @@ function parseWikipediaPlaceData(data, originalName) {
   const content = data.extract || '';
   const title = data.title || '';
   const type = data.type || '';
+  const originalLower = originalName.toLowerCase().trim();
   
   console.log('Nimbus: Parsing Wikipedia place data for:', title, 'type:', type);
   
-  // Place indicators - cities, countries, locations
-  const placeIndicators = [
-    content.toLowerCase().includes('city'),
-    content.toLowerCase().includes('town'),
-    content.toLowerCase().includes('country'),
-    content.toLowerCase().includes('capital'),
-    content.toLowerCase().includes('population'),
-    content.toLowerCase().includes('located'),
-    content.toLowerCase().includes('situated'),
-    content.toLowerCase().includes('coordinates'),
-    content.toLowerCase().includes('area'),
-    content.toLowerCase().includes('km²'),
-    content.toLowerCase().includes('square'),
-    title.includes('(city)'),
-    title.includes('(town)'),
-    title.includes('(country)'),
-    title.includes('(state)'),
-    title.includes('(province)'),
-    title.includes('(region)'),
-    /population\s+of\s+[\d,]+/i.test(content),
-    /located\s+in/i.test(content),
-    /situated\s+in/i.test(content)
+  // Exclude common dictionary words that have Wikipedia pages but aren't places
+  const commonWordExclusions = [
+    'school', 'hospital', 'library', 'museum', 'park', 'church', 'temple', 'mosque', 
+    'synagogue', 'restaurant', 'hotel', 'store', 'shop', 'market', 'bank', 'office',
+    'building', 'house', 'home', 'room', 'door', 'window', 'wall', 'floor', 'ceiling',
+    'table', 'chair', 'bed', 'car', 'bus', 'train', 'plane', 'ship', 'boat', 'bike',
+    'book', 'pen', 'paper', 'computer', 'phone', 'television', 'radio', 'music',
+    'art', 'painting', 'drawing', 'photo', 'picture', 'movie', 'film', 'game',
+    'food', 'water', 'air', 'fire', 'earth', 'sun', 'moon', 'star', 'tree', 'flower',
+    'animal', 'dog', 'cat', 'bird', 'fish', 'person', 'man', 'woman', 'child', 'baby',
+    'friend', 'family', 'mother', 'father', 'brother', 'sister', 'son', 'daughter',
+    'work', 'job', 'career', 'money', 'time', 'day', 'night', 'morning', 'evening',
+    'week', 'month', 'year', 'hour', 'minute', 'second', 'today', 'tomorrow', 'yesterday'
   ];
   
-  // Exclude if it's clearly a person or organization. Person = "born" in a date context (living or dead).
+  if (commonWordExclusions.includes(originalLower)) {
+    console.log('Nimbus: Excluding common word from place detection:', originalLower);
+    return null;
+  }
+  
+  // STRICT place indicators - require actual geographic/place-specific data
+  // Title must indicate it's a place OR content must have strong place indicators
+  const titleIsPlace = title.includes('(city)') || 
+                       title.includes('(town)') || 
+                       title.includes('(country)') || 
+                       title.includes('(state)') || 
+                       title.includes('(province)') || 
+                       title.includes('(region)') ||
+                       title.includes('(municipality)') ||
+                       title.includes('(county)') ||
+                       /^[A-Z][a-z]+,\s+[A-Z]/.test(title); // "City, Country" pattern
+  
+  // Strong place indicators in content - require actual geographic data
+  const hasPopulationNumber = /population[:\s]+([\d,]+(?:\s*[\d,]+)*)/i.test(content) ||
+                               /population\s+of\s+([\d,]+(?:\s*[\d,]+)*)/i.test(content) ||
+                               /([\d,]+)\s+inhabitants/i.test(content) ||
+                               /([\d,]+)\s+people/i.test(content);
+  
+  const hasCoordinates = /coordinates?[:\s]+[\d.°]+/i.test(content) ||
+                         /latitude[:\s]+[\d.°]+/i.test(content) ||
+                         /longitude[:\s]+[\d.°]+/i.test(content) ||
+                         /°[NS]\s*[\d.°]+[EW]/i.test(content);
+  
+  const hasArea = /area[:\s]+([\d,]+(?:\.[\d]+)?)\s*(km²|sq\s*mi|square\s*(kilometers?|miles?))/i.test(content);
+  
+  const hasCountry = /located\s+in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i.test(content) ||
+                     /country[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i.test(content) ||
+                     /in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+country/i.test(content);
+  
+  // Must be a city/town/country/state explicitly mentioned
+  const isExplicitPlaceType = /^(city|town|village|municipality|capital|country|state|province|region|county|borough|district)/i.test(content.substring(0, 200)) ||
+                               /is\s+a\s+(city|town|village|municipality|capital|country|state|province|region)/i.test(content);
+  
+  // Exclude if it's clearly a person or organization
   const personExclude =
     /\bborn\s+(\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{1,2},?\s+\d{4}|\d{4})/i.test(content) ||
-    /\(\s*born\s+[^)]*\)/i.test(content); // "(born …)" or "born 14 March 1879" etc.
+    /\(\s*born\s+[^)]*\)/i.test(content);
   const orgExclude = content.toLowerCase().includes('founded') && content.toLowerCase().includes('company');
-
-  const hasPlaceIndicator = placeIndicators.some(indicator => indicator === true);
-  const isDisambiguation = type === 'disambiguation';
-  const isPlace = hasPlaceIndicator && !isDisambiguation && !personExclude && !orgExclude;
   
-  console.log('Nimbus: Place detection - hasPlaceIndicator:', hasPlaceIndicator, 'type:', type, 'isPlace:', isPlace);
+  // Exclude if it's clearly about a concept/thing, not a place
+  const isConceptExclude = /^(a|an|the)\s+[a-z]+\s+(is|are|was|were|means|refers|denotes)/i.test(content) ||
+                           /^(a|an|the)\s+[a-z]+\s+(can|may|might|should|will)/i.test(content) ||
+                           /definition|meaning|concept|term|word|phrase/i.test(content.substring(0, 100));
+
+  // Require STRONG place indicators: title indicates place OR (geographic data AND explicit place type)
+  const hasStrongPlaceIndicator = titleIsPlace || 
+                                   (isExplicitPlaceType && (hasPopulationNumber || hasCoordinates || hasArea || hasCountry));
+  
+  const isDisambiguation = type === 'disambiguation';
+  const isPlace = hasStrongPlaceIndicator && !isDisambiguation && !personExclude && !orgExclude && !isConceptExclude;
+  
+  console.log('Nimbus: Place detection - titleIsPlace:', titleIsPlace, 'hasStrongPlaceIndicator:', hasStrongPlaceIndicator, 'type:', type, 'isPlace:', isPlace);
   
   if (!isPlace) {
     return null;
