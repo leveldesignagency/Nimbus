@@ -20,7 +20,9 @@
   };
   let isDragging = false;
   let isSelecting = false; // Track if user is actively selecting (mouse down + moving)
+  let shiftKeyHeld = false; // If true, do not show tooltip — user may be extending selection
   let selectionStartTime = 0; // Track when selection started
+  let mouseupSelectionTimeout = null; // Timeout after mouseup; cleared on mousedown so we only act after selection is really complete
   let iconModalTimer = null; // Timer for delayed icon-only modal
   let currentUtterance = null; // Current speech synthesis utterance
   let audioState = 'idle'; // 'idle', 'playing', 'paused'
@@ -31,8 +33,8 @@
   let pasteToolbarEl = null;
   const PASTE_TOOLBAR_TIMEOUT_MS = 5 * 60 * 1000;
 
-  // Function to find the best available voice for TTS
-  function getBestVoice(lang = 'en-US') {
+  // Function to find the best available voice for TTS (unified with popup.js)
+  function getBestVoice(lang = 'en-US', voicePreference = 'auto') {
     if (!window.speechSynthesis) return null;
     
     // Ensure voices are loaded (they load asynchronously)
@@ -43,24 +45,6 @@
       voices = window.speechSynthesis.getVoices();
     }
     if (!voices || voices.length === 0) return null;
-    
-    // Priority order for voice selection (most natural/lifelike first)
-    const voicePriorities = [
-      // Google Neural voices (best quality)
-      (v) => v.name.includes('Google') && (v.name.includes('Neural') || v.name.includes('Wavenet')),
-      // Microsoft Neural voices
-      (v) => v.name.includes('Microsoft') && (v.name.includes('Neural') || v.name.includes('Premium')),
-      // Google voices (good quality)
-      (v) => v.name.includes('Google'),
-      // Microsoft voices
-      (v) => v.name.includes('Microsoft'),
-      // Apple voices (Mac/iOS)
-      (v) => v.name.includes('Samantha') || v.name.includes('Alex') || v.name.includes('Victoria'),
-      // Other premium/neural voices
-      (v) => v.name.includes('Neural') || v.name.includes('Premium') || v.name.includes('Enhanced'),
-      // Default to any voice matching the language
-      (v) => v.lang.startsWith(lang.split('-')[0])
-    ];
     
     // Filter voices by language first
     const langCode = lang.split('-')[0];
@@ -76,43 +60,146 @@
       matchingVoices = voices;
     }
     
+    // Apply voice preference (male/female/auto)
+    if (voicePreference === 'female') {
+      // Prioritize more feminine voices - Google Cloud TTS and Apple voices
+      const femaleVoices = matchingVoices.filter(v => 
+        v.name.toLowerCase().includes('female') || 
+        // Google Cloud TTS female voices (C, E, F are typically female)
+        (v.name.includes('Google') && (
+          v.name.includes('en-US-Standard-C') || 
+          v.name.includes('en-US-Standard-E') || 
+          v.name.includes('en-US-Standard-F') ||
+          v.name.includes('en-US-Wavenet-C') || 
+          v.name.includes('en-US-Wavenet-E') || 
+          v.name.includes('en-US-Wavenet-F') ||
+          v.name.includes('en-US-Neural2-C') || 
+          v.name.includes('en-US-Neural2-E') || 
+          v.name.includes('en-US-Neural2-F')
+        )) ||
+        // Apple macOS female voices - prioritize Samantha and Victoria
+        (v.name.includes('Samantha') || v.name.includes('Victoria'))
+      );
+      if (femaleVoices.length > 0) {
+        matchingVoices = femaleVoices;
+      }
+    } else if (voicePreference === 'male') {
+      // Prioritize deeper, more masculine voices - avoid soft voices
+      // Focus on Google Cloud TTS (D and J are deeper than B) and Apple voices
+      const maleVoices = matchingVoices.filter(v => 
+        v.name.toLowerCase().includes('male') || 
+        // Google Cloud TTS - prioritize D and J (deeper), then B
+        (v.name.includes('Google') && (
+          v.name.includes('en-US-Standard-D') || 
+          v.name.includes('en-US-Standard-J') || 
+          v.name.includes('en-US-Wavenet-D') || 
+          v.name.includes('en-US-Wavenet-J') || 
+          v.name.includes('en-US-Neural2-D') || 
+          v.name.includes('en-US-Neural2-J') ||
+          v.name.includes('en-US-Standard-B') || 
+          v.name.includes('en-US-Wavenet-B') || 
+          v.name.includes('en-US-Neural2-B')
+        )) ||
+        // Apple macOS male voices - Alex is good, avoid soft-sounding names
+        (v.name.includes('Alex') || v.name.includes('Daniel') || v.name.includes('Fred'))
+      );
+      if (maleVoices.length > 0) {
+        matchingVoices = maleVoices;
+      }
+    }
+    
+    // Priority order for voice selection (most natural/lifelike first)
+    // NO MICROSOFT VOICES - Google and Apple only
+    const voicePriorities = [
+      // Google Neural/Wavenet voices (best quality) - prioritize deeper male (D, J) and feminine female (C, E, F)
+      (v) => {
+        if (voicePreference === 'male' && (v.name.includes('en-US-Standard-D') || v.name.includes('en-US-Standard-J') || v.name.includes('en-US-Wavenet-D') || v.name.includes('en-US-Wavenet-J') || v.name.includes('en-US-Neural2-D') || v.name.includes('en-US-Neural2-J'))) {
+          return v.name.includes('Google') && (v.name.includes('Neural') || v.name.includes('Wavenet'));
+        }
+        if (voicePreference === 'female' && (v.name.includes('en-US-Standard-C') || v.name.includes('en-US-Standard-E') || v.name.includes('en-US-Standard-F') || v.name.includes('en-US-Wavenet-C') || v.name.includes('en-US-Wavenet-E') || v.name.includes('en-US-Wavenet-F') || v.name.includes('en-US-Neural2-C') || v.name.includes('en-US-Neural2-E') || v.name.includes('en-US-Neural2-F'))) {
+          return v.name.includes('Google') && (v.name.includes('Neural') || v.name.includes('Wavenet'));
+        }
+        if (voicePreference === 'auto') {
+          return v.name.includes('Google') && (v.name.includes('Neural') || v.name.includes('Wavenet'));
+        }
+        return false;
+      },
+      // Google Standard voices (fallback)
+      (v) => {
+        if (voicePreference === 'male' && (v.name.includes('en-US-Standard-D') || v.name.includes('en-US-Standard-J'))) {
+          return v.name.includes('Google');
+        }
+        if (voicePreference === 'female' && (v.name.includes('en-US-Standard-C') || v.name.includes('en-US-Standard-E') || v.name.includes('en-US-Standard-F'))) {
+          return v.name.includes('Google');
+        }
+        if (voicePreference === 'auto') {
+          return v.name.includes('Google');
+        }
+        return false;
+      },
+      // Apple voices (Mac/iOS) - Alex is male, Samantha/Victoria are female
+      (v) => {
+        if (voicePreference === 'male' && v.name.includes('Alex')) return true;
+        if (voicePreference === 'female' && (v.name.includes('Samantha') || v.name.includes('Victoria'))) return true;
+        if (voicePreference === 'auto') {
+          return v.name.includes('Samantha') || v.name.includes('Alex') || v.name.includes('Victoria');
+        }
+        return false;
+      },
+      // Other Google voices (fallback)
+      (v) => v.name.includes('Google') && !v.name.includes('Microsoft'),
+      // Default to any voice matching the language (but NOT Microsoft)
+      (v) => v.lang.startsWith(langCode) && !v.name.includes('Microsoft')
+    ];
+    
     // Try to find the best voice based on priorities
     for (const priorityFn of voicePriorities) {
       const found = matchingVoices.find(priorityFn);
       if (found) return found;
     }
     
-    // Fallback: prefer female voices (often sound more natural)
-    const femaleVoice = matchingVoices.find(v => 
-      v.name.toLowerCase().includes('female') || 
-      v.name.includes('Samantha') || 
-      v.name.includes('Victoria') ||
-      v.name.includes('Karen') ||
-      v.name.includes('Zira')
-    );
-    if (femaleVoice) return femaleVoice;
+    // Fallback: prefer female voices if auto (often sound more natural) - NO MICROSOFT
+    if (voicePreference === 'auto') {
+      const femaleVoice = matchingVoices.find(v => 
+        (!v.name.includes('Microsoft')) && (
+          v.name.toLowerCase().includes('female') || 
+          v.name.includes('Samantha') || 
+          v.name.includes('Victoria') ||
+          (v.name.includes('Google') && (v.name.includes('en-US-Standard-C') || v.name.includes('en-US-Standard-E') || v.name.includes('en-US-Standard-F')))
+        )
+      );
+      if (femaleVoice) return femaleVoice;
+    }
     
-    // Last resort: return first matching voice
-    return matchingVoices[0] || voices[0];
+    // Last resort: return first matching voice (but NOT Microsoft)
+    const nonMicrosoftVoices = matchingVoices.filter(v => !v.name.includes('Microsoft'));
+    if (nonMicrosoftVoices.length > 0) return nonMicrosoftVoices[0];
+    
+    // Absolute last resort: any voice except Microsoft
+    const anyNonMicrosoft = voices.filter(v => !v.name.includes('Microsoft'));
+    return anyNonMicrosoft[0] || null;
   }
 
   function markExtensionCopy() {
+    console.log('[PASTE] markExtensionCopy called');
     pasteToolbarEnabled = true;
     pasteToolbarLastCopyAt = Date.now();
     try {
       chrome.storage.local.set({ nimbusLastCopyAt: pasteToolbarLastCopyAt });
       chrome.runtime.sendMessage({ action: 'nimbusCopyAction', at: pasteToolbarLastCopyAt }, () => {});
+      console.log('[PASTE] Copy state saved, timestamp:', pasteToolbarLastCopyAt);
     } catch (e) {
-      // Ignore storage or messaging failures
+      console.error('[PASTE] Error saving copy state:', e);
     }
     // If user is already focused in an editable field, show immediately
     try {
       const active = document.activeElement;
       if (isEditableElement(active)) {
+        console.log('[PASTE] Active element is editable, showing toolbar immediately');
         showPasteToolbar(active);
       }
     } catch (e) {
-      // Ignore focus errors
+      console.error('[PASTE] Error checking active element:', e);
     }
   }
 
@@ -121,13 +208,28 @@
     if (navigator.clipboard && navigator.clipboard.writeText) {
       const originalWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
       navigator.clipboard.writeText = (text) => {
+        console.log('[PASTE] clipboard.writeText intercepted');
         markExtensionCopy();
         return originalWriteText(text);
       };
     }
   } catch (e) {
-    // Ignore clipboard wrapper failures
+    console.error('[PASTE] Error wrapping clipboard.writeText:', e);
   }
+
+  // Also listen for copy events (catches execCommand('copy') and other methods)
+  document.addEventListener('copy', (e) => {
+    // Only mark if it's from a Nimbus copy button
+    const selection = window.getSelection();
+    if (selection && selection.toString().trim()) {
+      // Check if copy was triggered by a Nimbus button
+      const activeEl = document.activeElement;
+      if (isNimbusCopyButton(activeEl) || activeEl?.closest('.cursoriq-copy-btn, .cursoriq-copy-explanation-btn, .cursoriq-summary-copy')) {
+        console.log('[PASTE] Copy event from Nimbus button');
+        markExtensionCopy();
+      }
+    }
+  }, true);
 
   // Translate modal: from/to languages (matches background + Turkish)
   const TRANSLATE_LANGS = [
@@ -542,41 +644,48 @@
 
   console.log('Nimbus: Content script loaded on', window.location.href);
 
-  // Track when user starts selecting (mousedown)
+  // Track when user starts selecting (mousedown) — clear any blocking UI so native selection/scroll work; cancel pending "selection complete"
   document.addEventListener('mousedown', (e) => {
-    // Check if Shift key is held (allows extending selection while scrolling)
+    if (e.target.closest('.cursoriq-tooltip') || e.target.closest('#cursoriq-float-toolbar') || e.target.closest('.cursoriq-float-toolbar')) return;
+    if (mouseupSelectionTimeout) { clearTimeout(mouseupSelectionTimeout); mouseupSelectionTimeout = null; }
+    if (selectionTimer) { clearTimeout(selectionTimer); selectionTimer = null; }
     if (e.shiftKey) {
       isSelecting = true;
       selectionStartTime = Date.now();
-    } else {
-      // Regular selection - check if it's a text selection (not a click)
-      const selection = window.getSelection();
-      if (selection && selection.rangeCount > 0) {
-        isSelecting = true;
-        selectionStartTime = Date.now();
-      }
+      return; // shift+click: don't touch DOM or styles so native extend-selection works
     }
+    clearTooltipElementOnly();
+    const tb = document.getElementById('cursoriq-float-toolbar');
+    if (tb) tb.style.pointerEvents = 'none';
+    isSelecting = true;
+    selectionStartTime = Date.now();
   });
-  
-  // Track mouse movement during selection
+
+  // Track mouse movement during selection (no action — just keep flag)
   document.addEventListener('mousemove', (e) => {
-    if (isSelecting) {
-      // User is actively selecting, keep flag true
-      isSelecting = true;
-    }
+    if (isSelecting) isSelecting = true;
   });
-  
-  // Listen for text selection (mouseup)
+
+  document.addEventListener('keydown', (e) => { if (e.key === 'Shift') shiftKeyHeld = true; });
+  document.addEventListener('keyup', (e) => { if (e.key === 'Shift') shiftKeyHeld = false; });
+
+  // Act only after selection is complete: delay after mouseup, and a follow-up mousedown cancels us. If Shift held (extending selection), use longer delay so second shift+click can happen first.
   document.addEventListener('mouseup', (e) => {
-    // Small delay to check if selection is complete
-    setTimeout(() => {
+    if (mouseupSelectionTimeout) clearTimeout(mouseupSelectionTimeout);
+    const delay = e.shiftKey ? 400 : 100; // shift+click: wait longer so user can do second shift+click before we run
+    mouseupSelectionTimeout = setTimeout(() => {
+      mouseupSelectionTimeout = null;
       isSelecting = false;
+      const tb = document.getElementById('cursoriq-float-toolbar');
+      if (tb) tb.style.pointerEvents = '';
+      if (shiftKeyHeld) return; // user still holding shift — do not show tooltip at all
       handleSelection(e);
-    }, 100);
+    }, delay);
   });
   
-  // Update tooltip position on scroll if tooltip is visible
+  // Update tooltip position on scroll if tooltip is visible (not while user is actively selecting)
   document.addEventListener('scroll', () => {
+    if (isSelecting) return;
     if (tooltipEl && savedRange) {
       try {
         const selection = window.getSelection();
@@ -1093,6 +1202,14 @@
         } else if (resp.isPlace && resp.placeData) {
           removeTooltip();
           openHubWithEntityData(resp.placeData, wordInfo.word, 'place');
+        } else if (resp.isPartialName && resp.partialNameData && resp.partialNameData.explanation) {
+          // Partial name with AI explanation - show in tooltip with links
+          removeTooltip();
+          showPartialNameTooltip(wordInfo, resp.partialNameData);
+        } else if (resp.isPartialNameFallback && resp.partialNameData) {
+          // Partial name without AI - open hub with news articles
+          removeTooltip();
+          openHubWithPartialNameData(resp.partialNameData, wordInfo.word);
         } else if (isAddress) {
           // It's an address (not a place name entity) - show tooltip with map/search buttons
           showTooltip(wordInfo, resp.explanation || selectedText, false, synonyms, resp.pronunciation, resp.examples || [], false, true);
@@ -1447,6 +1564,7 @@
       
         chrome.storage.local.get(['settings'], (result) => {
           const lang = result.settings?.dictionaryLanguage || 'en';
+          const voicePreference = result.settings?.voicePreference || 'auto'; // 'auto', 'male', 'female'
           const langMap = {
             'en': 'en-US', 'es': 'es-ES', 'fr': 'fr-FR', 'de': 'de-DE', 'it': 'it-IT',
             'pt': 'pt-PT', 'ru': 'ru-RU', 'ja': 'ja-JP', 'zh': 'zh-CN', 'ko': 'ko-KR',
@@ -1457,7 +1575,7 @@
           const speakWithBestVoice = () => {
             const utterance = new SpeechSynthesisUtterance(wordToSpeak);
             utterance.lang = langCode;
-            const bestVoice = getBestVoice(langCode);
+            const bestVoice = getBestVoice(langCode, voicePreference);
             if (bestVoice) {
               utterance.voice = bestVoice;
               utterance.lang = bestVoice.lang;
@@ -1501,6 +1619,7 @@
       
       chrome.storage.local.get(['settings'], (result) => {
         const lang = result.settings?.dictionaryLanguage || 'en';
+        const voicePreference = result.settings?.voicePreference || 'auto'; // 'auto', 'male', 'female'
         const langMap = {
           'en': 'en-US', 'es': 'es-ES', 'fr': 'fr-FR', 'de': 'de-DE', 'it': 'it-IT',
           'pt': 'pt-PT', 'ru': 'ru-RU', 'ja': 'ja-JP', 'zh': 'zh-CN', 'ko': 'ko-KR',
@@ -1511,7 +1630,7 @@
         const speakWithBestVoice = () => {
           const utterance = new SpeechSynthesisUtterance(wordToSpeak);
           utterance.lang = langCode;
-          const bestVoice = getBestVoice(langCode);
+          const bestVoice = getBestVoice(langCode, voicePreference);
           if (bestVoice) {
             utterance.voice = bestVoice;
             utterance.lang = bestVoice.lang;
@@ -2173,14 +2292,16 @@
         soundBtn.style.color = '#60a5fa';
         soundBtn.style.transform = 'scale(1.1)';
         
-        const speakWithBestVoice = () => {
-          const utterance = new SpeechSynthesisUtterance(textToSpeak);
-          utterance.lang = 'en-US';
-          const bestVoice = getBestVoice('en-US');
-          if (bestVoice) {
-            utterance.voice = bestVoice;
-            utterance.lang = bestVoice.lang;
-          }
+        chrome.storage.local.get(['settings'], (result) => {
+          const voicePreference = result.settings?.voicePreference || 'auto';
+          const speakWithBestVoice = () => {
+            const utterance = new SpeechSynthesisUtterance(textToSpeak);
+            utterance.lang = 'en-US';
+            const bestVoice = getBestVoice('en-US', voicePreference);
+            if (bestVoice) {
+              utterance.voice = bestVoice;
+              utterance.lang = bestVoice.lang;
+            }
           utterance.rate = 0.95;
           utterance.pitch = 1.0;
           utterance.volume = 1.0;
@@ -2190,6 +2311,51 @@
             updateSoundButtonIcon(soundBtn, 'idle');
           };
           
+            utterance.onerror = () => {
+              stopAllAudio();
+              updateSoundButtonIcon(soundBtn, 'idle');
+            };
+            
+            currentUtterance = utterance;
+            window.speechSynthesis.speak(utterance);
+          };
+          
+          if (window.speechSynthesis.getVoices().length === 0) {
+            window.speechSynthesis.addEventListener('voiceschanged', speakWithBestVoice, { once: true });
+            window.speechSynthesis.getVoices();
+          } else {
+            speakWithBestVoice();
+          }
+        });
+        return;
+      }
+      
+      // Start playing
+      audioState = 'playing';
+      updateSoundButtonIcon(soundBtn, 'playing');
+      soundBtn.classList.add('playing');
+      soundBtn.style.color = '#60a5fa';
+      soundBtn.style.transform = 'scale(1.1)';
+      
+      chrome.storage.local.get(['settings'], (result) => {
+        const voicePreference = result.settings?.voicePreference || 'auto';
+        const speakWithBestVoice = () => {
+          const utterance = new SpeechSynthesisUtterance(selectedText);
+          utterance.lang = 'en-US';
+          const bestVoice = getBestVoice('en-US', voicePreference);
+          if (bestVoice) {
+            utterance.voice = bestVoice;
+            utterance.lang = bestVoice.lang;
+          }
+        utterance.rate = 0.95;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+        
+        utterance.onend = () => {
+          stopAllAudio();
+          updateSoundButtonIcon(soundBtn, 'idle');
+        };
+        
           utterance.onerror = () => {
             stopAllAudio();
             updateSoundButtonIcon(soundBtn, 'idle');
@@ -2205,63 +2371,21 @@
         } else {
           speakWithBestVoice();
         }
-        return;
-      }
-      
-      // Start playing
-      audioState = 'playing';
-      updateSoundButtonIcon(soundBtn, 'playing');
-      soundBtn.classList.add('playing');
-      soundBtn.style.color = '#60a5fa';
-      soundBtn.style.transform = 'scale(1.1)';
-      
-      const speakWithBestVoice = () => {
-        const utterance = new SpeechSynthesisUtterance(selectedText);
-        utterance.lang = 'en-US';
-        const bestVoice = getBestVoice('en-US');
-        if (bestVoice) {
-          utterance.voice = bestVoice;
-          utterance.lang = bestVoice.lang;
-        }
-        utterance.rate = 0.95;
-        utterance.pitch = 1.0;
-        utterance.volume = 1.0;
-        
-        utterance.onend = () => {
-          stopAllAudio();
-          updateSoundButtonIcon(soundBtn, 'idle');
-        };
-        
-        utterance.onerror = () => {
-          stopAllAudio();
-          updateSoundButtonIcon(soundBtn, 'idle');
-        };
-        
-        currentUtterance = utterance;
-        window.speechSynthesis.speak(utterance);
-      };
-      
-      if (window.speechSynthesis.getVoices().length === 0) {
-        window.speechSynthesis.addEventListener('voiceschanged', speakWithBestVoice, { once: true });
-        window.speechSynthesis.getVoices();
-      } else {
-        speakWithBestVoice();
-      }
+      });
     });
     buttonsContainer.appendChild(soundBtn);
     
-    // Search button - opens hub and searches (using AI icon)
+    // Search button - opens hub and searches (using Nimbus icon)
     const searchBtn = document.createElement('button');
     searchBtn.className = 'cursoriq-icon-btn cursoriq-search-icon-btn';
-    const aiIconImg = document.createElement('img');
-    aiIconImg.src = chrome.runtime.getURL('ai.svg');
-    aiIconImg.style.width = '20px';
-    aiIconImg.style.height = '20px';
-    aiIconImg.style.display = 'block';
-    aiIconImg.style.filter = 'brightness(0) invert(1)';
-    aiIconImg.style.margin = 'auto';
-    aiIconImg.style.objectFit = 'contain';
-    searchBtn.appendChild(aiIconImg);
+    const hubIconImg = document.createElement('img');
+    hubIconImg.src = chrome.runtime.getURL('Nimbus_Icon.svg');
+    hubIconImg.style.width = '20px';
+    hubIconImg.style.height = '20px';
+    hubIconImg.style.display = 'block';
+    hubIconImg.style.margin = 'auto';
+    hubIconImg.style.objectFit = 'contain';
+    searchBtn.appendChild(hubIconImg);
     searchBtn.setAttribute('aria-label', 'Search in hub');
     searchBtn.setAttribute('title', 'Search in hub');
     searchBtn.addEventListener('click', async (e) => {
@@ -2799,6 +2923,19 @@
     if (t) t.style.visibility = visible ? 'visible' : 'hidden';
   }
 
+  // Remove tooltip from DOM and clear state without touching the user's selection (so drag-to-select and scroll are not blocked)
+  function clearTooltipElementOnly() {
+    stopAllAudio();
+    if (selectionTimer) { clearTimeout(selectionTimer); selectionTimer = null; }
+    if (iconModalTimer) { clearTimeout(iconModalTimer); iconModalTimer = null; }
+    if (tooltipEl && tooltipEl.parentNode) tooltipEl.parentNode.removeChild(tooltipEl);
+    tooltipEl = null;
+    savedRange = null;
+    currentWord = null;
+    currentSynonyms = [];
+    setFloatingToolbarVisible(true);
+  }
+
   function removeTooltip() {
     // Stop all audio when tooltip is removed
     stopAllAudio();
@@ -2986,8 +3123,8 @@
             return timestamp > fourteenDaysAgo;
           });
           
-          // Keep only last 50
-          recent = recent.slice(0, 50);
+          // Keep only last 100, auto-delete oldest when exceeded
+          recent = recent.slice(0, 100);
           
           safeStorageSet({ recentSearches: recent });
         });
@@ -3202,6 +3339,23 @@
       modalSettings.showExamples = message.settings.showExamples !== false;
       console.log('Nimbus: Settings updated', modalSettings);
     }
+    if (message.action === 'toggleFloatingToolbar') {
+      const toolbar = document.getElementById('cursoriq-float-toolbar');
+      if (message.hidden) {
+        // Hide toolbar
+        if (toolbar) {
+          toolbar.style.display = 'none';
+        }
+      } else {
+        // Show toolbar
+        if (toolbar) {
+          toolbar.style.display = 'flex';
+        } else {
+          // Toolbar doesn't exist, create it
+          createFloatingToolbar();
+        }
+      }
+    }
   });
   
   // Load settings on initialization
@@ -3274,6 +3428,13 @@
     if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') return true;
     const role = el.getAttribute && el.getAttribute('role');
     if (role && role.toLowerCase() === 'textbox') return true;
+    // Google Docs specific: check for their contenteditable classes
+    if (el.classList && (
+      el.classList.contains('kix-lineview-content') ||
+      el.classList.contains('kix-paragraphrenderer') ||
+      el.closest('.kix-page-content-wrapper') ||
+      el.closest('[contenteditable="true"]')
+    )) return true;
     return false;
   }
 
@@ -3317,13 +3478,16 @@
   }
 
   function showPasteToolbar(target) {
+    console.log('[PASTE] showPasteToolbar called for:', target, 'canShow:', canShowPasteToolbar(), 'isEditable:', isEditableElement(target));
     if (!canShowPasteToolbar() || !isEditableElement(target)) {
+      console.log('[PASTE] Cannot show toolbar - hiding');
       hidePasteToolbar();
       return;
     }
     ensurePasteToolbar();
     pasteToolbarTarget = target;
     pasteToolbarEl.style.display = 'flex';
+    console.log('[PASTE] Toolbar shown, positioning...');
     requestAnimationFrame(() => positionPasteToolbar(target));
   }
 
@@ -3389,153 +3553,218 @@
 
   function createFloatingToolbar() {
     if (document.getElementById('cursoriq-float-toolbar')) return;
-    const bar = document.createElement('div');
-    bar.id = 'cursoriq-float-toolbar';
-    bar.className = 'cursoriq-float-toolbar';
-
-    function btn(svg, title, onClick) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'cursoriq-float-btn';
-      b.innerHTML = svg;
-      b.title = title;
-      b.setAttribute('aria-label', title);
-      b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onClick(); });
-      return b;
-    }
-
-    function removePopover() {
-      const p = document.getElementById('cursoriq-float-popover');
-      if (p) p.remove();
-    }
-
-    function showPopoverWith(loadingHtml, onResp) {
-      removePopover();
-      const pop = document.createElement('div');
-      pop.id = 'cursoriq-float-popover';
-      pop.className = 'cursoriq-float-popover';
-      pop.innerHTML = loadingHtml;
-      bar.appendChild(pop);
-      onResp(pop);
-    }
-
-    // Drag handle
-    const grip = document.createElement('div');
-    grip.className = 'cursoriq-float-grip';
-    grip.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="8" r="1.5"/><circle cx="15" cy="8" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="16" r="1.5"/><circle cx="15" cy="16" r="1.5"/></svg>';
-    grip.title = 'Drag to move';
-    let isDragging = false, dragOffX = 0, dragOffY = 0;
-    grip.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      const r = bar.getBoundingClientRect();
-      bar.style.right = 'auto';
-      bar.style.left = r.left + 'px';
-      bar.style.top = r.top + 'px';
-      dragOffX = e.clientX - r.left;
-      dragOffY = e.clientY - r.top;
-      isDragging = true;
-      const onMove = (e2) => {
-        if (!isDragging) return;
-        bar.style.left = (e2.clientX - dragOffX) + 'px';
-        bar.style.top = (e2.clientY - dragOffY) + 'px';
-      };
-      const onUp = () => {
-        isDragging = false;
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-        const L = parseInt(bar.style.left, 10), T = parseInt(bar.style.top, 10);
-        if (!isNaN(L) && !isNaN(T)) chrome.storage.local.set({ floatToolbarPosition: { left: L, top: T } });
-      };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    });
-    bar.appendChild(grip);
-
-    bar.appendChild(btn(
-      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>',
-      'Open Nimbus',
-      () => { chrome.runtime.sendMessage({ action: 'openPopup' }, () => {}); }
-    ));
-    bar.appendChild(btn(
-      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>',
-      'Save this page',
-      () => { savePageForLater(); showToast('Page saved'); }
-    ));
-    bar.appendChild(btn(
-      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>',
-      'Summarize page',
-      () => {
-        const text = getPageTextForSummarize();
-        if (!text || text.length < 50) { showToast('Not enough text on this page to summarize'); return; }
-        showPopoverWith('<div class="cursoriq-float-popover-loading">Summarizing page…</div>', (pop) => {
-          chrome.runtime.sendMessage({ type: 'summarize', text }, (resp) => {
-            if (chrome.runtime.lastError) {
-              pop.innerHTML = '<div class="cursoriq-float-popover-err">Error: ' + (chrome.runtime.lastError.message || 'Connection error') + '</div><button class="cursoriq-float-popover-close">Close</button>';
-            } else if (resp && resp.error) {
-              pop.innerHTML = '<div class="cursoriq-float-popover-err">' + resp.error + '</div><button class="cursoriq-float-popover-close">Close</button>';
-            } else {
-              const t = (resp && resp.explanation) ? resp.explanation : 'No summary generated.';
-              pop.innerHTML = '<div class="cursoriq-float-popover-text"></div><button class="cursoriq-float-popover-copy">Copy</button><button class="cursoriq-float-popover-close">Close</button>';
-              pop.querySelector('.cursoriq-float-popover-text').textContent = t;
-              pop.querySelector('.cursoriq-float-popover-copy').onclick = () => { navigator.clipboard.writeText(t).catch(() => {}); pop.querySelector('.cursoriq-float-popover-copy').textContent = 'Copied'; setTimeout(() => { pop.querySelector('.cursoriq-float-popover-copy').textContent = 'Copy'; }, 600); };
-            }
-            pop.querySelector('.cursoriq-float-popover-close').onclick = removePopover;
-          });
-        });
+    
+    // Check if toolbar should be hidden
+    chrome.storage.local.get(['floatToolbarHidden'], (result) => {
+      const isHidden = result.floatToolbarHidden || false;
+      if (isHidden) {
+        // Toolbar is hidden, don't create it
+        return;
       }
-    ));
-    bar.appendChild(btn(
-      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>',
-      'Focus / Reader mode',
-      () => {
-        readerModeOn = !readerModeOn;
-        document.documentElement.classList.toggle('nimbus-reader-mode', readerModeOn);
-        showToast(readerModeOn ? 'Reader mode on' : 'Reader mode off');
+      
+      const bar = document.createElement('div');
+      bar.id = 'cursoriq-float-toolbar';
+      bar.className = 'cursoriq-float-toolbar';
+
+      function btn(svg, title, onClick) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'cursoriq-float-btn';
+        b.innerHTML = svg;
+        b.title = title;
+        b.setAttribute('aria-label', title);
+        b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); onClick(); });
+        return b;
       }
-    ));
 
-    document.body.appendChild(bar);
+      function removePopover() {
+        const p = document.getElementById('cursoriq-float-popover');
+        if (p) p.remove();
+      }
 
-    // Restore or default position: top-right
-    chrome.storage.local.get(['floatToolbarPosition'], (o) => {
-      const pos = o.floatToolbarPosition;
-      if (pos && typeof pos.left === 'number' && typeof pos.top === 'number') {
+      function showPopoverWith(loadingHtml, onResp) {
+        removePopover();
+        const pop = document.createElement('div');
+        pop.id = 'cursoriq-float-popover';
+        pop.className = 'cursoriq-float-popover';
+        pop.innerHTML = loadingHtml;
+        bar.appendChild(pop);
+        onResp(pop);
+      }
+
+      // Drag handle
+      const grip = document.createElement('div');
+      grip.className = 'cursoriq-float-grip';
+      grip.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="8" r="1.5"/><circle cx="15" cy="8" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="16" r="1.5"/><circle cx="15" cy="16" r="1.5"/></svg>';
+      grip.title = 'Drag to move';
+      let isDragging = false, dragOffX = 0, dragOffY = 0;
+      grip.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const r = bar.getBoundingClientRect();
         bar.style.right = 'auto';
-        bar.style.left = pos.left + 'px';
-        bar.style.top = pos.top + 'px';
-      } else {
-        bar.style.top = '16px';
-        bar.style.right = '16px';
-      }
+        bar.style.left = r.left + 'px';
+        bar.style.top = r.top + 'px';
+        dragOffX = e.clientX - r.left;
+        dragOffY = e.clientY - r.top;
+        isDragging = true;
+        const onMove = (e2) => {
+          if (!isDragging) return;
+          bar.style.left = (e2.clientX - dragOffX) + 'px';
+          bar.style.top = (e2.clientY - dragOffY) + 'px';
+        };
+        const onUp = () => {
+          isDragging = false;
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          const L = parseInt(bar.style.left, 10), T = parseInt(bar.style.top, 10);
+          if (!isNaN(L) && !isNaN(T)) chrome.storage.local.set({ floatToolbarPosition: { left: L, top: T } });
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+      bar.appendChild(grip);
+
+      bar.appendChild(btn(
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>',
+        'Open Nimbus',
+        () => { chrome.runtime.sendMessage({ action: 'openPopup' }, () => {}); }
+      ));
+      bar.appendChild(btn(
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>',
+        'Save this page',
+        () => { savePageForLater(); showToast('Page saved'); }
+      ));
+      bar.appendChild(btn(
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>',
+        'Summarize page',
+        () => {
+          const text = getPageTextForSummarize();
+          if (!text || text.length < 50) { showToast('Not enough text on this page to summarize'); return; }
+          showPopoverWith('<div class="cursoriq-float-popover-loading">Summarizing page…</div>', (pop) => {
+            chrome.runtime.sendMessage({ type: 'summarize', text }, (resp) => {
+              if (chrome.runtime.lastError) {
+                pop.innerHTML = '<div class="cursoriq-float-popover-err">Error: ' + (chrome.runtime.lastError.message || 'Connection error') + '</div><button class="cursoriq-float-popover-close">Close</button>';
+              } else if (resp && resp.error) {
+                pop.innerHTML = '<div class="cursoriq-float-popover-err">' + resp.error + '</div><button class="cursoriq-float-popover-close">Close</button>';
+              } else {
+                const t = (resp && resp.explanation) ? resp.explanation : 'No summary generated.';
+                pop.innerHTML = '<div class="cursoriq-float-popover-text"></div><button class="cursoriq-float-popover-copy">Copy</button><button class="cursoriq-float-popover-close">Close</button>';
+                pop.querySelector('.cursoriq-float-popover-text').textContent = t;
+                pop.querySelector('.cursoriq-float-popover-copy').onclick = () => { navigator.clipboard.writeText(t).catch(() => {}); pop.querySelector('.cursoriq-float-popover-copy').textContent = 'Copied'; setTimeout(() => { pop.querySelector('.cursoriq-float-popover-copy').textContent = 'Copy'; }, 600); };
+              }
+              pop.querySelector('.cursoriq-float-popover-close').onclick = removePopover;
+            });
+          });
+        }
+      ));
+      bar.appendChild(btn(
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>',
+        'Focus / Reader mode',
+        () => {
+          readerModeOn = !readerModeOn;
+          document.documentElement.classList.toggle('nimbus-reader-mode', readerModeOn);
+          showToast(readerModeOn ? 'Reader mode on' : 'Reader mode off');
+        }
+      ));
+
+      document.body.appendChild(bar);
+
+      // Restore or default position: top-right
+      chrome.storage.local.get(['floatToolbarPosition'], (o) => {
+        const pos = o.floatToolbarPosition;
+        if (pos && typeof pos.left === 'number' && typeof pos.top === 'number') {
+          bar.style.right = 'auto';
+          bar.style.left = pos.left + 'px';
+          bar.style.top = pos.top + 'px';
+        } else {
+          bar.style.top = '16px';
+          bar.style.right = '16px';
+        }
+      });
     });
   }
 
   setTimeout(createFloatingToolbar, 300);
 
   document.addEventListener('focusin', (e) => {
+    console.log('[PASTE] focusin event on:', e.target, 'tag:', e.target.tagName, 'isEditable:', isEditableElement(e.target));
     if (isEditableElement(e.target)) {
+      console.log('[PASTE] Focused editable element, checking paste toolbar state');
       if (canShowPasteToolbar()) {
+        console.log('[PASTE] Can show toolbar, showing now');
         showPasteToolbar(e.target);
       } else {
+        console.log('[PASTE] Cannot show yet, refreshing from storage...');
         refreshPasteToolbarStateFromStorage(() => {
           if (canShowPasteToolbar()) {
+            console.log('[PASTE] After refresh, can show - showing toolbar');
             showPasteToolbar(e.target);
           } else {
+            console.log('[PASTE] After refresh, still cannot show - hiding');
             hidePasteToolbar();
           }
         });
       }
     } else {
-      hidePasteToolbar();
+      // Don't hide if clicking on toolbar itself
+      if (!pasteToolbarEl || !pasteToolbarEl.contains(e.target)) {
+        hidePasteToolbar();
+      }
     }
   }, true);
 
+  // Also check on click into editable elements (for Google Docs and similar)
   document.addEventListener('click', (e) => {
     if (isNimbusCopyButton(e.target)) {
+      console.log('[PASTE] Copy button clicked');
       markExtensionCopy();
       return;
     }
-  });
+    // Check if clicking into an editable element (check target and parents)
+    let editableEl = e.target;
+    let checked = 0;
+    while (editableEl && checked < 5) {
+      if (isEditableElement(editableEl)) {
+        console.log('[PASTE] Clicked into editable element:', editableEl);
+        setTimeout(() => {
+          if (canShowPasteToolbar()) {
+            console.log('[PASTE] Clicked into editable, showing toolbar');
+            showPasteToolbar(editableEl);
+          } else {
+            refreshPasteToolbarStateFromStorage(() => {
+              if (canShowPasteToolbar()) {
+                console.log('[PASTE] After refresh, showing toolbar');
+                showPasteToolbar(editableEl);
+              } else {
+                console.log('[PASTE] Cannot show toolbar - state:', { enabled: pasteToolbarEnabled, lastCopy: pasteToolbarLastCopyAt, now: Date.now() });
+              }
+            });
+          }
+        }, 150);
+        return;
+      }
+      editableEl = editableEl.parentElement;
+      checked++;
+    }
+  }, true);
+
+  // Also check activeElement periodically when user might be typing
+  let pasteCheckInterval = null;
+  function startPasteToolbarCheck() {
+    if (pasteCheckInterval) return;
+    pasteCheckInterval = setInterval(() => {
+      const active = document.activeElement;
+      if (active && isEditableElement(active)) {
+        if (canShowPasteToolbar() && (!pasteToolbarTarget || pasteToolbarTarget !== active)) {
+          console.log('[PASTE] Periodic check - active element is editable, showing toolbar');
+          showPasteToolbar(active);
+        } else if (!canShowPasteToolbar() && pasteToolbarEl && pasteToolbarEl.style.display !== 'none') {
+          hidePasteToolbar();
+        }
+      }
+    }, 500);
+  }
+  startPasteToolbarCheck();
 
   document.addEventListener('mousedown', (e) => {
     if (pasteToolbarEl && pasteToolbarEl.contains(e.target)) return;
@@ -3891,7 +4120,11 @@
 
   // Open hub with entity data (person, organization, or place)
   function openHubWithEntityData(entityData, searchTerm, entityType) {
-    console.log('Nimbus: Opening hub with', entityType, 'data for:', searchTerm);
+    console.log('Nimbus: Opening hub with', entityType, 'data for:', searchTerm, 'data keys:', entityData ? Object.keys(entityData) : 'null');
+    if (!entityData) {
+      console.warn('Nimbus: No entity data provided for', searchTerm);
+      return;
+    }
     chrome.storage.local.set({
       pendingSearch: {
         type: entityType,
@@ -3899,14 +4132,373 @@
         data: entityData
       }
     }, () => {
+      console.log('Nimbus: Saved pending search to storage');
       chrome.runtime.sendMessage({ action: 'openPopup' }, () => {
         if (chrome.runtime.lastError) {
           console.log('Nimbus: Could not open popup automatically, user will need to open manually');
         }
       });
+      // Increased delay to ensure popup DOM is fully ready
       setTimeout(() => {
         chrome.runtime.sendMessage({ action: 'applyPendingSearch' });
-      }, 350);
+      }, 600);
+      // Also send again after longer delay as backup
+      setTimeout(() => {
+        chrome.runtime.sendMessage({ action: 'applyPendingSearch' });
+      }, 1200);
+    });
+  }
+
+  // Show partial name tooltip with AI explanation and links
+  function showPartialNameTooltip(wordInfo, partialNameData) {
+    removeTooltip();
+    
+    tooltipEl = document.createElement('div');
+    tooltipEl.className = 'cursoriq-tooltip cursoriq-person-tooltip';
+    tooltipEl.style.cssText = 'max-height: 85vh; display: flex; flex-direction: column; overflow: hidden;';
+    
+    // Make modal draggable if enabled
+    if (modalSettings.draggable || modalSettings.placement === 'custom') {
+      tooltipEl.style.cursor = 'move';
+      let startX, startY, initialX, initialY;
+      
+      tooltipEl.addEventListener('mousedown', (e) => {
+        if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A' || e.target.closest('button') || e.target.closest('a')) {
+          return;
+        }
+        const selection = window.getSelection();
+        if (selection && selection.toString().length > 0) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        isDragging = true;
+        tooltipEl.style.cursor = 'grabbing';
+        const rect = tooltipEl.getBoundingClientRect();
+        startX = e.clientX;
+        startY = e.clientY;
+        initialX = rect.left;
+        initialY = rect.top;
+        document.addEventListener('mousemove', handleDrag);
+        document.addEventListener('mouseup', stopDrag);
+      });
+      
+      function handleDrag(e) {
+        if (!isDragging) return;
+        e.preventDefault();
+        const deltaX = e.clientX - startX;
+        const deltaY = e.clientY - startY;
+        const newX = initialX + deltaX;
+        const newY = initialY + deltaY;
+        const maxX = window.innerWidth - tooltipEl.offsetWidth;
+        const maxY = window.innerHeight - tooltipEl.offsetHeight;
+        const finalX = Math.max(0, Math.min(newX, maxX));
+        const finalY = Math.max(0, Math.min(newY, maxY));
+        tooltipEl.style.left = finalX + 'px';
+        tooltipEl.style.top = finalY + 'px';
+        tooltipEl.style.position = 'fixed';
+        tooltipEl.style.transform = 'none';
+        tooltipEl.style.margin = '0';
+      }
+      
+      function stopDrag() {
+        isDragging = false;
+        tooltipEl.style.cursor = 'move';
+        document.removeEventListener('mousemove', handleDrag);
+        document.removeEventListener('mouseup', stopDrag);
+      }
+    }
+    
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'cursoriq-close-btn';
+    closeBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      manuallyClosed = true;
+      if (selectionTimer) {
+        clearTimeout(selectionTimer);
+        selectionTimer = null;
+      }
+      const selection = window.getSelection();
+      if (selection) {
+        selection.removeAllRanges();
+      }
+      removeTooltip();
+    });
+    tooltipEl.appendChild(closeBtn);
+    
+    // Header with name and icons
+    const header = document.createElement('div');
+    header.className = 'cursoriq-header';
+    header.style.cssText = 'padding: 16px 18px; border-bottom: 1px solid rgba(226, 232, 240, 0.8); flex-shrink: 0;';
+    
+    const headerContent = document.createElement('div');
+    headerContent.style.cssText = 'display: flex; align-items: center; gap: 12px;';
+    
+    const nameContainer = document.createElement('div');
+    nameContainer.style.cssText = 'flex: 1; display: flex; flex-direction: column; gap: 4px;';
+    
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'cursoriq-word';
+    nameSpan.style.cssText = 'font-size: 18px; font-weight: 700; color: #ffffff;';
+    nameSpan.textContent = partialNameData.name || wordInfo.word;
+    nameContainer.appendChild(nameSpan);
+    
+    headerContent.appendChild(nameContainer);
+    
+    // Button container for TTS and Copy buttons
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.cssText = 'display: flex; align-items: center; gap: 6px; flex-shrink: 0;';
+    
+    // Text-to-speech button
+    const ttsBtn = document.createElement('button');
+    ttsBtn.className = 'cursoriq-tts-btn';
+    ttsBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"></path><path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07"></path></svg>';
+    ttsBtn.setAttribute('aria-label', 'Pronounce name');
+    ttsBtn.setAttribute('title', 'Pronounce name');
+    ttsBtn.style.cssText = 'width: 28px; height: 28px; padding: 0; background: transparent; border: none; color: #94a3b8; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.9; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); flex-shrink: 0;';
+    ttsBtn.addEventListener('mouseenter', () => {
+      ttsBtn.style.opacity = '1';
+      ttsBtn.style.color = '#e2e8f0';
+      ttsBtn.style.transform = 'scale(1.1)';
+    });
+    ttsBtn.addEventListener('mouseleave', () => {
+      if (!ttsBtn.classList.contains('playing') && !ttsBtn.classList.contains('paused')) {
+        ttsBtn.style.opacity = '0.9';
+        ttsBtn.style.color = '#94a3b8';
+        ttsBtn.style.transform = 'scale(1)';
+      }
+    });
+    ttsBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      
+      if (!('speechSynthesis' in window)) {
+        console.warn('CursorIQ: Text-to-speech not supported');
+        return;
+      }
+      
+      const wordToSpeak = partialNameData.name || wordInfo.word;
+      
+      if (audioState === 'playing') {
+        window.speechSynthesis.cancel();
+        audioState = 'idle';
+        updateSoundButtonIcon(ttsBtn, 'idle');
+        ttsBtn.classList.remove('playing');
+        ttsBtn.style.color = '#94a3b8';
+        ttsBtn.style.opacity = '0.9';
+        ttsBtn.style.transform = 'scale(1)';
+        return;
+      }
+      
+      audioState = 'playing';
+      updateSoundButtonIcon(ttsBtn, 'playing');
+      ttsBtn.classList.add('playing');
+      ttsBtn.style.color = '#60a5fa';
+      ttsBtn.style.opacity = '1';
+      ttsBtn.style.transform = 'scale(1.15)';
+      
+      chrome.storage.local.get(['settings'], (result) => {
+        const lang = result.settings?.dictionaryLanguage || 'en';
+        const voicePreference = result.settings?.voicePreference || 'auto';
+        const langMap = {
+          'en': 'en-US', 'es': 'es-ES', 'fr': 'fr-FR', 'de': 'de-DE', 'it': 'it-IT',
+          'pt': 'pt-PT', 'ru': 'ru-RU', 'ja': 'ja-JP', 'zh': 'zh-CN', 'ko': 'ko-KR',
+          'ar': 'ar-SA', 'hi': 'hi-IN', 'nl': 'nl-NL', 'sv': 'sv-SE', 'pl': 'pl-PL'
+        };
+        const langCode = langMap[lang] || 'en-US';
+        
+        const speakWithBestVoice = () => {
+          const utterance = new SpeechSynthesisUtterance(wordToSpeak);
+          utterance.lang = langCode;
+          const bestVoice = getBestVoice(langCode, voicePreference);
+          if (bestVoice) {
+            utterance.voice = bestVoice;
+            utterance.lang = bestVoice.lang;
+          }
+          utterance.rate = 0.95;
+          utterance.pitch = 1.0;
+          utterance.volume = 1.0;
+          
+          utterance.onend = () => {
+            stopAllAudio();
+            updateSoundButtonIcon(ttsBtn, 'idle');
+          };
+          
+          utterance.onerror = () => {
+            stopAllAudio();
+            updateSoundButtonIcon(ttsBtn, 'idle');
+          };
+          
+          currentUtterance = utterance;
+          window.speechSynthesis.speak(utterance);
+        };
+        
+        if (window.speechSynthesis.getVoices().length === 0) {
+          window.speechSynthesis.addEventListener('voiceschanged', speakWithBestVoice, { once: true });
+          window.speechSynthesis.getVoices();
+        } else {
+          speakWithBestVoice();
+        }
+      });
+    });
+    buttonContainer.appendChild(ttsBtn);
+    
+    // Copy button
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'cursoriq-copy-btn';
+    copyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    copyBtn.setAttribute('aria-label', 'Copy name');
+    copyBtn.setAttribute('title', 'Copy name');
+    copyBtn.style.cssText = 'width: 28px; height: 28px; padding: 0; background: transparent; border: none; color: #94a3b8; cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0.9; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); flex-shrink: 0;';
+    copyBtn.addEventListener('mouseenter', () => {
+      copyBtn.style.opacity = '1';
+      copyBtn.style.color = '#e2e8f0';
+      copyBtn.style.transform = 'scale(1.1)';
+    });
+    copyBtn.addEventListener('mouseleave', () => {
+      if (!copyBtn.classList.contains('copied')) {
+        copyBtn.style.opacity = '0.9';
+        copyBtn.style.color = '#94a3b8';
+        copyBtn.style.transform = 'scale(1)';
+      }
+    });
+    copyBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      
+      const wordToCopy = partialNameData.name || wordInfo.word;
+      copyBtn.classList.add('copied');
+      
+      try {
+        await navigator.clipboard.writeText(wordToCopy);
+      } catch (err) {
+        console.error('CursorIQ: Failed to copy name', err);
+      }
+      
+      setTimeout(() => {
+        copyBtn.classList.remove('copied');
+        copyBtn.style.opacity = '0.9';
+        copyBtn.style.color = '#94a3b8';
+        copyBtn.style.transform = 'scale(1)';
+      }, 2000);
+    });
+    buttonContainer.appendChild(copyBtn);
+    
+    headerContent.appendChild(buttonContainer);
+    header.appendChild(headerContent);
+    tooltipEl.appendChild(header);
+    
+    const detailsContainer = document.createElement('div');
+    detailsContainer.style.cssText = 'padding: 16px 18px; overflow-y: auto; overflow-x: hidden; flex: 1; min-height: 0;';
+    
+    // AI explanation
+    if (partialNameData.explanation) {
+      const explanation = document.createElement('div');
+      explanation.className = 'cursoriq-explanation';
+      explanation.style.cssText = 'font-size: 14px; line-height: 1.6; color: #ffffff; margin-bottom: 16px;';
+      explanation.textContent = partialNameData.explanation;
+      detailsContainer.appendChild(explanation);
+    }
+    
+    // News links section
+    if (partialNameData.newsArticles && partialNameData.newsArticles.length > 0) {
+      const newsSection = document.createElement('div');
+      newsSection.style.cssText = 'margin-top: 20px; padding-top: 20px; border-top: 1px solid rgba(255, 255, 255, 0.12);';
+      
+      const newsTitle = document.createElement('div');
+      newsTitle.style.cssText = 'font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;';
+      newsTitle.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"></path><rect x="11" y="7" width="10" height="5" rx="1"></rect><rect x="11" y="14" width="7" height="5" rx="1"></rect></svg> Related News';
+      newsSection.appendChild(newsTitle);
+      
+      const newsList = document.createElement('div');
+      newsList.style.cssText = 'display: flex; flex-direction: column; gap: 10px;';
+      
+      // Show up to 3 news articles as links
+      partialNameData.newsArticles.slice(0, 3).forEach((article) => {
+        if (article.link) {
+          const newsLink = document.createElement('a');
+          newsLink.href = article.link;
+          newsLink.target = '_blank';
+          newsLink.rel = 'noopener noreferrer';
+          newsLink.style.cssText = 'padding: 10px; background: rgba(42, 58, 155, 0.5); border-radius: 8px; border: 1px solid rgba(71, 85, 105, 0.5); transition: all 0.2s ease; cursor: pointer; text-decoration: none; color: inherit; display: block;';
+          
+          newsLink.addEventListener('mouseenter', () => {
+            newsLink.style.background = 'rgba(48, 68, 165, 0.72)';
+            newsLink.style.borderColor = 'rgba(31, 127, 255, 0.4)';
+            newsLink.style.transform = 'translateY(-1px)';
+          });
+          
+          newsLink.addEventListener('mouseleave', () => {
+            newsLink.style.background = 'rgba(42, 58, 155, 0.5)';
+            newsLink.style.borderColor = 'rgba(71, 85, 105, 0.5)';
+            newsLink.style.transform = 'translateY(0)';
+          });
+          
+          const articleTitle = document.createElement('div');
+          articleTitle.style.cssText = 'font-weight: 600; color: #ffffff; font-size: 13px; line-height: 1.4;';
+          articleTitle.textContent = article.title;
+          newsLink.appendChild(articleTitle);
+          
+          if (article.date) {
+            const articleDate = document.createElement('div');
+            articleDate.style.cssText = 'font-size: 11px; color: #cbd5e1; margin-top: 4px;';
+            try {
+              const date = new Date(article.date);
+              articleDate.textContent = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            } catch (e) {
+              articleDate.textContent = article.date;
+            }
+            newsLink.appendChild(articleDate);
+          }
+          
+          newsList.appendChild(newsLink);
+        }
+      });
+      
+      newsSection.appendChild(newsList);
+      detailsContainer.appendChild(newsSection);
+    }
+    
+    tooltipEl.appendChild(detailsContainer);
+    setFloatingToolbarVisible(false);
+    getTooltipRoot().body.appendChild(tooltipEl);
+    
+    positionTooltip(wordInfo);
+    currentWord = partialNameData.name;
+  }
+  
+  // Open hub with partial name data (when AI fails)
+  function openHubWithPartialNameData(partialNameData, word) {
+    console.log('Nimbus: Opening hub with partial name data for:', word);
+    if (!partialNameData) {
+      console.warn('Nimbus: No partial name data provided for', word);
+      return;
+    }
+    chrome.storage.local.set({
+      pendingSearch: {
+        type: 'partialName',
+        term: word,
+        data: partialNameData
+      }
+    }, () => {
+      console.log('Nimbus: Saved pending partial name search to storage');
+      chrome.runtime.sendMessage({ action: 'openPopup' }, () => {
+        if (chrome.runtime.lastError) {
+          console.log('Nimbus: Could not open popup automatically, user will need to open manually');
+        }
+      });
+      // Increased delay to ensure popup DOM is fully ready
+      setTimeout(() => {
+        chrome.runtime.sendMessage({ action: 'applyPendingSearch' });
+      }, 600);
+      // Also send again after longer delay as backup
+      setTimeout(() => {
+        chrome.runtime.sendMessage({ action: 'applyPendingSearch' });
+      }, 1200);
     });
   }
 

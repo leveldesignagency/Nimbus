@@ -27,6 +27,7 @@ zip -r "$ZIP_NAME" \
   "Nimbus Logo-01.svg" \
   "Nimbus Logo-02.svg" \
   "NimbusLogo.svg" \
+  "Nimbus_Icon.svg" \
   ai.svg \
   -x "*.DS_Store" \
   -x "*/.git/*" \

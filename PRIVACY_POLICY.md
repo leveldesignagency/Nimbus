@@ -72,4 +72,4 @@ We may update this Privacy Policy. We will change the "Last Updated" date when w
 
 ## Contact Us
 
-Questions? Contact us via the [Nimbus GitHub repository](https://github.com/leveldesignagency/Nimbus).
+Questions? Contact us at [charles@leveldesignagency.com](mailto:charles@leveldesignagency.com).

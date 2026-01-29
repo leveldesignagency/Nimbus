@@ -4,7 +4,7 @@
   "short_name": "Nimbus",
   "description": "Select any word, phrase, or name for instant definitions, translation, AI explanations, and in-browser tools for online learning.",
   "version": "1.0.24",
-  "privacy_policy": "https://nimbus-api-ten.vercel.app/privacy.html",
+  "privacy_policy": "https://leveldesignagency.github.io/Nimbus/",
   "permissions": ["storage", "identity", "tabs"],
   "host_permissions": ["https://api.dictionaryapi.dev/*", "https://en.wiktionary.org/*", "https://libretranslate.de/*", "https://api.mymemory.translated.net/*", "https://en.wikipedia.org/*", "https://www.wikidata.org/*", "https://news.google.com/*", "https://nimbus-api-ten.vercel.app/*", "https://www.googleapis.com/*"],
   "oauth2": {
@@ -41,7 +41,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["favicon_nimbus.png", "Nimbus Favicon.png", "ai.svg", "Nimbus Logo-02.svg", "Nimbus Logo-01.svg", "NimbusLogo.svg"],
+      "resources": ["favicon_nimbus.png", "Nimbus Favicon.png", "ai.svg", "Nimbus Logo-02.svg", "Nimbus Logo-01.svg", "NimbusLogo.svg", "Nimbus_Icon.svg"],
       "matches": ["<all_urls>"]
     }
   ]
