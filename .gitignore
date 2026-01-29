@@ -9,6 +9,7 @@ Nimbus-*.zip
 .env
 .env.*
 .env.local
+set-api-key.js
 
 # macOS
 .DS_Store
