@@ -4,6 +4,7 @@
 */
 
 (() => {
+  if (window.self !== window.top) return;
   const MIN_WORD_LEN = 2;
   let tooltipEl = null;
   let selectionTimer = null;
@@ -27,12 +28,6 @@
   let currentUtterance = null; // Current speech synthesis utterance
   let audioState = 'idle'; // 'idle', 'playing', 'paused'
   let pausedText = ''; // Text that was paused (for resume)
-  let pasteToolbarEnabled = false;
-  let pasteToolbarLastCopyAt = 0;
-  let pasteToolbarTarget = null;
-  let pasteToolbarEl = null;
-  const PASTE_TOOLBAR_TIMEOUT_MS = 5 * 60 * 1000;
-
   // Function to find the best available voice for TTS (unified with popup.js)
   function getBestVoice(lang = 'en-US', voicePreference = 'auto') {
     if (!window.speechSynthesis) return null;
@@ -179,57 +174,6 @@
     const anyNonMicrosoft = voices.filter(v => !v.name.includes('Microsoft'));
     return anyNonMicrosoft[0] || null;
   }
-
-  function markExtensionCopy() {
-    console.log('[PASTE] markExtensionCopy called');
-    pasteToolbarEnabled = true;
-    pasteToolbarLastCopyAt = Date.now();
-    try {
-      chrome.storage.local.set({ nimbusLastCopyAt: pasteToolbarLastCopyAt });
-      chrome.runtime.sendMessage({ action: 'nimbusCopyAction', at: pasteToolbarLastCopyAt }, () => {});
-      console.log('[PASTE] Copy state saved, timestamp:', pasteToolbarLastCopyAt);
-    } catch (e) {
-      console.error('[PASTE] Error saving copy state:', e);
-    }
-    // If user is already focused in an editable field, show immediately
-    try {
-      const active = document.activeElement;
-      if (isEditableElement(active)) {
-        console.log('[PASTE] Active element is editable, showing toolbar immediately');
-        showPasteToolbar(active);
-      }
-    } catch (e) {
-      console.error('[PASTE] Error checking active element:', e);
-    }
-  }
-
-  // Track extension-initiated clipboard writes for paste toolbar
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      const originalWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
-      navigator.clipboard.writeText = (text) => {
-        console.log('[PASTE] clipboard.writeText intercepted');
-        markExtensionCopy();
-        return originalWriteText(text);
-      };
-    }
-  } catch (e) {
-    console.error('[PASTE] Error wrapping clipboard.writeText:', e);
-  }
-
-  // Also listen for copy events (catches execCommand('copy') and other methods)
-  document.addEventListener('copy', (e) => {
-    // Only mark if it's from a Nimbus copy button
-    const selection = window.getSelection();
-    if (selection && selection.toString().trim()) {
-      // Check if copy was triggered by a Nimbus button
-      const activeEl = document.activeElement;
-      if (isNimbusCopyButton(activeEl) || activeEl?.closest('.cursoriq-copy-btn, .cursoriq-copy-explanation-btn, .cursoriq-summary-copy')) {
-        console.log('[PASTE] Copy event from Nimbus button');
-        markExtensionCopy();
-      }
-    }
-  }, true);
 
   // Translate modal: from/to languages (matches background + Turkish)
   const TRANSLATE_LANGS = [
@@ -440,7 +384,7 @@
     return { body, inIframe, frameOffset, viewport };
   }
 
-  // Load unpacked gets a different runtime ID; Chrome Web Store install uses this fixed ID.
+  // Load unpacked = different extension ID; treat as subscribed so devs can test without paying
   const STORE_EXTENSION_ID = 'abmihilkdbamlelkmpfegjfimcjpcihh';
   function isDeveloperMode() {
     try {
@@ -449,14 +393,12 @@
       return false;
     }
   }
-  
+
   async function checkSubscription() {
-    try {
-      if (isDeveloperMode()) {
-        subscriptionActive = true;
-        return true;
-      }
-    } catch (e) { /* fall through to normal check */ }
+    if (isDeveloperMode()) {
+      subscriptionActive = true;
+      return true;
+    }
     try {
       // First check if subscriptionActive is set in storage (set by popup/background)
       const storageResult = await new Promise((resolve) => {
@@ -530,7 +472,11 @@
           return true;
         } else {
           subscriptionActive = false;
-          chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
+          // Don't clear subscriptionId when payment failed (past_due/unpaid) so user can open popup and update card
+          const isPaymentFailed = data.status === 'past_due' || data.status === 'unpaid';
+          if (!isPaymentFailed) {
+            chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
+          }
           return false;
         }
       } catch (apiError) {
@@ -564,30 +510,24 @@
     if (chrome && chrome.storage && chrome.storage.onChanged) {
       chrome.storage.onChanged.addListener((changes, areaName) => {
         if (areaName === 'local') {
-          if (changes.nimbusLastCopyAt && changes.nimbusLastCopyAt.newValue) {
-            pasteToolbarLastCopyAt = changes.nimbusLastCopyAt.newValue;
-            pasteToolbarEnabled = true;
-          }
           if (changes.usage) {
             usage = changes.usage.newValue || usage;
           }
           // Re-check subscription when subscription data changes
           if (changes.subscriptionId || changes.subscriptionExpiry || changes.subscriptionActive || changes.userEmail) {
-            console.log('Nimbus: Subscription storage changed, re-checking...', changes);
             checkSubscription().then((isActive) => {
-              console.log('Nimbus: Subscription re-check result:', isActive);
-              // If subscription just became active, close any upgrade prompts and reset modal counter
               if (isActive) {
-                chrome.storage.local.set({ subscriptionModalShowCount: 0 }, () => {
-                  console.log('Nimbus: Subscription activated, resetting modal show count');
-                });
+                chrome.storage.local.set({ subscriptionModalShowCount: 0 }, () => {});
                 if (tooltipEl) {
-                const upgradePrompt = tooltipEl.querySelector('[style*="Subscribe to Unlock"]');
-                if (upgradePrompt) {
-                  console.log('Nimbus: Subscription activated, closing upgrade prompt');
-                  hideTooltip();
-                  }
+                  const upgradePrompt = tooltipEl.querySelector('[style*="Subscribe to Unlock"]');
+                  if (upgradePrompt) hideTooltip();
                 }
+              } else if (!isDeveloperMode()) {
+                // Subscription inactive: remove floating toolbar so non-subscribers see no tools
+                const ft = document.getElementById('cursoriq-float-toolbar');
+                if (ft) ft.remove();
+                const pop = document.getElementById('cursoriq-float-popover');
+                if (pop) pop.remove();
               }
             });
           }
@@ -602,11 +542,6 @@
   try {
     if (chrome && chrome.runtime && chrome.runtime.onMessage) {
       chrome.runtime.onMessage.addListener((msg) => {
-        if (msg && msg.action === 'nimbusCopyAction') {
-          pasteToolbarEnabled = true;
-          pasteToolbarLastCopyAt = msg.at || Date.now();
-          return true;
-        }
         if (msg && msg.action === 'subscriptionActivated') {
           console.log('Nimbus: Received subscription activation message');
           checkSubscription().then((isActive) => {
@@ -1121,76 +1056,38 @@
       currentWord = wordInfo.word;
       showTooltip(wordInfo, "Thinking...", false, []); // Show loading state with empty synonyms
 
-      console.log('Nimbus: Sending message to background for:', wordInfo.word);
-      
       try {
-        console.log('Nimbus: About to call chrome.runtime.sendMessage');
-        console.log('Nimbus: chrome.runtime exists:', !!chrome.runtime);
-        console.log('Nimbus: chrome.runtime.id:', chrome.runtime?.id);
-        
         chrome.runtime.sendMessage({ type: 'explain', word: wordInfo.word, context: wordInfo.context, detailed: true }, (resp) => {
-        console.log('CursorIQ: ========== CALLBACK FIRED ==========');
-        console.log('CursorIQ: Callback executed!');
-        console.log('CursorIQ: Response received:', resp);
-        console.log('CursorIQ: Response type:', typeof resp);
-        console.log('CursorIQ: chrome.runtime.lastError:', chrome.runtime.lastError);
-        
-        // Check for extension context invalidated
         if (chrome.runtime.lastError) {
           const errorMsg = chrome.runtime.lastError.message;
-          console.error('CursorIQ: Runtime error in callback:', chrome.runtime.lastError);
           if (errorMsg && (errorMsg.includes('Extension context invalidated') || errorMsg.includes('message port closed'))) {
-            console.warn('CursorIQ: Extension was reloaded. Please refresh the page.');
             showTooltip(wordInfo, "⚠️ Extension reloaded. Please refresh the page (F5).", true);
             return;
           }
-          showTooltip(wordInfo, "Extension error: " + errorMsg);
+          showTooltip(wordInfo, (errorMsg && errorMsg.trim()) ? 'Extension error: ' + errorMsg : 'Something went wrong. Please try again.', true);
           return;
         }
         
         if (!resp) {
-          console.error('CursorIQ: No response from background');
-          showTooltip(wordInfo, "No response from background service.");
+          showTooltip(wordInfo, 'No response from background service. Please try again.', true);
           return;
         }
         if (resp.error) {
-          console.error('CursorIQ: Background error', resp.error);
-          showTooltip(wordInfo, `Error: ${resp.error}`);
+          showTooltip(wordInfo, (resp.explanation && resp.explanation.trim()) || resp.error, true);
           return;
         }
-        console.log('CursorIQ: ========== RECEIVED RESPONSE ==========');
-        console.log('CursorIQ: Got explanation', resp.explanation?.substring(0, 50));
-        console.log('CursorIQ: isPerson:', resp.isPerson, 'personData:', resp.personData ? 'present' : 'missing');
-        console.log('CursorIQ: Full response object:', resp);
-        console.log('CursorIQ: Response keys:', Object.keys(resp || {}));
-        console.log('CursorIQ: Got synonyms from response:', resp.synonyms);
-        console.log('CursorIQ: Synonyms type:', typeof resp.synonyms, 'isArray:', Array.isArray(resp.synonyms));
-        console.log('CursorIQ: Synonyms value (stringified):', JSON.stringify(resp.synonyms));
-        console.log('CursorIQ: Synonyms value (direct):', resp.synonyms);
-        console.log('CursorIQ: Synonyms length:', resp.synonyms?.length);
-        
-        // Save to recent searches
         saveToRecent(wordInfo.word);
         
-        // Extract synonyms - ensure it's always an array
         let synonyms = [];
         if (resp.synonyms !== undefined && resp.synonyms !== null) {
           if (Array.isArray(resp.synonyms)) {
             synonyms = resp.synonyms.filter(s => s && typeof s === 'string' && s.trim());
-            console.log('CursorIQ: Filtered synonyms array:', synonyms);
           } else if (typeof resp.synonyms === 'string') {
             synonyms = [resp.synonyms.trim()].filter(s => s);
           } else {
             synonyms = [String(resp.synonyms)].filter(s => s);
           }
-        } else {
-          console.warn('CursorIQ: WARNING - resp.synonyms is undefined or null!');
         }
-        
-        console.log('CursorIQ: Final synonyms array:', synonyms);
-        console.log('CursorIQ: Final synonyms length:', synonyms.length);
-        console.log('CursorIQ: About to call showTooltip with synonyms:', synonyms);
-        console.log('CursorIQ: =======================================');
         
         // Person/place/org: open hub only. One explain fetch, one display — no tooltip (avoids duplicate and extra UI).
         if (resp.isPerson && resp.personData) {
@@ -1211,35 +1108,27 @@
           removeTooltip();
           openHubWithPartialNameData(resp.partialNameData, wordInfo.word);
         } else if (isAddress) {
-          // It's an address (not a place name entity) - show tooltip with map/search buttons
-          showTooltip(wordInfo, resp.explanation || selectedText, false, synonyms, resp.pronunciation, resp.examples || [], false, true);
+          showTooltip(wordInfo, (resp.explanation && resp.explanation.trim()) || selectedText || 'No description available.', false, synonyms, resp.pronunciation, resp.examples || [], false, true);
         } else {
-          // Normal word definition
-          showTooltip(wordInfo, resp.explanation || "No explanation returned.", false, synonyms, resp.pronunciation, resp.examples || []);
+          const explanation = (resp.explanation && resp.explanation.trim()) || resp.error || 'No explanation returned. Please try again.';
+          showTooltip(wordInfo, explanation, false, synonyms, resp.pronunciation, resp.examples || []);
         }
         });
         
-        // Add a timeout to detect if callback never fires
-        setTimeout(() => {
-          console.warn('Nimbus: WARNING - Callback may not have fired after 5 seconds');
-        }, 5000);
       } catch (err) {
-        console.error('Nimbus: Error sending message', err);
         if (err.message && err.message.includes('Extension context invalidated')) {
           showTooltip(wordInfo, "⚠️ Extension reloaded. Please refresh the page (F5).", true);
         } else {
           showTooltip(wordInfo, "Error: " + err.message, true);
         }
       }
-    }).catch((e) => {
-      console.error('Nimbus: checkSubscription failed', e);
+    }).catch(() => {
       showTooltip(wordInfo, "Error checking subscription. Please try again.", true);
     });
   }
 
   // Show upgrade prompt when subscription is not active - Branded subscribe tooltip with blue background
   function showUpgradePrompt(wordInfo) {
-    if (isDeveloperMode()) return;
     // Check if we've shown the modal 3 times already
     chrome.storage.local.get(['subscriptionModalShowCount'], (result) => {
       const showCount = result.subscriptionModalShowCount || 0;
@@ -1947,10 +1836,7 @@
     }
 
     // Synonyms section
-    console.log('CursorIQ: showTooltip called with synonyms:', synonyms);
-    console.log('CursorIQ: synonyms type:', typeof synonyms, 'isArray:', Array.isArray(synonyms), 'length:', synonyms?.length);
     if (synonyms && Array.isArray(synonyms) && synonyms.length > 0) {
-      console.log('CursorIQ: Rendering synonyms section with', synonyms.length, 'synonyms');
       const synonymsDiv = document.createElement('div');
       synonymsDiv.className = 'cursoriq-synonyms-container';
       const synonymsLabel = document.createElement('div');
@@ -1974,7 +1860,6 @@
       synonymsDiv.appendChild(synonymsScroll);
       tooltipEl.appendChild(synonymsDiv);
     } else {
-      console.log('CursorIQ: No synonyms to display');
     }
 
     // Action buttons container - bottom right icons (only show for non-subscribe prompts)
@@ -2803,7 +2688,6 @@
     tooltipEl.style.top = `${top}px`;
     tooltipEl.style.zIndex = '2147483647';
     
-    console.log('CursorIQ: Tooltip positioned at', left, top, 'viewport:', viewportWidth, viewportHeight, 'rect:', rect);
     
     // Force visibility - make absolutely sure it's visible
     tooltipEl.style.display = 'block';
@@ -2818,31 +2702,14 @@
         const styles = window.getComputedStyle(tooltipEl);
         const isVisible = tooltipRect.width > 0 && tooltipRect.height > 0;
         
-        console.log('CursorIQ: Tooltip check:', {
-          exists: !!tooltipEl,
-          inDOM: !!tooltipEl.parentNode,
-          visible: isVisible,
-          position: { left: tooltipRect.left, top: tooltipRect.top },
-          size: { width: tooltipRect.width, height: tooltipRect.height },
-          styles: {
-            display: styles.display,
-            visibility: styles.visibility,
-            opacity: styles.opacity,
-            zIndex: styles.zIndex
-          }
-        });
-        
         // If tooltip has no size or is off-screen, force it visible
         if (!isVisible || tooltipRect.width === 0 || tooltipRect.height === 0) {
-          console.error('CursorIQ: Tooltip not visible! Forcing...');
           tooltipEl.style.display = 'block';
           tooltipEl.style.visibility = 'visible';
           tooltipEl.style.opacity = '1';
           tooltipEl.style.left = `${(viewportWidth - tooltipWidth) / 2}px`;
           tooltipEl.style.top = `${(viewportHeight - tooltipHeight) / 2}px`;
         }
-      } else {
-        console.error('CursorIQ: Tooltip was removed before check!');
       }
     }, 100);
 
@@ -3340,18 +3207,14 @@
       console.log('Nimbus: Settings updated', modalSettings);
     }
     if (message.action === 'toggleFloatingToolbar') {
+      if (!subscriptionActive && !isDeveloperMode()) return;
       const toolbar = document.getElementById('cursoriq-float-toolbar');
       if (message.hidden) {
-        // Hide toolbar
-        if (toolbar) {
-          toolbar.style.display = 'none';
-        }
+        if (toolbar) toolbar.style.display = 'none';
       } else {
-        // Show toolbar
         if (toolbar) {
           toolbar.style.display = 'flex';
         } else {
-          // Toolbar doesn't exist, create it
           createFloatingToolbar();
         }
       }
@@ -3361,189 +3224,8 @@
   // Load settings on initialization
   loadModalSettings();
 
-  // Restore recent copy state (for paste toolbar across tabs)
-  try {
-    chrome.storage.local.get(['nimbusLastCopyAt'], (res) => {
-      const ts = res.nimbusLastCopyAt;
-      if (ts && typeof ts === 'number') {
-        pasteToolbarLastCopyAt = ts;
-        pasteToolbarEnabled = true;
-      }
-    });
-  } catch (e) {
-    // Ignore storage errors
-  }
-
   // Floating quick-action toolbar on every page
   let readerModeOn = false;
-
-  function isNimbusCopyButton(el) {
-    if (!el || !el.closest) return false;
-    return !!el.closest(
-      '.cursoriq-copy-btn,' +
-      '.cursoriq-copy-explanation-btn,' +
-      '.cursoriq-summary-copy,' +
-      '.cursoriq-copy-icon-btn,' +
-      '.cursoriq-location-copy-btn,' +
-      '.cursoriq-float-popover-copy'
-    );
-  }
-
-  function canShowPasteToolbar() {
-    if (!pasteToolbarEnabled) return false;
-    if (Date.now() - pasteToolbarLastCopyAt > PASTE_TOOLBAR_TIMEOUT_MS) {
-      pasteToolbarEnabled = false;
-      return false;
-    }
-    return true;
-  }
-
-  function refreshPasteToolbarStateFromStorage(onDone) {
-    try {
-      chrome.storage.local.get(['nimbusLastCopyAt'], (res) => {
-        const ts = res.nimbusLastCopyAt;
-        if (ts && typeof ts === 'number') {
-          pasteToolbarLastCopyAt = ts;
-          pasteToolbarEnabled = true;
-        }
-        if (typeof onDone === 'function') onDone();
-      });
-    } catch (e) {
-      if (typeof onDone === 'function') onDone();
-    }
-  }
-
-  function isEditableElement(el) {
-    if (!el || el.nodeType !== 1) return false;
-    const tag = el.tagName ? el.tagName.toLowerCase() : '';
-    if (tag === 'textarea') return true;
-    if (tag === 'input') {
-      const type = (el.getAttribute('type') || 'text').toLowerCase();
-      const blockedTypes = new Set([
-        'button', 'submit', 'reset', 'checkbox', 'radio', 'file',
-        'color', 'range', 'image', 'hidden'
-      ]);
-      return !blockedTypes.has(type);
-    }
-    if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') return true;
-    const role = el.getAttribute && el.getAttribute('role');
-    if (role && role.toLowerCase() === 'textbox') return true;
-    // Google Docs specific: check for their contenteditable classes
-    if (el.classList && (
-      el.classList.contains('kix-lineview-content') ||
-      el.classList.contains('kix-paragraphrenderer') ||
-      el.closest('.kix-page-content-wrapper') ||
-      el.closest('[contenteditable="true"]')
-    )) return true;
-    return false;
-  }
-
-  function ensurePasteToolbar() {
-    if (pasteToolbarEl) return pasteToolbarEl;
-    const bar = document.createElement('div');
-    bar.id = 'cursoriq-paste-toolbar';
-    bar.className = 'cursoriq-paste-toolbar';
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'cursoriq-paste-btn';
-    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H7a2 2 0 0 1-2-2V7"/><rect x="7" y="3" width="12" height="14" rx="2" ry="2"/><path d="M9 7h6"/><path d="M12 11v6"/><path d="M9 14h6"/></svg><span>Paste</span>';
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      pasteFromClipboard(pasteToolbarTarget);
-    });
-    bar.appendChild(btn);
-    bar.style.display = 'none';
-    document.body.appendChild(bar);
-    pasteToolbarEl = bar;
-    return bar;
-  }
-
-  function positionPasteToolbar(target) {
-    if (!pasteToolbarEl || !target) return;
-    const rect = target.getBoundingClientRect();
-    const toolbarRect = pasteToolbarEl.getBoundingClientRect();
-    const margin = 8;
-    let top = rect.bottom + margin;
-    let left = rect.left;
-    if (top + toolbarRect.height > window.innerHeight - margin) {
-      top = rect.top - toolbarRect.height - margin;
-    }
-    if (left + toolbarRect.width > window.innerWidth - margin) {
-      left = window.innerWidth - toolbarRect.width - margin;
-    }
-    if (left < margin) left = margin;
-    pasteToolbarEl.style.top = Math.max(margin, top) + 'px';
-    pasteToolbarEl.style.left = left + 'px';
-  }
-
-  function showPasteToolbar(target) {
-    console.log('[PASTE] showPasteToolbar called for:', target, 'canShow:', canShowPasteToolbar(), 'isEditable:', isEditableElement(target));
-    if (!canShowPasteToolbar() || !isEditableElement(target)) {
-      console.log('[PASTE] Cannot show toolbar - hiding');
-      hidePasteToolbar();
-      return;
-    }
-    ensurePasteToolbar();
-    pasteToolbarTarget = target;
-    pasteToolbarEl.style.display = 'flex';
-    console.log('[PASTE] Toolbar shown, positioning...');
-    requestAnimationFrame(() => positionPasteToolbar(target));
-  }
-
-  function hidePasteToolbar() {
-    if (pasteToolbarEl) {
-      pasteToolbarEl.style.display = 'none';
-    }
-    pasteToolbarTarget = null;
-  }
-
-  async function pasteFromClipboard(target) {
-    const el = isEditableElement(target) ? target : document.activeElement;
-    if (!isEditableElement(el)) return;
-    let text = '';
-    try {
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        text = await navigator.clipboard.readText();
-      }
-    } catch (e) {
-      // Ignore readText errors, fall back below
-    }
-    if (!text) {
-      try {
-        el.focus();
-        document.execCommand('paste');
-      } catch (e) {
-        // Some sites block programmatic paste
-      }
-      return;
-    }
-    const tag = el.tagName ? el.tagName.toLowerCase() : '';
-    if (tag === 'input' || tag === 'textarea') {
-      const value = el.value || '';
-      const start = typeof el.selectionStart === 'number' ? el.selectionStart : value.length;
-      const end = typeof el.selectionEnd === 'number' ? el.selectionEnd : value.length;
-      el.value = value.slice(0, start) + text + value.slice(end);
-      const newPos = start + text.length;
-      if (el.setSelectionRange) el.setSelectionRange(newPos, newPos);
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-    } else if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
-      el.focus();
-      const selection = window.getSelection();
-      if (selection && selection.rangeCount > 0) {
-        const range = selection.getRangeAt(0);
-        range.deleteContents();
-        range.insertNode(document.createTextNode(text));
-        range.collapse(false);
-        selection.removeAllRanges();
-        selection.addRange(range);
-      } else {
-        el.textContent = (el.textContent || '') + text;
-      }
-    }
-    showToast('Pasted');
-  }
 
   function getPageTextForSummarize() {
     const el = document.querySelector('article, main, [role="main"], .post-content, .article-body, .entry-content, .content-column, [class*="article"]');
@@ -3554,13 +3236,11 @@
   function createFloatingToolbar() {
     if (document.getElementById('cursoriq-float-toolbar')) return;
     
-    // Check if toolbar should be hidden
-    chrome.storage.local.get(['floatToolbarHidden'], (result) => {
+    // Show floating toolbar when subscribed, or when load unpacked (dev mode)
+    chrome.storage.local.get(['subscriptionActive', 'floatToolbarHidden'], (result) => {
+      if (result.subscriptionActive !== true && !isDeveloperMode()) return;
       const isHidden = result.floatToolbarHidden || false;
-      if (isHidden) {
-        // Toolbar is hidden, don't create it
-        return;
-      }
+      if (isHidden) return;
       
       const bar = document.createElement('div');
       bar.id = 'cursoriq-float-toolbar';
@@ -3684,104 +3364,8 @@
     });
   }
 
-  setTimeout(createFloatingToolbar, 300);
-
-  document.addEventListener('focusin', (e) => {
-    console.log('[PASTE] focusin event on:', e.target, 'tag:', e.target.tagName, 'isEditable:', isEditableElement(e.target));
-    if (isEditableElement(e.target)) {
-      console.log('[PASTE] Focused editable element, checking paste toolbar state');
-      if (canShowPasteToolbar()) {
-        console.log('[PASTE] Can show toolbar, showing now');
-        showPasteToolbar(e.target);
-      } else {
-        console.log('[PASTE] Cannot show yet, refreshing from storage...');
-        refreshPasteToolbarStateFromStorage(() => {
-          if (canShowPasteToolbar()) {
-            console.log('[PASTE] After refresh, can show - showing toolbar');
-            showPasteToolbar(e.target);
-          } else {
-            console.log('[PASTE] After refresh, still cannot show - hiding');
-            hidePasteToolbar();
-          }
-        });
-      }
-    } else {
-      // Don't hide if clicking on toolbar itself
-      if (!pasteToolbarEl || !pasteToolbarEl.contains(e.target)) {
-        hidePasteToolbar();
-      }
-    }
-  }, true);
-
-  // Also check on click into editable elements (for Google Docs and similar)
-  document.addEventListener('click', (e) => {
-    if (isNimbusCopyButton(e.target)) {
-      console.log('[PASTE] Copy button clicked');
-      markExtensionCopy();
-      return;
-    }
-    // Check if clicking into an editable element (check target and parents)
-    let editableEl = e.target;
-    let checked = 0;
-    while (editableEl && checked < 5) {
-      if (isEditableElement(editableEl)) {
-        console.log('[PASTE] Clicked into editable element:', editableEl);
-        setTimeout(() => {
-          if (canShowPasteToolbar()) {
-            console.log('[PASTE] Clicked into editable, showing toolbar');
-            showPasteToolbar(editableEl);
-          } else {
-            refreshPasteToolbarStateFromStorage(() => {
-              if (canShowPasteToolbar()) {
-                console.log('[PASTE] After refresh, showing toolbar');
-                showPasteToolbar(editableEl);
-              } else {
-                console.log('[PASTE] Cannot show toolbar - state:', { enabled: pasteToolbarEnabled, lastCopy: pasteToolbarLastCopyAt, now: Date.now() });
-              }
-            });
-          }
-        }, 150);
-        return;
-      }
-      editableEl = editableEl.parentElement;
-      checked++;
-    }
-  }, true);
-
-  // Also check activeElement periodically when user might be typing
-  let pasteCheckInterval = null;
-  function startPasteToolbarCheck() {
-    if (pasteCheckInterval) return;
-    pasteCheckInterval = setInterval(() => {
-      const active = document.activeElement;
-      if (active && isEditableElement(active)) {
-        if (canShowPasteToolbar() && (!pasteToolbarTarget || pasteToolbarTarget !== active)) {
-          console.log('[PASTE] Periodic check - active element is editable, showing toolbar');
-          showPasteToolbar(active);
-        } else if (!canShowPasteToolbar() && pasteToolbarEl && pasteToolbarEl.style.display !== 'none') {
-          hidePasteToolbar();
-        }
-      }
-    }, 500);
-  }
-  startPasteToolbarCheck();
-
-  document.addEventListener('mousedown', (e) => {
-    if (pasteToolbarEl && pasteToolbarEl.contains(e.target)) return;
-    if (isEditableElement(e.target)) return;
-    hidePasteToolbar();
-  });
-
-  document.addEventListener('scroll', () => {
-    if (pasteToolbarTarget && pasteToolbarEl && pasteToolbarEl.style.display !== 'none') {
-      positionPasteToolbar(pasteToolbarTarget);
-    }
-  }, true);
-
-  window.addEventListener('resize', () => {
-    if (pasteToolbarTarget && pasteToolbarEl && pasteToolbarEl.style.display !== 'none') {
-      positionPasteToolbar(pasteToolbarTarget);
-    }
+  checkSubscription().then(() => {
+    if (subscriptionActive || isDeveloperMode()) setTimeout(createFloatingToolbar, 300);
   });
 
   // Only block when selection clearly contains media (img, video, iframe). Very permissive.

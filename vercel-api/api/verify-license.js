@@ -78,12 +78,19 @@ export default async function handler(req, res) {
         });
       }
 
-      // Check if subscription is active
+      // Check if subscription is active or trialing
       if (subscription.status !== 'active' && subscription.status !== 'trialing') {
-        return res.status(200).json({ 
-          valid: false, 
-          error: 'Subscription is not active',
-          status: subscription.status
+        // past_due/unpaid = payment failed (e.g. when trial ended). Tell user to update card.
+        const isPaymentFailed = subscription.status === 'past_due' || subscription.status === 'unpaid';
+        const errorMessage = isPaymentFailed
+          ? 'Payment failed when your trial ended. Update your card in Billing to restore access.'
+          : 'Subscription is not active';
+        return res.status(200).json({
+          valid: false,
+          error: errorMessage,
+          status: subscription.status,
+          // Return subscriptionId so client can open Stripe portal to update payment
+          ...(isPaymentFailed && { subscriptionId: subscription.id }),
         });
       }
 

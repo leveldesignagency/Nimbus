@@ -86,6 +86,10 @@ CursorIQ/
 4. Upload ZIP and fill out listing
 5. Submit for review
 
+## Updates
+
+**Chrome auto-updates extensions from the Chrome Web Store.** After you publish a new version, users receive the update automatically (usually within a few hours, depending on Chrome’s rollout). No action is required from customers.
+
 ## Future Improvements
 
 - Cache explanations to reduce API calls

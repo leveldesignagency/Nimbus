@@ -9,35 +9,6 @@
   const nimbusTitle = document.getElementById('nimbusTitle');
   let navigationHistory = []; // Stack for back button
   let currentView = 'hub'; // 'hub' or 'word'
-
-  function notifyCopyToActiveTab() {
-    try {
-      if (!chrome || !chrome.tabs) return;
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        const tab = tabs && tabs[0];
-        if (!tab || typeof tab.id !== 'number') return;
-        chrome.tabs.sendMessage(tab.id, { action: 'nimbusCopyAction' }, () => {});
-      });
-    } catch (e) {
-      // Ignore messaging failures
-    }
-  }
-
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      const originalWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
-      navigator.clipboard.writeText = (text) => {
-        notifyCopyToActiveTab();
-        return originalWriteText(text);
-      };
-    }
-  } catch (e) {
-    // Ignore clipboard wrapper failures
-  }
-
-  document.addEventListener('copy', () => {
-    notifyCopyToActiveTab();
-  });
   
   // Notification system
   // Usage limits configuration
@@ -48,9 +19,30 @@
 
   // Subscription checking - Using Stripe (Chrome Web Store doesn't manage products)
   const API_BASE_URL = 'https://nimbus-api-ten.vercel.app/api';
-  console.log('[API] API_BASE_URL:', API_BASE_URL);
   let subscriptionActive = false;
   let userEmail = null;
+
+  async function performPopupSignOut(confirmMessage) {
+    if (confirmMessage && !confirm(confirmMessage)) return;
+    await chrome.storage.local.remove([
+      'userEmail', 'subscriptionId', 'subscriptionExpiry', 'subscriptionActive',
+      'tempSessionData', 'pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt'
+    ]);
+    try {
+      chrome.identity.getAuthToken({ interactive: false }, (token) => {
+        if (chrome.runtime.lastError) return;
+        if (token) {
+          chrome.identity.removeCachedAuthToken({ token }, () => {
+            if (chrome.runtime.lastError) return;
+          });
+        }
+      });
+    } catch (e) {}
+    if (typeof showNotification === 'function') {
+      showNotification('Signed out. Reloading...', 'success');
+    }
+    setTimeout(() => { location.reload(); }, confirmMessage ? 500 : 300);
+  }
 
   // Get user email via Google Identity
   async function getUserEmail() {
@@ -65,6 +57,10 @@
         
         // Try to get from Chrome identity (works in production Chrome Web Store)
         chrome.identity.getProfileUserInfo((userInfo) => {
+          if (chrome.runtime.lastError) {
+            resolve(null);
+            return;
+          }
           if (userInfo && userInfo.email) {
             userEmail = userInfo.email;
             // Cache it
@@ -74,9 +70,10 @@
             // If getProfileUserInfo doesn't work, try getAuthToken (non-interactive first)
             chrome.identity.getAuthToken({ interactive: false }, (token) => {
               if (chrome.runtime.lastError || !token) {
-                // User needs to sign in interactively
                 resolve(null);
-              } else if (token) {
+                return;
+              }
+              if (token) {
                 // Get user info from token
                 fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
                   headers: { 'Authorization': `Bearer ${token}` }
@@ -92,6 +89,8 @@
                   }
                 })
                 .catch(() => resolve(null));
+              } else {
+                resolve(null);
               }
             });
           }
@@ -188,12 +187,11 @@
           setTimeout(() => location.reload(), 1000);
         }
       } catch (e) {
-        console.error('Payment polling error:', e);
       }
     }, 5000); // Poll every 5 seconds
   }
 
-  // Load unpacked = different runtime ID. Chrome Web Store install uses fixed ID.
+  // Load unpacked = different extension ID; treat as subscribed so devs can test without paying
   const STORE_EXTENSION_ID = 'abmihilkdbamlelkmpfegjfimcjpcihh';
   function isDeveloperMode() {
     try {
@@ -209,7 +207,6 @@
       subscriptionActive = true;
       return true;
     }
-
     try {
       // Get subscription ID and email from storage
       const result = await new Promise((resolve) => {
@@ -260,7 +257,6 @@
             }
           }
         } catch (e) {
-          console.error('Email verification failed:', e);
         }
       }
 
@@ -322,7 +318,6 @@
         return false;
       }
     } catch (e) {
-      console.error('Nimbus: Error checking subscription:', e);
       subscriptionActive = false;
       chrome.storage.local.set({ subscriptionActive: false });
       return false;
@@ -334,8 +329,14 @@
     const mainContent = document.getElementById('mainContent');
     const wordOfDay = document.getElementById('wordOfDay');
     const headerContent = document.querySelector('.header-content');
+    const wordOfDayTop = document.querySelector('.word-of-day-top');
     
     if (!mainContent) return;
+    
+    // Hide Word of the Day section entirely on sign-in/subscription page (only show in hub when subscribed)
+    if (wordOfDayTop) {
+      wordOfDayTop.style.display = 'none';
+    }
     
     // Hide header and search when showing payment screen
     if (headerContent) {
@@ -378,7 +379,9 @@
         
         ${email ? `<p style="margin: 0 0 25px 0; color: #cbd5e1; font-size: 14px;">Signed in as: <strong style="color: #ffffff;">${email}</strong></p>` : ''}
         
-        ${!email ? `<button id="signin-btn" style="width: 100%; background: #ffffff; color: #05007f; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600; margin-bottom: 20px; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: center; gap: 8px;">
+        ${!email ? `
+        <p style="margin: 0 0 12px 0; color: #e2e8f0; font-size: 14px; font-weight: 600;">Already have an account?</p>
+        <button id="signin-btn" style="width: 100%; background: #ffffff; color: #05007f; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600; margin-bottom: 20px; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); display: flex; align-items: center; justify-content: center; gap: 8px;">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
             <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
@@ -386,7 +389,8 @@
             <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
           </svg>
           Sign in with Google
-        </button>` : ''}
+        </button>
+        ` : ''}
         
         <button id="subscribe-btn" style="width: 100%; background: #ffffff; color: #05007f; border: none; padding: 14px; border-radius: 10px; cursor: pointer; font-size: 16px; font-weight: 600; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); ${!email ? 'opacity: 0.5; cursor: not-allowed;' : ''}" ${!email ? 'disabled' : ''}>
           ${email ? 'Start Free Trial - 3 Days Free' : 'Sign in to Subscribe'}
@@ -411,7 +415,6 @@
     setTimeout(() => {
       const subscribeBtn = document.getElementById('subscribe-btn');
       const signinBtn = document.getElementById('signin-btn');
-      console.log('Buttons found - subscribeBtn:', !!subscribeBtn, 'signinBtn:', !!signinBtn);
       
       if (subscribeBtn && email) {
         subscribeBtn.addEventListener('click', async () => {
@@ -419,8 +422,6 @@
           subscribeBtn.textContent = 'Opening checkout...';
           
           try {
-            console.log('Creating checkout session for email:', email);
-            console.log('API URL:', `${API_BASE_URL}/create-checkout`);
             
             // Create Stripe checkout session
             const response = await fetch(`${API_BASE_URL}/create-checkout`, {
@@ -432,8 +433,6 @@
               }),
             });
 
-            console.log('Response status:', response.status, response.statusText);
-            console.log('Response headers:', [...response.headers.entries()]);
 
             if (!response.ok) {
               // Try to get error details from response (read body only once)
@@ -460,21 +459,12 @@
               
               // Show detailed error to user
               const fullError = `${errorMessage} (Status: ${response.status})`;
-              console.error('Checkout API error:', {
-                status: response.status,
-                statusText: response.statusText,
-                responseText: responseText,
-                parsed: errorDetails
-              });
-              
               throw new Error(fullError);
             }
 
             const data = await response.json();
-            console.log('Checkout session created:', data);
             
             if (!data.url || !data.sessionId) {
-              console.error('No URL or sessionId in response:', data);
               throw new Error('No checkout URL received from server');
             }
             
@@ -519,7 +509,6 @@
                         setTimeout(() => location.reload(), 1000);
                       }
                     } catch (e) {
-                      console.error('Subscription verification error:', e);
                     }
                   }
                 }, 500);
@@ -553,14 +542,12 @@
                         setTimeout(() => location.reload(), 1000);
                       }
                     } catch (e) {
-                      console.error('Subscription verification error:', e);
                     }
                   }
                 }, 500);
               }
             });
           } catch (error) {
-            console.error('Checkout error:', error);
             // Show more detailed error message
             let errorMsg = error.message || 'Failed to open checkout. Please try again.';
             
@@ -676,7 +663,6 @@
                 
                 if (sessionResponse.ok) {
                   const sessionData = await sessionResponse.json();
-                  console.log('Session verification response:', sessionData);
                   
                   if (sessionData.valid) {
                     // Save subscription
@@ -696,14 +682,11 @@
                     }, 1000);
                     return;
                   } else {
-                    console.error('Session verification failed:', sessionData.error);
                   }
                 } else {
                   const errorText = await sessionResponse.text();
-                  console.error('Session verification HTTP error:', sessionResponse.status, errorText);
                 }
               } catch (e) {
-                console.error('Session verification error:', e);
               }
             }
             
@@ -756,18 +739,11 @@
         });
       }
       
-      // Sign out button handler
+      // Sign out button handler (payment view)
       const signoutBtn = document.getElementById('signout-btn');
       if (signoutBtn && email) {
-        signoutBtn.addEventListener('click', async () => {
-          if (confirm('Sign out? You will need to sign in again to subscribe.')) {
-            // Clear all user data
-            await chrome.storage.local.remove(['userEmail', 'subscriptionId', 'subscriptionExpiry', 'subscriptionActive', 'tempSessionData']);
-            showNotification('Signed out. Reloading...', 'success');
-            setTimeout(() => {
-              location.reload();
-            }, 500);
-          }
+        signoutBtn.addEventListener('click', () => {
+          performPopupSignOut('Sign out? You will need to sign in again to subscribe.');
         });
       }
       
@@ -810,7 +786,6 @@
               throw new Error('No checkout URL received');
             }
           } catch (error) {
-            console.error('Nimbus: Checkout error:', error);
             showNotification('Failed to open payment page. Please try again or contact support.', 'error');
           }
         });
@@ -874,7 +849,6 @@
               verifyBtn.textContent = 'Verify';
             }
           } catch (error) {
-            console.error('License verification error:', error);
             licenseStatus.textContent = 'Error verifying license. Please try again.';
             licenseStatus.style.color = '#dc2626';
             verifyBtn.disabled = false;
@@ -1088,13 +1062,11 @@
     try {
       // Check if chrome.runtime is available
       if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.getURL) {
-        console.warn('chrome.runtime not available yet, will retry');
         return false;
       }
       
       const logoImg = document.getElementById('nimbusTitle');
       if (!logoImg) {
-        console.warn('Logo element not found, will retry');
         return false;
       }
       
@@ -1135,7 +1107,6 @@
             
             // Verify the URL is valid
             if (!logoUrl || logoUrl.includes('undefined') || !logoUrl.startsWith('chrome-extension://')) {
-              console.error('[LOGO] Invalid URL generated:', logoUrl, 'for file:', logoFile);
               currentIndex++;
               tryNextLogo();
               return;
@@ -1145,13 +1116,11 @@
             try {
               const runtimeId = chrome.runtime.id;
               if (!runtimeId) {
-                console.error('[LOGO] No runtime ID available');
                 currentIndex++;
                 tryNextLogo();
                 return;
               }
             } catch (e) {
-              console.error('[LOGO] Cannot access runtime ID:', e);
               currentIndex++;
               tryNextLogo();
               return;
@@ -1201,7 +1170,6 @@
             logoImg.onerror = (e) => {
               clearTimeout(timeout);
               if (!loaded) {
-                console.warn(`Logo failed to load: ${logoFile}`, e);
                 currentIndex++;
                 tryNextLogo();
               }
@@ -1212,7 +1180,6 @@
               clearTimeout(timeout);
               if (!loaded) {
                 loaded = true;
-                console.log('✅ Logo loaded successfully:', logoFile, 'from URL:', logoUrl);
                 const textFallback = logoImg.parentElement?.querySelector('.logo-text-fallback');
                 if (textFallback) {
                   textFallback.style.display = 'none';
@@ -1224,7 +1191,6 @@
             };
             return;
           } catch (e) {
-            console.error('Error setting logo src:', e);
             currentIndex++;
             tryNextLogo();
             return;
@@ -1235,7 +1201,6 @@
         if (!tryingHosted && hostedFallbacks.length > 0 && hostedIndex < hostedFallbacks.length) {
           tryingHosted = true;
           const hostedUrl = hostedFallbacks[hostedIndex];
-          console.log('All local logos failed, trying hosted fallback:', hostedUrl);
           
           // Clear any previous error handlers
           logoImg.onerror = null;
@@ -1250,7 +1215,6 @@
           // Set timeout to move to next hosted URL if this one doesn't load
           const timeout = setTimeout(() => {
             if (!loaded) {
-              console.warn(`Hosted logo load timeout for: ${hostedUrl}, trying next...`);
               hostedIndex++;
               tryingHosted = false;
               tryNextLogo();
@@ -1260,7 +1224,6 @@
           logoImg.onerror = (e) => {
             clearTimeout(timeout);
             if (!loaded) {
-              console.warn(`Hosted logo failed to load: ${hostedUrl}`, e);
               hostedIndex++;
               tryingHosted = false;
               tryNextLogo();
@@ -1272,7 +1235,6 @@
             clearTimeout(timeout);
             if (!loaded) {
               loaded = true;
-              console.log('✅ Logo loaded successfully from hosted URL:', hostedUrl);
               const textFallback = logoImg.parentElement?.querySelector('.logo-text-fallback');
               if (textFallback) {
                 textFallback.style.display = 'none';
@@ -1287,7 +1249,6 @@
         
         // All local and hosted logos failed - show text fallback
         if (currentIndex >= logoFiles.length && (hostedIndex >= hostedFallbacks.length || hostedFallbacks.length === 0)) {
-          console.warn('All logo files and hosted fallbacks failed, using text fallback');
           if (logoImg.tagName === 'IMG') {
             const parent = logoImg.parentElement;
             if (parent) {
@@ -1311,7 +1272,6 @@
       tryNextLogo();
       return true;
     } catch (e) {
-      console.error('Failed to set logo:', e);
       return false;
     }
   }
@@ -1372,7 +1332,6 @@
         }
       }, 0);
     } catch (e) {
-      console.error('Nimbus: Error in initial translation:', e);
       // Continue loading even if translation fails
     }
   });
@@ -1380,6 +1339,13 @@
   // Check for pending search (e.g., person data from content script)
   // Function to handle pending search
   function handlePendingSearch() {
+    // Ensure wordOfDayDiv exists before proceeding
+    const wdDiv = wordOfDayDiv || document.getElementById('wordOfDay');
+    if (!wdDiv && document.readyState === 'loading') {
+      setTimeout(handlePendingSearch, 200);
+      return;
+    }
+    
     chrome.storage.local.get(['pendingSearch'], (result) => {
       if (result.pendingSearch) {
         const pending = result.pendingSearch;
@@ -1400,14 +1366,24 @@
           displayPersonResult(pending.term, pending.data);
           return;
         }
-        if (pending.type === 'place' && pending.data) {
+        if (pending.type === 'place') {
           chrome.storage.local.remove(['pendingSearch']);
+          if (pending.data) {
           displayPlaceResult(pending.term, pending.data);
+          } else {
+            executeSearch(pending.term);
+          }
           return;
         }
         if (pending.type === 'organization' && pending.data) {
           chrome.storage.local.remove(['pendingSearch']);
           displayOrganizationResult(pending.term, pending.data);
+          return;
+        }
+        if (pending.type === 'partialName' && pending.data) {
+          chrome.storage.local.remove(['pendingSearch']);
+          // AI failed or timed out - show news articles in hub
+          displayPartialNameResult(pending.term, pending.data, false);
           return;
         }
         if ((pending.type === 'person' || pending.type === 'place' || pending.type === 'organization') && pending.term) {
@@ -1468,7 +1444,17 @@
     if (msg && msg.action === 'subscriptionActivated') {
       setTimeout(() => location.reload(), 500);
     } else if (msg && msg.action === 'applyPendingSearch') {
-      handlePendingSearch();
+      const run = () => {
+        handlePendingSearch();
+        setTimeout(handlePendingSearch, 150);
+        setTimeout(handlePendingSearch, 400);
+        setTimeout(handlePendingSearch, 800);
+      };
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => { setTimeout(run, 50); });
+      } else {
+        run();
+      }
     }
     return false; // we never call sendResponse; avoids "message port closed" on sender
   });
@@ -1499,6 +1485,7 @@
   });
   
   // Load word of day - skip when pendingSearch has entity to show so handlePendingSearch can render it
+  // Load word of day asynchronously - don't block UI
   (function loadWordOfDayImmediately() {
     const el = document.getElementById('wordOfDay');
     if (!el) {
@@ -1507,7 +1494,12 @@
     }
     chrome.storage.local.get(['pendingSearch'], (r) => {
       if (r.pendingSearch && r.pendingSearch.term) return;
-      loadWordOfDay();
+      // Load asynchronously - don't block
+      setTimeout(() => {
+        loadWordOfDay().catch(err => {
+          // Don't let word of day errors break the hub
+        });
+      }, 100);
     });
   })();
   
@@ -1602,28 +1594,20 @@
       chrome.storage.local.get(['subscriptionId', 'subscriptionActive', 'subscriptionExpiry', 'userEmail'], resolve);
     });
 
-    const devMode = isDeveloperMode();
-    if (devMode) subscriptionActive = true;
-    
-    // If no subscription data at all, show payment screen immediately (skip in Load unpacked)
-    if (!devMode && !storageData.subscriptionId && !storageData.userEmail) {
+    // If no account data at all, show login/subscribe page (unless load unpacked)
+    if (!storageData.subscriptionId && !storageData.userEmail && !isDeveloperMode()) {
       showUpgradePromptInPopup();
       return;
-    }
-    
-    if (storageData.subscriptionId === 'dev-mode-mock-subscription') {
-      await chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
     }
     
     // Check subscription status
     let isActive = await checkSubscription();
     
-    // Force check: if subscriptionActive is false or undefined, show payment screen (skip in Load unpacked)
     const currentStatus = await new Promise((resolve) => {
       chrome.storage.local.get(['subscriptionActive'], resolve);
     });
     
-    if (!devMode && (!isActive || currentStatus.subscriptionActive !== true)) {
+    if (!isDeveloperMode() && (!isActive || currentStatus.subscriptionActive !== true)) {
     // If not active, try checking by email as fallback (in case subscription was just activated)
       const email = await getUserEmail();
       if (email) {
@@ -1674,17 +1658,18 @@
       });
       
       // Load word of day FIRST and immediately (don't wait for other content)
-      // Use setTimeout to ensure DOM is fully ready
+      // Use setTimeout to ensure DOM is fully ready - wrap in catch to prevent blocking
       setTimeout(() => {
-      loadWordOfDay();
+        loadWordOfDay().catch(err => {
+        });
       }, 100);
       
       // Also try loading after a short delay in case first attempt fails
       setTimeout(() => {
         const wordOfDayDiv = document.getElementById('wordOfDay');
         if (wordOfDayDiv && wordOfDayDiv.innerHTML.includes('Loading')) {
-          console.log('[WOTD] Still loading after delay, retrying...');
-          loadWordOfDay();
+          loadWordOfDay().catch(err => {
+          });
         }
       }, 2000);
       
@@ -1717,7 +1702,6 @@
         });
       });
     } catch (e) {
-      console.error('Nimbus: Error loading initial content:', e);
     }
   })();
 
@@ -1744,7 +1728,6 @@
       const textSpan = dropdown.querySelector('.custom-dropdown-text');
       
       if (!selected || !hiddenInput || !textSpan) {
-        console.warn('Nimbus: Dropdown missing required elements', dropdown);
         return;
       }
       
@@ -1896,7 +1879,6 @@
           const t = translations[window.currentUILanguage || 'en'] || translations.en;
           showNotification(t.saved || 'Saved', 'success');
         }).catch(e => {
-          console.error('Save page error', e);
           showNotification('Could not save.', 'error');
         });
       });
@@ -1910,12 +1892,14 @@
       refreshBtn.style.transform = 'rotate(360deg)';
       refreshBtn.style.transition = 'transform 0.5s ease';
       
-      // Reload all content
+      // Reload all content - don't await word of day to prevent blocking
       await Promise.all([
         loadFavorites(),
-        loadRecent(),
-        loadWordOfDay()
+        loadRecent()
       ]);
+      // Load word of day separately - don't block refresh
+      loadWordOfDay().catch(err => {
+      });
       
       // Reset rotation after animation
       setTimeout(() => {
@@ -1929,11 +1913,79 @@
     });
   }
   
+  // Floating toolbar toggle button
+  const toolbarToggleBtn = document.getElementById('toolbarToggleBtn');
+  const toolbarToggleIcon = document.getElementById('toolbarToggleIcon');
+  
+  // Load toolbar visibility state
+  chrome.storage.local.get(['floatToolbarHidden'], (result) => {
+    const isHidden = result.floatToolbarHidden || false;
+    if (toolbarToggleBtn) {
+      if (isHidden) {
+        toolbarToggleBtn.classList.add('hidden');
+        toolbarToggleIcon.innerHTML = '<path d="M3 3h18v18H3z"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/>';
+      } else {
+        toolbarToggleBtn.classList.remove('hidden');
+        toolbarToggleIcon.innerHTML = '<path d="M3 3h18v18H3z"/><path d="M9 9h6v6H9z"/>';
+      }
+    }
+  });
+  
+  if (toolbarToggleBtn) {
+    toolbarToggleBtn.addEventListener('click', () => {
+      chrome.storage.local.get(['floatToolbarHidden'], (result) => {
+        const isHidden = result.floatToolbarHidden || false;
+        const newState = !isHidden;
+        
+        // Save new state
+        chrome.storage.local.set({ floatToolbarHidden: newState }, () => {
+          // Update button appearance
+          if (newState) {
+            toolbarToggleBtn.classList.add('hidden');
+            toolbarToggleIcon.innerHTML = '<path d="M3 3h18v18H3z"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/>';
+          } else {
+            toolbarToggleBtn.classList.remove('hidden');
+            toolbarToggleIcon.innerHTML = '<path d="M3 3h18v18H3z"/><path d="M9 9h6v6H9z"/>';
+          }
+          
+          // Send message to all tabs to update toolbar visibility
+          chrome.tabs.query({}, (tabs) => {
+            tabs.forEach(tab => {
+              chrome.tabs.sendMessage(tab.id, { 
+                action: 'toggleFloatingToolbar', 
+                hidden: newState 
+              }).catch(() => {
+                // Ignore errors (tab might not have content script)
+              });
+            });
+          });
+        });
+      });
+    });
+  }
+  
   if (settingsBtn) {
     settingsBtn.addEventListener('click', () => {
       document.body.classList.add('settings-open');
       settingsPage.style.display = 'flex';
       loadSettings();
+      // Set logo in settings footer
+      const settingsLogo = document.getElementById('settingsLogo');
+      if (settingsLogo) {
+        const logoUrl = chrome.runtime.getURL('NimbusLogo.svg');
+        settingsLogo.src = logoUrl;
+        settingsLogo.onerror = function() {
+          this.onerror = null;
+          this.src = chrome.runtime.getURL('Nimbus Logo-02.svg');
+          this.onerror = function() {
+            this.onerror = null;
+            this.src = chrome.runtime.getURL('Nimbus Logo-01.svg');
+            this.onerror = function() {
+              this.style.display = 'none';
+            };
+          };
+        };
+      }
       // Initialize custom dropdowns and language modal after a brief delay to ensure DOM is ready
       setTimeout(() => {
         initCustomDropdowns();
@@ -1948,6 +2000,35 @@
       settingsPage.style.display = 'none';
     });
   }
+  
+  // Safety: Ensure settings page is closed on initialization
+  if (settingsPage) {
+    settingsPage.style.display = 'none';
+    document.body.classList.remove('settings-open');
+  }
+  
+  // Safety: Ensure language modal is closed on initialization
+  const languageModal = document.getElementById('languageModal');
+  if (languageModal) {
+    languageModal.classList.remove('open');
+    languageModal.setAttribute('aria-hidden', 'true');
+  }
+  
+  // Escape key handler to close any stuck modals
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      // Close settings if open
+      if (settingsPage && settingsPage.style.display !== 'none') {
+        document.body.classList.remove('settings-open');
+        settingsPage.style.display = 'none';
+      }
+      // Close language modal if open
+      if (languageModal && languageModal.classList.contains('open')) {
+        languageModal.classList.remove('open');
+        languageModal.setAttribute('aria-hidden', 'true');
+      }
+    }
+  });
   
   // Settings tab expand/collapse
   const settingsTabHeaders = document.querySelectorAll('.settings-tab-header');
@@ -2016,6 +2097,7 @@
       addToFavorites: 'Add to favorites',
       removeFromFavorites: 'Remove from favorites',
       manageSubscription: 'Manage Subscription',
+      signOut: 'Sign out',
       sendMessage: 'Send Message',
       name: 'Name',
       email: 'Email',
@@ -2114,6 +2196,7 @@
       addToFavorites: 'Agregar a favoritos',
       removeFromFavorites: 'Quitar de favoritos',
       manageSubscription: 'Gestionar Suscripción',
+      signOut: 'Cerrar sesión',
       sendMessage: 'Enviar Mensaje',
       name: 'Nombre',
       email: 'Correo',
@@ -2203,6 +2286,7 @@
       addToFavorites: 'Ajouter aux favoris',
       removeFromFavorites: 'Retirer des favoris',
       manageSubscription: 'Gérer l\'Abonnement',
+      signOut: 'Déconnexion',
       sendMessage: 'Envoyer le Message',
       name: 'Nom',
       email: 'Email',
@@ -2297,6 +2381,7 @@
       addToFavorites: 'Zu Favoriten hinzufügen',
       removeFromFavorites: 'Aus Favoriten entfernen',
       manageSubscription: 'Abonnement Verwalten',
+      signOut: 'Abmelden',
       sendMessage: 'Nachricht Senden',
       name: 'Name',
       email: 'E-Mail',
@@ -2391,6 +2476,7 @@
       addToFavorites: 'Aggiungi ai preferiti',
       removeFromFavorites: 'Rimuovi dai preferiti',
       manageSubscription: 'Gestisci Abbonamento',
+      signOut: 'Esci',
       sendMessage: 'Invia Messaggio',
       name: 'Nome',
       email: 'Email',
@@ -2485,6 +2571,7 @@
       addToFavorites: 'Adicionar aos favoritos',
       removeFromFavorites: 'Remover dos favoritos',
       manageSubscription: 'Gerenciar Assinatura',
+      signOut: 'Sair',
       sendMessage: 'Enviar Mensagem',
       name: 'Nome',
       email: 'Email',
@@ -2579,6 +2666,7 @@
       addToFavorites: 'Добавить в избранное',
       removeFromFavorites: 'Удалить из избранного',
       manageSubscription: 'Управление Подпиской',
+      signOut: 'Выйти',
       sendMessage: 'Отправить Сообщение',
       name: 'Имя',
       email: 'Email',
@@ -2673,6 +2761,7 @@
       addToFavorites: 'お気に入りに追加',
       removeFromFavorites: 'お気に入りから削除',
       manageSubscription: 'サブスクリプション管理',
+      signOut: 'サインアウト',
       sendMessage: 'メッセージを送信',
       name: '名前',
       email: 'メール',
@@ -2767,6 +2856,7 @@
       addToFavorites: '添加到收藏',
       removeFromFavorites: '从收藏中移除',
       manageSubscription: '管理订阅',
+      signOut: '退出登录',
       sendMessage: '发送消息',
       name: '姓名',
       email: '邮箱',
@@ -2861,6 +2951,7 @@
       addToFavorites: '즐겨찾기에 추가',
       removeFromFavorites: '즐겨찾기에서 제거',
       manageSubscription: '구독 관리',
+      signOut: '로그아웃',
       sendMessage: '메시지 보내기',
       name: '이름',
       email: '이메일',
@@ -2955,6 +3046,7 @@
       addToFavorites: 'إضافة إلى المفضلة',
       removeFromFavorites: 'إزالة من المفضلة',
       manageSubscription: 'إدارة الاشتراك',
+      signOut: 'تسجيل الخروج',
       sendMessage: 'إرسال رسالة',
       name: 'الاسم',
       email: 'البريد الإلكتروني',
@@ -3049,6 +3141,7 @@
       addToFavorites: 'पसंदीदा में जोड़ें',
       removeFromFavorites: 'पसंदीदा से हटाएं',
       manageSubscription: 'सदस्यता प्रबंधन',
+      signOut: 'साइन आउट',
       sendMessage: 'संदेश भेजें',
       name: 'नाम',
       email: 'ईमेल',
@@ -3143,6 +3236,7 @@
       addToFavorites: 'Toevoegen aan favorieten',
       removeFromFavorites: 'Verwijderen uit favorieten',
       manageSubscription: 'Abonnement Beheren',
+      signOut: 'Uitloggen',
       sendMessage: 'Bericht Verzenden',
       name: 'Naam',
       email: 'E-mail',
@@ -3237,6 +3331,7 @@
       addToFavorites: 'Lägg till i favoriter',
       removeFromFavorites: 'Ta bort från favoriter',
       manageSubscription: 'Hantera Prenumeration',
+      signOut: 'Logga ut',
       sendMessage: 'Skicka Meddelande',
       name: 'Namn',
       email: 'E-post',
@@ -3318,6 +3413,7 @@
       addToFavorites: 'Dodaj do ulubionych',
       removeFromFavorites: 'Usuń z ulubionych',
       manageSubscription: 'Zarządzaj Subskrypcją',
+      signOut: 'Wyloguj',
       sendMessage: 'Wyślij Wiadomość',
       name: 'Imię',
       email: 'Email',
@@ -3415,6 +3511,7 @@
       addToFavorites: 'Favorilere ekle',
       removeFromFavorites: 'Favorilerden kaldır',
       manageSubscription: 'Aboneliği Yönet',
+      signOut: 'Çıkış Yap',
       sendMessage: 'Mesaj Gönder',
       name: 'Ad',
       email: 'E-posta',
@@ -3514,12 +3611,10 @@
     try {
       // Safety check: ensure translations object exists
       if (typeof translations === 'undefined') {
-        console.error('Nimbus: translations object not yet initialized');
         return;
       }
       const t = translations[lang] || translations.en;
       if (!t) {
-        console.error('Nimbus: No translations found for language:', lang);
         return;
       }
       window.currentUILanguage = lang;
@@ -3528,14 +3623,15 @@
     
     // Translate by data-i18n attributes
     document.querySelectorAll('[data-i18n]').forEach(el => {
+      try {
       const key = el.getAttribute('data-i18n');
-      if (t[key]) {
+        if (!key || !t[key]) return;
         if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
           el.placeholder = t[key];
         } else {
           el.textContent = t[key];
         }
-      }
+      } catch (err) {}
     });
     
     // Search input placeholder
@@ -3585,19 +3681,24 @@
     };
     
     Object.keys(translationsMap).forEach(selector => {
+      try {
       const elements = document.querySelectorAll(selector);
+        const text = translationsMap[selector];
+        if (!text) return;
       elements.forEach(el => {
+          try {
         if (el.tagName === 'LABEL' && el.querySelector('span')) {
-          el.querySelector('span').textContent = translationsMap[selector];
+              el.querySelector('span').textContent = text;
         } else if (el.tagName === 'BUTTON' || el.tagName === 'H2' || el.tagName === 'SPAN' || el.tagName === 'DIV') {
-          // Only update if it's a direct text element or button
           if (el.tagName === 'BUTTON' || !el.querySelector('span')) {
-            el.textContent = translationsMap[selector];
+                el.textContent = text;
           } else if (el.querySelector('span')) {
-            el.querySelector('span').textContent = translationsMap[selector];
+                el.querySelector('span').textContent = text;
           }
         }
+          } catch (err) {}
       });
+      } catch (err) {}
     });
     
     // Translate placeholders
@@ -3906,7 +4007,6 @@
     });
     
     } catch (e) {
-      console.error('Nimbus: Error in translateUI:', e);
       // Don't throw - allow the app to continue functioning
     }
   }
@@ -4014,6 +4114,49 @@
       if (document.getElementById('showExamples')) {
         document.getElementById('showExamples').checked = settings.showExamples !== false;
       }
+      
+      // Voice preference buttons
+      const voicePreferenceInput = document.getElementById('voicePreference');
+      const voiceFemaleBtn = document.getElementById('voiceFemaleBtn');
+      const voiceMaleBtn = document.getElementById('voiceMaleBtn');
+      if (voicePreferenceInput && voiceFemaleBtn && voiceMaleBtn) {
+        const savedVoicePreference = settings.voicePreference || 'auto';
+        voicePreferenceInput.value = savedVoicePreference;
+        
+        // Update button active states
+        if (savedVoicePreference === 'female') {
+          voiceFemaleBtn.classList.add('active');
+          voiceMaleBtn.classList.remove('active');
+        } else if (savedVoicePreference === 'male') {
+          voiceMaleBtn.classList.add('active');
+          voiceFemaleBtn.classList.remove('active');
+        } else {
+          // Auto - neither active
+          voiceFemaleBtn.classList.remove('active');
+          voiceMaleBtn.classList.remove('active');
+        }
+        
+        // Remove old listeners by cloning and replacing (clean way to remove all listeners)
+        const newFemaleBtn = voiceFemaleBtn.cloneNode(true);
+        const newMaleBtn = voiceMaleBtn.cloneNode(true);
+        voiceFemaleBtn.parentNode.replaceChild(newFemaleBtn, voiceFemaleBtn);
+        voiceMaleBtn.parentNode.replaceChild(newMaleBtn, voiceMaleBtn);
+        
+        // Add click handlers to new elements
+        newFemaleBtn.addEventListener('click', () => {
+          voicePreferenceInput.value = 'female';
+          newFemaleBtn.classList.add('active');
+          newMaleBtn.classList.remove('active');
+          saveSettings();
+        });
+        
+        newMaleBtn.addEventListener('click', () => {
+          voicePreferenceInput.value = 'male';
+          newMaleBtn.classList.add('active');
+          newFemaleBtn.classList.remove('active');
+          saveSettings();
+        });
+      }
     });
   }
   
@@ -4023,6 +4166,7 @@
     const modalPlacementEl = document.getElementById('modalPlacement');
     const explanationStyleEl = document.getElementById('explanationStyle');
     const dictionaryLanguageEl = document.getElementById('dictionaryLanguage');
+    const voicePreferenceEl = document.getElementById('voicePreference');
     
     const dictionaryLanguageValue = dictionaryLanguageEl?.value || detectBrowserLanguage();
     
@@ -4034,7 +4178,8 @@
       dictionaryLanguage: dictionaryLanguageValue,
       saveInIncognito: document.getElementById('saveInIncognito')?.checked || false,
       showPhonetic: document.getElementById('showPhonetic')?.checked !== false,
-      showExamples: document.getElementById('showExamples')?.checked !== false
+      showExamples: document.getElementById('showExamples')?.checked !== false,
+      voicePreference: voicePreferenceEl?.value || 'auto'
     };
     
     chrome.storage.local.set({ settings }, () => {
@@ -4070,7 +4215,9 @@
           translateUI(newLang);
         }, 50);
         // Reload all hub content with new language
-        loadWordOfDay();
+        // Load word of day asynchronously - don't block
+        loadWordOfDay().catch(err => {
+        });
         loadFavorites();
         loadRecent();
         loadSaved();
@@ -4125,13 +4272,20 @@
         body: JSON.stringify({ licenseKey: result.subscriptionId || result.userEmail }),
       });
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseErr) {
+        data = { valid: false, error: 'Could not load subscription. Check your connection and try again.' };
+      }
+      if (!response.ok && !data.error) {
+        data.error = data.error || 'Service temporarily unavailable. Please try again.';
+      }
 
       if (data.valid) {
         // Get expiry date - use expiryDate from API or fallback to currentPeriodEnd
         const expiryDateStr = data.expiryDate || data.currentPeriodEnd;
         if (!expiryDateStr) {
-          console.error('No expiry date in subscription data:', data);
         }
         const expiry = expiryDateStr ? new Date(expiryDateStr) : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // Fallback to 1 year from now
         const now = new Date();
@@ -4156,15 +4310,6 @@
         const within7Days = daysSincePurchase <= 7;
         
         // Debug logging
-        console.log('Refund button check:', {
-          created: data.created,
-          subscriptionStartDate: subscriptionStartDate.toISOString(),
-          daysSincePurchase: daysSincePurchase.toFixed(2),
-          within7Days: within7Days,
-          status: data.status,
-          isTrialing: isTrialing
-        });
-        
         // Build subscription info HTML with center alignment and titles above
         let statusText = 'Active';
         if (isTrialing) {
@@ -4256,23 +4401,35 @@
           }
         }
       } else {
-        subscriptionInfo.innerHTML = `<strong>Status:</strong> ${data.error || 'Inactive'}`;
+        const isPaymentFailed = data.status === 'past_due' || data.status === 'unpaid';
+        subscriptionInfo.innerHTML = `
+          <div style="text-align: center;">
+            <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Status</div>
+            <div style="font-size: 14px; font-weight: 600; color: #dc2626; margin-bottom: 8px;">${data.error || 'Inactive'}</div>
+            ${isPaymentFailed ? '<div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">Click the button below to update your card and restore access.</div>' : ''}
+          </div>
+        `;
         subscriptionInfo.style.color = '#dc2626';
         cancelBtn.style.display = 'none';
         resubscribeBtn.style.display = 'none';
         refundBtn.style.display = 'none';
         const manageBtn = document.getElementById('popup-manage-subscription-btn');
         if (manageBtn) {
-          manageBtn.style.display = 'none';
+          manageBtn.style.display = isPaymentFailed ? 'inline-block' : 'none';
+          if (isPaymentFailed) {
+            manageBtn.textContent = 'Update payment method';
+            setupManageSubscriptionButton();
+          }
         }
       }
     } catch (error) {
-      console.error('Error loading subscription:', error);
-      subscriptionInfo.innerHTML = '<strong>Status:</strong> Error loading subscription';
+      subscriptionInfo.innerHTML = '<strong>Status:</strong> Error loading subscription. Check your connection and try again.';
       subscriptionInfo.style.color = '#dc2626';
       cancelBtn.style.display = 'none';
       resubscribeBtn.style.display = 'none';
       refundBtn.style.display = 'none';
+      const manageBtn = document.getElementById('popup-manage-subscription-btn');
+      if (manageBtn) manageBtn.style.display = 'none';
     }
   }
 
@@ -4323,7 +4480,6 @@
   function setupManageSubscriptionButton() {
     const manageSubscriptionBtn = document.getElementById('popup-manage-subscription-btn');
     if (!manageSubscriptionBtn) {
-      console.warn('Manage subscription button not found');
       return;
     }
     
@@ -4368,7 +4524,6 @@
                 email = identityResult;
               }
             } catch (e) {
-              console.error('Could not get email from identity:', e);
             }
           }
         }
@@ -4383,11 +4538,8 @@
           return;
         }
         
-        // Create customer portal session
-        console.log('[MANAGE SUB] Creating portal session with:', { email, subscriptionId, API_BASE_URL });
         const returnUrl = chrome.runtime.getURL('popup.html');
         const portalUrl = `${API_BASE_URL}/create-portal-session`;
-        console.log('[MANAGE SUB] Calling:', portalUrl);
         
         const response = await fetch(portalUrl, {
           method: 'POST',
@@ -4399,16 +4551,13 @@
           }),
         });
         
-        console.log('[MANAGE SUB] Response status:', response.status);
         
         if (!response.ok) {
           const errorText = await response.text();
-          console.error('[MANAGE SUB] Error response:', errorText);
           throw new Error(`Server error: ${response.status} - ${errorText}`);
         }
         
         const data = await response.json();
-        console.log('[MANAGE SUB] Response data:', data);
         
         if (response.ok && data.url) {
           // Open Stripe customer portal in new tab
@@ -4416,7 +4565,6 @@
           showNotification('Opening subscription management...', 'success');
         } else {
           const errorMsg = data.error || data.message || 'Failed to open subscription management. Please check the console for details.';
-          console.error('[MANAGE SUB] Portal session error:', errorMsg, data);
           
           // Don't show "environment" errors - show user-friendly message
           if (errorMsg.toLowerCase().includes('environment') || errorMsg.toLowerCase().includes('not available')) {
@@ -4426,7 +4574,6 @@
           }
         }
       } catch (error) {
-        console.error('[MANAGE SUB] Error opening customer portal:', error);
         
         // Check if it's a network error
         if (error.message && error.message.includes('fetch')) {
@@ -4444,11 +4591,26 @@
       }
     });
     
-    console.log('Manage subscription button handler attached');
   }
   
   // Set up immediately if button exists
   setupManageSubscriptionButton();
+
+  // Sign out in Subscription tab (Settings)
+  const popupSubscriptionSignoutBtn = document.getElementById('popup-subscription-signout-btn');
+  if (popupSubscriptionSignoutBtn) {
+    popupSubscriptionSignoutBtn.addEventListener('click', () => {
+      performPopupSignOut('Sign out? You will need to sign in again to use premium features.');
+    });
+  }
+
+  // Sign out at bottom of Settings page
+  const settingsFooterSignoutBtn = document.getElementById('settings-footer-signout-btn');
+  if (settingsFooterSignoutBtn) {
+    settingsFooterSignoutBtn.addEventListener('click', () => {
+      performPopupSignOut('Sign out? You will need to sign in again to use premium features.');
+    });
+  }
 
   // Cancel subscription button
   const popupCancelBtn = document.getElementById('popup-cancel-btn');
@@ -4528,7 +4690,6 @@
           popupCancelBtn.textContent = 'Cancel Subscription';
         }
       } catch (error) {
-        console.error('Cancel error:', error);
         if (statusDiv) {
           statusDiv.innerHTML = '❌ Error cancelling subscription. Please try again.';
           statusDiv.style.color = '#dc2626';
@@ -4596,7 +4757,6 @@
           popupResubscribeBtn.textContent = 'Resubscribe';
         }
       } catch (error) {
-        console.error('Resubscribe error:', error);
         if (statusDiv) {
           statusDiv.innerHTML = '❌ Error reactivating subscription. Please try again.';
           statusDiv.style.color = '#dc2626';
@@ -4677,7 +4837,6 @@
           popupRefundBtn.textContent = 'Request Refund (7-day window)';
         }
       } catch (error) {
-        console.error('Refund error:', error);
         if (statusDiv) {
           statusDiv.innerHTML = '❌ Error processing refund. Please try again.';
           statusDiv.style.color = '#dc2626';
@@ -4699,7 +4858,9 @@
           loadFavorites();
           loadRecent();
           loadSaved();
-          loadWordOfDay();
+          // Load word of day asynchronously - don't block
+          loadWordOfDay().catch(err => {
+          });
         });
       }
     });
@@ -4754,7 +4915,6 @@
           sendContactBtn.textContent = originalText;
           
           if (chrome.runtime.lastError) {
-            console.error('Nimbus: Error sending contact form:', chrome.runtime.lastError);
             // Fallback to mailto
             const recipient = 'charles@leveldesignagency.com';
             const mailtoSubject = encodeURIComponent(`[Nimbus Extension] ${subject}`);
@@ -4795,7 +4955,6 @@
           }
         });
       } catch (error) {
-        console.error('Nimbus: Error sending contact form:', error);
         sendContactBtn.disabled = false;
         sendContactBtn.textContent = originalText;
         showNotification('Failed to send message. Please try again.', 'error');
@@ -4918,7 +5077,6 @@
             context: ''
           }, (response) => {
             if (chrome.runtime.lastError) {
-              console.error('Nimbus: Runtime error in entity search:', chrome.runtime.lastError);
               resolve({ error: chrome.runtime.lastError.message });
             } else {
               resolve(response);
@@ -4939,6 +5097,16 @@
           } else if (response && response.isPlace && response.placeData) {
             displayPlaceResult(trimmedQuery, response.placeData);
             return;
+          } else if (response && (response.isPartialName || response.isPartialNameFallback) && response.partialNameData) {
+            // Handle partial names (first name only, etc.)
+            if (response.isPartialName && response.partialNameData.explanation) {
+              // AI succeeded - show in tooltip with links
+              displayPartialNameResult(trimmedQuery, response.partialNameData, true);
+            } else {
+              // AI failed or timed out - show news articles in hub
+              displayPartialNameResult(trimmedQuery, response.partialNameData, false);
+            }
+            return;
           }
         } catch (err) {
           // Continue to word search below
@@ -4950,7 +5118,6 @@
       try {
       await showWordDetails(trimmedQuery);
     } catch (err) {
-      console.error('Nimbus: Error in showWordDetails:', err);
       // Clear loading placeholder and show error message
       wordOfDayDiv.innerHTML = `
         <div class="word-card-modal">
@@ -5101,7 +5268,6 @@
           copyBtn.classList.add('copied');
           setTimeout(() => copyBtn.classList.remove('copied'), 300);
         } catch (err) {
-          console.error('Failed to copy:', err);
         }
       });
     }
@@ -5118,12 +5284,14 @@
     }
     const container = document.getElementById('wordOfDay') || wordOfDayDiv;
     if (!container) {
-      console.warn('Nimbus: #wordOfDay not found');
       showWordDetails(searchTerm);
       return;
     }
     const section = container.closest('.section');
     if (section) section.style.display = 'block';
+    const wordOfDayTop = container.closest('.word-of-day-top');
+    if (wordOfDayTop) wordOfDayTop.style.display = 'block';
+    container.style.display = 'block';
     currentView = 'person';
     document.body.classList.add('hub-search-mode');
     document.body.classList.add('entity-card-view');
@@ -5231,7 +5399,6 @@
           copyBtn.classList.add('copied');
           setTimeout(() => copyBtn.classList.remove('copied'), 300);
         } catch (err) {
-          console.error('Failed to copy', err);
         }
       });
     }
@@ -5249,6 +5416,12 @@
 
   // Display organization result in hub
   function displayOrganizationResult(searchTerm, orgData) {
+    const container = document.getElementById('wordOfDay') || wordOfDayDiv;
+    if (container) {
+      const wordOfDayTop = container.closest('.word-of-day-top');
+      if (wordOfDayTop) wordOfDayTop.style.display = 'block';
+      container.style.display = 'block';
+    }
     currentView = 'organization';
     document.body.classList.add('hub-search-mode');
     document.body.classList.add('entity-card-view');
@@ -5266,7 +5439,7 @@
     
     // Build organization card HTML
     const hasBack = navigationHistory.length > 1;
-    wordOfDayDiv.innerHTML = `
+    (container || wordOfDayDiv).innerHTML = `
       <div class="word-card-modal person-card">
         <div class="word-card-header">
           <div class="word-card-header-top">
@@ -5358,7 +5531,6 @@
           copyBtn.classList.add('copied');
           setTimeout(() => copyBtn.classList.remove('copied'), 300);
         } catch (err) {
-          console.error('Failed to copy', err);
         }
       });
     }
@@ -5378,22 +5550,235 @@
   }
 
   // Display place result in hub
+  // Display partial name result (first name only, etc.)
+  function displayPartialNameResult(searchTerm, partialNameData, hasAIExplanation) {
+    const container = document.getElementById('wordOfDay') || wordOfDayDiv;
+    if (!container) {
+      showWordDetails(searchTerm);
+      return;
+    }
+    const section = container.closest('.section');
+    if (section) section.style.display = 'block';
+    currentView = 'partialName';
+    document.body.classList.add('hub-search-mode');
+    document.body.classList.add('entity-card-view');
+    document.querySelectorAll('.section').forEach(sec => {
+      if (sec.querySelector('#wordOfDay') === null) sec.style.display = 'none';
+    });
+    saveToRecent(searchTerm);
+    loadRecent();
+    const hasBack = navigationHistory.length > 1;
+    
+    // If AI provided explanation, show it with news links
+    if (hasAIExplanation && partialNameData.explanation) {
+      container.innerHTML = `
+        <div class="word-card-modal person-card">
+          <div class="word-card-header">
+            <div class="word-card-header-top">
+              ${hasBack ? `<button class="word-card-back-btn" id="wordCardBackBtn" title="Back">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M19 12H5M12 19l-7-7 7-7"/>
+                </svg>
+              </button>` : ''}
+              <div class="word-card-word-container">
+                <div class="word-card-word-wrapper">
+                  <span class="word-card-word">${partialNameData.name || searchTerm}</span>
+                </div>
+                <button class="word-card-copy-btn" id="wordCardCopyBtn" title="Copy name">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="word-card-content person-content">
+            <div class="word-card-explanation person-bio">
+              ${partialNameData.explanation}
+            </div>
+            ${partialNameData.newsArticles && partialNameData.newsArticles.length > 0 ? `
+            <div class="person-news-section">
+              <div class="person-news-title">${translations[window.currentUILanguage || 'en']?.recentNews || 'Recent News'}</div>
+              <div class="person-news-list">
+                ${partialNameData.newsArticles.slice(0, 5).map((article, index) => `
+                  ${article.link ? `
+                  <a href="${article.link}" target="_blank" rel="noopener noreferrer" class="person-news-item" data-news-index="${index}" style="text-decoration: none; color: inherit; display: block;">
+                    <div class="person-news-title-text">${article.title}</div>
+                    ${article.date ? `<div class="person-news-date">${new Date(article.date).toLocaleDateString()}</div>` : ''}
+                  </a>
+                  ` : `
+                  <div class="person-news-item" data-news-index="${index}">
+                    <div class="person-news-title-text">${article.title}</div>
+                    ${article.date ? `<div class="person-news-date">${new Date(article.date).toLocaleDateString()}</div>` : ''}
+                  </div>
+                  `}
+                `).join('')}
+              </div>
+            </div>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    } else {
+      // AI failed or timed out - show news articles in hub as fallback
+      container.innerHTML = `
+        <div class="word-card-modal person-card">
+          <div class="word-card-header">
+            <div class="word-card-header-top">
+              ${hasBack ? `<button class="word-card-back-btn" id="wordCardBackBtn" title="Back">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M19 12H5M12 19l-7-7 7-7"/>
+                </svg>
+              </button>` : ''}
+              <div class="word-card-word-container">
+                <div class="word-card-word-wrapper">
+                  <span class="word-card-word">${partialNameData.name || searchTerm}</span>
+                </div>
+                <button class="word-card-copy-btn" id="wordCardCopyBtn" title="Copy name">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="word-card-content person-content">
+            <div class="word-card-explanation person-bio" style="color: var(--text-muted); font-style: italic;">
+              Search results and news articles related to "${partialNameData.name || searchTerm}"
+            </div>
+            ${partialNameData.newsArticles && partialNameData.newsArticles.length > 0 ? `
+            <div class="person-news-section">
+              <div class="person-news-title">${translations[window.currentUILanguage || 'en']?.recentNews || 'Recent News'}</div>
+              <div class="person-news-list">
+                ${partialNameData.newsArticles.map((article, index) => `
+                  ${article.link ? `
+                  <a href="${article.link}" target="_blank" rel="noopener noreferrer" class="person-news-item" data-news-index="${index}" style="text-decoration: none; color: inherit; display: block;">
+                    <div class="person-news-title-text">${article.title}</div>
+                    ${article.date ? `<div class="person-news-date">${new Date(article.date).toLocaleDateString()}</div>` : ''}
+                    ${article.description ? `<div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">${article.description}</div>` : ''}
+                  </a>
+                  ` : `
+                  <div class="person-news-item" data-news-index="${index}">
+                    <div class="person-news-title-text">${article.title}</div>
+                    ${article.date ? `<div class="person-news-date">${new Date(article.date).toLocaleDateString()}</div>` : ''}
+                    ${article.description ? `<div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">${article.description}</div>` : ''}
+                  </div>
+                  `}
+                `).join('')}
+              </div>
+            </div>
+            ` : `
+            <div class="person-news-section">
+              <div class="person-news-title">${translations[window.currentUILanguage || 'en']?.recentNews || 'Recent News'}</div>
+              <div style="padding: 20px; text-align: center; color: var(--text-muted);">
+                No recent news articles found for "${partialNameData.name || searchTerm}"
+              </div>
+            </div>
+            `}
+          </div>
+        </div>
+      `;
+    }
+    
+    // Event handlers
+    if (hasBack) {
+      const backBtn = document.getElementById('wordCardBackBtn');
+      if (backBtn) {
+        backBtn.addEventListener('click', () => {
+          navigationHistory.pop();
+          if (navigationHistory.length > 0) {
+            const prev = navigationHistory[navigationHistory.length - 1];
+            if (prev.type === 'search') {
+              performSearch(prev.query);
+            } else {
+              loadWordOfDay();
+            }
+          } else {
+            loadWordOfDay();
+          }
+        });
+      }
+    }
+    
+    const copyBtn = document.getElementById('wordCardCopyBtn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(partialNameData.name || searchTerm);
+          copyBtn.classList.add('copied');
+          setTimeout(() => copyBtn.classList.remove('copied'), 300);
+        } catch (err) {
+        }
+      });
+    }
+    
+    if (partialNameData.newsArticles && partialNameData.newsArticles.length > 0) {
+      container.querySelectorAll('.person-news-item').forEach((item, index) => {
+        item.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const article = partialNameData.newsArticles[index];
+          if (article && article.link) window.open(article.link, '_blank', 'noopener,noreferrer');
+        });
+      });
+    }
+  }
+
   function displayPlaceResult(searchTerm, placeData) {
     if (!placeData) {
       showWordDetails(searchTerm);
       return;
     }
-    if (!wordOfDayDiv) return;
+    // Get wordOfDayDiv - try multiple times if needed
+    let targetDiv = wordOfDayDiv || document.getElementById('wordOfDay');
+    if (!targetDiv) {
+      // Wait a bit and try again
+      setTimeout(() => {
+        targetDiv = document.getElementById('wordOfDay');
+        if (targetDiv) {
+          displayPlaceResult(searchTerm, placeData);
+        } else {
+        }
+      }, 100);
+      return;
+    }
     currentView = 'place';
     document.body.classList.add('hub-search-mode');
     document.body.classList.add('entity-card-view');
     
-    // Hide other sections
+    // Hide search bar completely
+    const searchContainer = document.querySelector('.search-container');
+    if (searchContainer) {
+      searchContainer.style.display = 'none';
+      searchContainer.style.visibility = 'hidden';
+    }
+    
+    // Hide all sections (favorites, recent, saved, word of day header)
     document.querySelectorAll('.section').forEach(section => {
-      if (section.querySelector('#wordOfDay') === null) {
         section.style.display = 'none';
-      }
+      section.style.visibility = 'hidden';
     });
+    
+    // Hide word of day header if it exists
+    const wordOfDayHeader = document.getElementById('wordOfDayHeader');
+    if (wordOfDayHeader) {
+      wordOfDayHeader.style.display = 'none';
+    }
+    
+    // Hide the content wrapper if it exists
+    const contentWrapper = document.querySelector('.content');
+    if (contentWrapper) {
+      contentWrapper.style.display = 'none';
+      contentWrapper.style.visibility = 'hidden';
+    }
+    
+    // Ensure wordOfDayDiv is visible and takes full space
+    targetDiv.style.display = 'block';
+    targetDiv.style.visibility = 'visible';
+    targetDiv.style.width = '100%';
+    targetDiv.style.margin = '0';
+    targetDiv.style.padding = '0';
     
     // Save to recent
     saveToRecent(searchTerm);
@@ -5401,7 +5786,7 @@
     
     // Build place card HTML
     const hasBack = navigationHistory.length > 1;
-    wordOfDayDiv.innerHTML = `
+    targetDiv.innerHTML = `
       <div class="word-card-modal person-card">
         <div class="word-card-header">
           <div class="word-card-header-top">
@@ -5492,14 +5877,13 @@
           copyBtn.classList.add('copied');
           setTimeout(() => copyBtn.classList.remove('copied'), 300);
         } catch (err) {
-          console.error('Failed to copy', err);
         }
       });
     }
     
     // Add click handlers for news items
     if (placeData.newsArticles && placeData.newsArticles.length > 0) {
-      wordOfDayDiv.querySelectorAll('.person-news-item').forEach((item, index) => {
+      targetDiv.querySelectorAll('.person-news-item').forEach((item, index) => {
         item.addEventListener('click', (e) => {
           e.stopPropagation();
           const article = placeData.newsArticles[index];
@@ -5531,9 +5915,23 @@
       searchContainer.style.visibility = 'visible';
     }
     
+    // Show content wrapper
+    const contentWrapper = document.querySelector('.content');
+    if (contentWrapper) {
+      contentWrapper.style.display = '';
+      contentWrapper.style.visibility = 'visible';
+    }
+    
+    // Show word of day header
+    const wordOfDayHeader = document.getElementById('wordOfDayHeader');
+    if (wordOfDayHeader) {
+      wordOfDayHeader.style.display = '';
+    }
+    
     // Show all sections
     document.querySelectorAll('.section').forEach(section => {
       section.style.display = 'block';
+      section.style.visibility = 'visible';
     });
     
     // Ensure wordOfDay div is visible
@@ -5545,7 +5943,9 @@
     loadFavorites();
     loadRecent();
     loadSaved();
-    loadWordOfDay();
+    // Load word of day asynchronously - don't block
+    loadWordOfDay().catch(err => {
+    });
   }
 
   async function showWordDetails(word, pushToHistory = true) {
@@ -5583,7 +5983,6 @@
           clearTimeout(timeout);
           
           if (chrome.runtime.lastError) {
-            console.error('Nimbus: Runtime error:', chrome.runtime.lastError.message);
             resolve({ error: chrome.runtime.lastError.message });
           } else if (!response) {
             resolve({ error: 'No response from background script' });
@@ -5643,9 +6042,6 @@
           }
         }
       } else {
-        console.error('🔴 POPUP: No response or invalid response');
-        console.error('🔴 POPUP: Response object:', resp);
-        console.error('🔴 POPUP: Response keys:', resp ? Object.keys(resp) : 'NULL');
         // For statements, show a helpful message instead of "did you mean"
         if (isStatement) {
           wordOfDayDiv.innerHTML = `
@@ -5690,11 +6086,6 @@
         }
       }
     } catch (e) {
-      console.error('🔴🔴🔴 POPUP: CATCH BLOCK TRIGGERED 🔴🔴🔴');
-      console.error('🔴 POPUP: Error type:', e?.name);
-      console.error('🔴 POPUP: Error message:', e?.message);
-      console.error('🔴 POPUP: Error stack:', e?.stack);
-      console.error('🔴 POPUP: Full error object:', e);
       // For statements, don't show "did you mean" - show error message instead
       if (isStatement) {
         const errorMsg = e?.message || 'Unknown error occurred';
@@ -5889,7 +6280,6 @@
         copyBtn.classList.add('copied');
         setTimeout(() => copyBtn.classList.remove('copied'), 2000);
         } catch (e) {
-          console.error('Failed to copy', e);
         }
       });
     }
@@ -6140,7 +6530,6 @@
                         btn.textContent = 'Copy';
                       }, 2000);
                     }).catch(err => {
-                      console.error('Failed to copy:', err);
                     });
                   });
                 });
@@ -6438,7 +6827,6 @@
                             btn.textContent = 'Copy';
                           }, 2000);
                         }).catch(err => {
-                          console.error('Failed to copy:', err);
                         });
                       });
                     });
@@ -6576,7 +6964,6 @@
                                         btn.textContent = 'Copy';
                                       }, 2000);
                                     }).catch(err => {
-                                      console.error('Failed to copy:', err);
                                     });
                                   });
                                 });
@@ -6634,11 +7021,9 @@
                       // Handler already attached, just update the conversation ID
                     }
                   } else {
-                    console.error('Nimbus: Chat elements not found after displayWordDetails');
                   }
               }
             }).catch(err => {
-              console.error('Nimbus: Error in displayWordDetails:', err);
             });
           }
         });
@@ -6661,21 +7046,18 @@
         
         const conversationId = deleteBtn.dataset.conversationId;
         if (!conversationId) {
-          console.error('No conversation ID found on delete button');
           return;
         }
         
         // Delete immediately without confirmation
         chrome.storage.local.get(['conversations'], (data) => {
           if (chrome.runtime.lastError) {
-            console.error('Error getting conversations:', chrome.runtime.lastError);
             return;
           }
           
           const conversations = data.conversations || {};
           
           if (!conversations[conversationId]) {
-            console.warn('Conversation not found:', conversationId);
             return;
           }
           
@@ -6685,7 +7067,6 @@
           // Save back to storage
           chrome.storage.local.set({ conversations }, () => {
             if (chrome.runtime.lastError) {
-              console.error('Error saving conversations:', chrome.runtime.lastError);
               return;
             }
             
@@ -6698,7 +7079,6 @@
       // Attach handler with capture phase to fire before row click handler
       conversationsDiv.addEventListener('click', conversationsDiv._deleteHandler, true);
     } catch (e) {
-      console.error('Error loading conversations', e);
       const conversationsDiv = document.getElementById('conversations');
       if (conversationsDiv) {
         conversationsDiv.innerHTML = '<div class="empty-state">Error loading conversations</div>';
@@ -6709,7 +7089,6 @@
   async function loadFavorites() {
     try {
       if (!favoritesDiv) {
-        console.error('Nimbus: favoritesDiv not found');
         return;
       }
       const favorites = await getStorage('favorites') || [];
@@ -6748,7 +7127,6 @@
         });
       });
     } catch (e) {
-      console.error('Error loading favorites', e);
       favoritesDiv.innerHTML = '<div class="empty-state">Error loading favorites</div>';
     }
   }
@@ -6759,7 +7137,6 @@
   async function loadRecent() {
     try {
       if (!recentDiv) {
-        console.error('Nimbus: recentDiv not found');
         return;
       }
       let recent = await getStorage('recentSearches') || [];
@@ -6794,7 +7171,6 @@
 
       renderRecentSearches();
     } catch (e) {
-      console.error('Error loading recent', e);
       recentDiv.innerHTML = '<div class="empty-state">Error loading recent searches</div>';
     }
   }
@@ -6873,7 +7249,6 @@
             await loadRecent();
             showNotification(t.recentSearchesCleared || 'All recent searches cleared!', 'success');
           } catch (err) {
-            console.error('Nimbus: Error in clear all:', err);
             showNotification('Error clearing recent searches. Please try again.', 'error');
           }
         });
@@ -6892,9 +7267,7 @@
         recentExpanded = false;
         renderRecentSearches();
       });
-        console.log('Show Less button attached for recent searches');
       } else {
-        console.error('Show Less button not found in DOM!');
       }
     } else {
       // Show first 10 with Load More button - use same table style
@@ -6946,9 +7319,7 @@
           recentExpanded = true;
           renderRecentSearches();
         });
-          console.log('Load More button attached for recent searches');
         } else {
-          console.error('Load More button not found in DOM!');
         }
       }
     }
@@ -7018,14 +7389,12 @@
         });
       });
     } catch (e) {
-      console.error('Error loading saved', e);
       if (savedDiv) savedDiv.innerHTML = '<div class="empty-state">Error loading saved.</div>';
     }
   }
 
   async function loadWordOfDay(retryCount = 0) {
     if (!wordOfDayDiv) {
-      console.error('Nimbus: wordOfDayDiv not found');
       return;
     }
     const pending = await new Promise(r => { chrome.storage.local.get(['pendingSearch'], x => r(x.pendingSearch)); });
@@ -7064,18 +7433,32 @@
       let word;
       if (cachedWord) {
         word = cachedWord;
-        console.log('Nimbus: Using cached word of the day:', word);
       } else {
-        // Get a new random word and cache it
-        word = await getRandomWord(currentLanguage, storageData.userEmail || 'anonymous', today);
+        // Get a new random word and cache it - with timeout to prevent hanging
+        try {
+          const wordPromise = getRandomWord(currentLanguage, storageData.userEmail || 'anonymous', today);
+          const wordTimeout = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Word generation timeout')), 15000) // 15 second max
+          );
+          word = await Promise.race([wordPromise, wordTimeout]);
+          
         if (word) {
           chrome.storage.local.set({ 
             wordOfDay: word, 
             wordOfDayDate: today,
             wordOfDayLanguage: currentLanguage
           }, () => {
-            console.log('Nimbus: Cached new word of the day:', word, 'for date:', today, 'language:', currentLanguage);
           });
+          }
+        } catch (wordError) {
+          // Use fallback word
+          const fallbackWords = {
+            en: 'serendipity',
+            es: 'serendipidad',
+            fr: 'sérendipité',
+            de: 'Serendipität'
+          };
+          word = fallbackWords[currentLanguage] || fallbackWords.en;
         }
       }
       
@@ -7094,7 +7477,6 @@
       
       // Check if wordOfDayDiv still exists (might have been removed)
       if (!wordOfDayDiv || !wordOfDayDiv.parentNode) {
-        console.warn('Nimbus: wordOfDayDiv was removed, skipping display');
         return;
       }
       
@@ -7106,7 +7488,6 @@
       if (details && details.explanation) {
         displayWordOfDay(word, details);
       } else {
-        console.warn('Nimbus: No explanation in details, showing fallback for word:', word);
         const currentLang = window.currentUILanguage || 'en';
         displayWordOfDay(word, {
           explanation: currentLang === 'de' 
@@ -7118,11 +7499,9 @@
         });
       }
     } catch (e) {
-      console.error('Nimbus: Error loading word of day:', e);
 
       if (retryCount < 3) {
         const delay = Math.pow(2, retryCount) * 1000;
-        console.log(`[WOTD] Retrying word of day in ${delay}ms (attempt ${retryCount + 1}/3)`);
         setTimeout(() => loadWordOfDay(retryCount + 1), delay);
         return;
       }
@@ -7173,226 +7552,149 @@
       const seenWords = storageData[`seenWords_${language}`] || [];
       const favorites = storageData.favorites || [];
       
-      // Large word lists - common words from frequency lists
-      // These are real dictionary words that should exist in the API
-      const wordLists = {
-        en: [
-          'serendipity', 'ephemeral', 'eloquent', 'resilient', 'mellifluous', 'ubiquitous', 'perspicacious', 
-          'luminous', 'effervescent', 'quintessential', 'enigmatic', 'pragmatic', 'vivacious', 'tenacious', 
-          'magnanimous', 'sagacious', 'benevolent', 'audacious', 'fastidious', 'gregarious', 'diligent', 
-          'profound', 'ingenious', 'meticulous', 'ambitious', 'courageous', 'generous', 'optimistic', 
-          'passionate', 'eloquence', 'resilience', 'ubiquity', 'luminosity', 'effervescence', 'enigma', 
-          'pragmatism', 'vivacity', 'tenacity', 'magnanimity', 'sagacity', 'benevolence', 'audacity', 
-          'fastidiousness', 'gregariousness', 'diligence', 'profundity', 'ingenuity', 'meticulousness', 
-          'ambition', 'courage', 'generosity', 'optimism', 'passion', 'wanderlust', 'petrichor', 
-          'epiphany', 'nostalgia', 'melancholy', 'euphoria', 'serenity', 'tranquility', 'harmony', 
-          'wisdom', 'curiosity', 'wonder', 'awe', 'gratitude', 'compassion', 'empathy', 'kindness', 
-          'humility', 'integrity', 'honesty', 'loyalty', 'devotion', 'dedication', 'perseverance', 
-          'determination', 'fortitude', 'valor', 'bravery', 'heroism', 'altruism', 'philanthropy', 
-          'benevolence', 'charity', 'generosity', 'magnanimity', 'graciousness', 'courtesy', 
-          'chivalry', 'gallantry', 'nobility', 'dignity', 'elegance', 'sophistication', 'refinement', 
-          'cultivation', 'erudition', 'scholarship', 'learning', 'knowledge', 'wisdom', 'insight', 
-          'perception', 'discernment', 'acumen', 'shrewdness', 'astuteness', 'cleverness', 'wit', 
-          'intelligence', 'brilliance', 'genius', 'talent', 'aptitude', 'skill', 'proficiency', 
-          'expertise', 'mastery', 'virtuosity', 'artistry', 'creativity', 'innovation', 'originality', 
-          'uniqueness', 'distinctiveness', 'individuality', 'personality', 'character', 'essence', 
-          'quintessence', 'core', 'heart', 'soul', 'spirit', 'nature', 'temperament', 'disposition', 
-          'mood', 'atmosphere', 'ambiance', 'aura', 'vibe', 'energy', 'vitality', 'vigor', 'vibrancy', 
-          'liveliness', 'animation', 'exuberance', 'enthusiasm', 'zeal', 'ardor', 'fervor', 'passion', 
-          'intensity', 'ferocity', 'vehemence', 'impetuosity', 'rashness', 'recklessness', 'boldness', 
-          'daring', 'fearlessness', 'intrepidity', 'dauntlessness', 'fearlessness', 'courage', 
-          'bravery', 'valor', 'heroism', 'gallantry', 'chivalry', 'nobility', 'honor', 'dignity', 
-          'respect', 'reverence', 'veneration', 'adoration', 'admiration', 'esteem', 'regard', 
-          'appreciation', 'gratitude', 'thankfulness', 'indebtedness', 'obligation', 'duty', 
-          'responsibility', 'accountability', 'liability', 'commitment', 'dedication', 'devotion', 
-          'loyalty', 'fidelity', 'faithfulness', 'constancy', 'steadfastness', 'persistence', 
-          'perseverance', 'tenacity', 'determination', 'resolve', 'willpower', 'self-control', 
-          'discipline', 'restraint', 'moderation', 'temperance', 'sobriety', 'seriousness', 
-          'solemnity', 'gravity', 'weight', 'importance', 'significance', 'consequence', 'impact', 
-          'influence', 'effect', 'result', 'outcome', 'consequence', 'aftermath', 'repercussion', 
-          'ramification', 'implication', 'meaning', 'significance', 'import', 'substance', 'essence', 
-          'core', 'heart', 'center', 'nucleus', 'kernel', 'gist', 'pith', 'marrow', 'crux', 'hub', 
-          'focus', 'emphasis', 'stress', 'accent', 'highlight', 'spotlight', 'limelight', 'attention', 
-          'notice', 'recognition', 'acknowledgment', 'appreciation', 'understanding', 'comprehension', 
-          'grasp', 'perception', 'awareness', 'consciousness', 'cognizance', 'realization', 
-          'apprehension', 'discernment', 'insight', 'penetration', 'perceptiveness', 'sensitivity', 
-          'responsiveness', 'receptivity', 'openness', 'flexibility', 'adaptability', 'versatility', 
-          'resourcefulness', 'ingenuity', 'creativity', 'originality', 'innovation', 'novelty', 
-          'freshness', 'newness', 'uniqueness', 'distinctiveness', 'individuality', 'singularity', 
-          'peculiarity', 'idiosyncrasy', 'quirk', 'eccentricity', 'oddity', 'strangeness', 
-          'unusualness', 'rarity', 'uncommonness', 'scarcity', 'paucity', 'dearth', 'lack', 
-          'shortage', 'deficiency', 'insufficiency', 'inadequacy', 'incompleteness', 'imperfection', 
-          'flaw', 'defect', 'fault', 'blemish', 'stain', 'spot', 'mark', 'taint', 'taint', 'taint'
-        ],
-        es: [
-          'serendipidad', 'efímero', 'elocuente', 'resistente', 'melifluo', 'ubicuo', 'perspicaz', 
-          'luminoso', 'efervescente', 'quintaesencial', 'enigmático', 'pragmático', 'vivaz', 
-          'tenaz', 'magnánimo', 'sagaz', 'benévolo', 'audaz', 'fastidioso', 'gregario', 'diligente', 
-          'profundo', 'ingenioso', 'meticuloso', 'ambicioso', 'valiente', 'generoso', 'optimista', 
-          'apasionado', 'sabiduría', 'elocuencia', 'resistencia', 'ubicuidad', 'luminosidad', 
-          'efervescencia', 'enigma', 'pragmatismo', 'vivacidad', 'tenacidad', 'magnanimidad', 
-          'sagacidad', 'benevolencia', 'audacia', 'fastidio', 'gregarismo', 'diligencia', 
-          'profundidad', 'ingenio', 'meticulosidad', 'ambición', 'valentía', 'generosidad', 
-          'optimismo', 'pasión', 'nostalgia', 'melancolía', 'euforia', 'serenidad', 'tranquilidad', 
-          'armonía', 'sabiduría', 'curiosidad', 'asombro', 'gratitud', 'compasión', 'empatía', 
-          'bondad', 'humildad', 'integridad', 'honestidad', 'lealtad', 'devoción', 'dedicación', 
-          'perseverancia', 'determinación', 'fortaleza', 'valor', 'heroísmo', 'altruismo', 
-          'filantropía', 'benevolencia', 'caridad', 'generosidad', 'magnanimidad', 'cortesía', 
-          'caballerosidad', 'nobleza', 'dignidad', 'elegancia', 'sofisticación', 'refinamiento', 
-          'cultivo', 'erudición', 'erudición', 'aprendizaje', 'conocimiento', 'sabiduría', 
-          'perspicacia', 'percepción', 'discernimiento', 'agudeza', 'astucia', 'inteligencia', 
-          'brillantez', 'genio', 'talento', 'aptitud', 'habilidad', 'competencia', 'experiencia', 
-          'maestría', 'virtuosismo', 'arte', 'creatividad', 'innovación', 'originalidad', 
-          'singularidad', 'distintividad', 'individualidad', 'personalidad', 'carácter', 'esencia', 
-          'quintaesencia', 'núcleo', 'corazón', 'alma', 'espíritu', 'naturaleza', 'temperamento', 
-          'disposición', 'estado de ánimo', 'atmósfera', 'ambiente', 'aura', 'energía', 'vitalidad', 
-          'vigor', 'vibración', 'vivacidad', 'animación', 'exuberancia', 'entusiasmo', 'celo', 
-          'ardor', 'fervor', 'pasión', 'intensidad', 'ferocidad', 'vehemencia', 'impetuosidad', 
-          'temeridad', 'audacia', 'intrepidez', 'valentía', 'heroísmo', 'caballerosidad', 
-          'nobleza', 'honor', 'dignidad', 'respeto', 'reverencia', 'veneración', 'adoración', 
-          'admiración', 'estima', 'aprecio', 'gratitud', 'agradecimiento', 'obligación', 'deber', 
-          'responsabilidad', 'compromiso', 'dedicación', 'devoción', 'lealtad', 'fidelidad', 
-          'constancia', 'persistencia', 'perseverancia', 'tenacidad', 'determinación', 'resolución', 
-          'fuerza de voluntad', 'autocontrol', 'disciplina', 'restricción', 'moderación', 
-          'templanza', 'sobriedad', 'seriedad', 'solemnidad', 'gravedad', 'peso', 'importancia', 
-          'significancia', 'consecuencia', 'impacto', 'influencia', 'efecto', 'resultado', 
-          'consecuencia', 'repercusión', 'ramificación', 'implicación', 'significado', 
-          'significancia', 'importancia', 'sustancia', 'esencia', 'núcleo', 'corazón', 'centro', 
-          'foco', 'énfasis', 'acento', 'destacado', 'atención', 'reconocimiento', 
-          'agradecimiento', 'comprensión', 'percepción', 'conciencia', 'realización', 
-          'aprehensión', 'discernimiento', 'perspicacia', 'penetración', 'perceptividad', 
-          'sensibilidad', 'responsividad', 'receptividad', 'apertura', 'flexibilidad', 
-          'adaptabilidad', 'versatilidad', 'ingenio', 'creatividad', 'originalidad', 
-          'innovación', 'novedad', 'frescura', 'singularidad', 'distintividad', 'individualidad', 
-          'peculiaridad', 'idiosincrasia', 'rareza', 'singularidad', 'rareza', 'escasez', 
-          'escasez', 'deficiencia', 'insuficiencia', 'inadecuación', 'incompletitud', 
-          'imperfección', 'defecto', 'falla', 'mancha', 'marca', 'mancha', 'mancha'
-        ],
-        fr: [
-          'sérendipité', 'éphémère', 'éloquent', 'résilient', 'méliflu', 'ubiquitaire', 'perspicace', 
-          'lumineux', 'effervescent', 'quintessentiel', 'énigmatique', 'pragmatique', 'vivace', 
-          'tenace', 'magnanime', 'sagace', 'bienveillant', 'audacieux', 'fastidieux', 'grégaire', 
-          'diligent', 'profond', 'ingénieux', 'méticuleux', 'ambitieux', 'courageux', 'généreux', 
-          'optimiste', 'passionné', 'sagesse', 'éloquence', 'résilience', 'ubiquité', 'luminosité', 
-          'effervescence', 'énigme', 'pragmatisme', 'vivacité', 'ténacité', 'magnanimité', 
-          'sagacité', 'bienveillance', 'audace', 'fastidiosité', 'grégarité', 'diligence', 
-          'profondeur', 'ingéniosité', 'méticulosité', 'ambition', 'courage', 'générosité', 
-          'optimisme', 'passion', 'nostalgie', 'mélancolie', 'euphorie', 'sérénité', 'tranquillité', 
-          'harmonie', 'sagesse', 'curiosité', 'émerveillement', 'gratitude', 'compassion', 
-          'empathie', 'bonté', 'humilité', 'intégrité', 'honnêteté', 'loyauté', 'dévotion', 
-          'dédicace', 'persévérance', 'détermination', 'force', 'valeur', 'héroïsme', 
-          'altruisme', 'philanthropie', 'bienveillance', 'charité', 'générosité', 'magnanimité', 
-          'grâce', 'courtoisie', 'chevalerie', 'noblesse', 'dignité', 'élégance', 'sophistication', 
-          'raffinement', 'culture', 'érudition', 'savoir', 'connaissance', 'sagesse', 'perspicacité', 
-          'perception', 'discernement', 'acuité', 'astuce', 'intelligence', 'brillance', 'génie', 
-          'talent', 'aptitude', 'compétence', 'expertise', 'maîtrise', 'virtuosité', 'art', 
-          'créativité', 'innovation', 'originalité', 'unicité', 'distinctivité', 'individualité', 
-          'personnalité', 'caractère', 'essence', 'quintessence', 'noyau', 'cœur', 'âme', 
-          'esprit', 'nature', 'tempérament', 'disposition', 'humeur', 'atmosphère', 'ambiance', 
-          'aura', 'énergie', 'vitalité', 'vigueur', 'vivacité', 'animation', 'exubérance', 
-          'enthousiasme', 'zèle', 'ardeur', 'ferveur', 'passion', 'intensité', 'férocité', 
-          'véhémence', 'impétuosité', 'témérité', 'audace', 'intrépidité', 'courage', 'bravoure', 
-          'valeur', 'héroïsme', 'chevalerie', 'noblesse', 'honneur', 'dignité', 'respect', 
-          'révérence', 'vénération', 'adoration', 'admiration', 'estime', 'appréciation', 
-          'gratitude', 'reconnaissance', 'obligation', 'devoir', 'responsabilité', 'engagement', 
-          'dédicace', 'dévotion', 'loyauté', 'fidélité', 'constance', 'persistance', 
-          'persévérance', 'ténacité', 'détermination', 'résolution', 'volonté', 'maîtrise de soi', 
-          'discipline', 'restriction', 'modération', 'tempérance', 'sobriété', 'sérieux', 
-          'solennité', 'gravité', 'poids', 'importance', 'signification', 'conséquence', 
-          'impact', 'influence', 'effet', 'résultat', 'conséquence', 'répercussion', 
-          'ramification', 'implication', 'signification', 'importance', 'substance', 'essence', 
-          'noyau', 'cœur', 'centre', 'foyer', 'accent', 'soulignement', 'attention', 
-          'reconnaissance', 'appréciation', 'compréhension', 'perception', 'conscience', 
-          'réalisation', 'appréhension', 'discernement', 'perspicacité', 'pénétration', 
-          'perceptivité', 'sensibilité', 'réactivité', 'réceptivité', 'ouverture', 'flexibilité', 
-          'adaptabilité', 'polyvalence', 'ingéniosité', 'créativité', 'originalité', 
-          'innovation', 'nouveauté', 'fraîcheur', 'unicité', 'distinctivité', 'individualité', 
-          'particularité', 'idiosyncrasie', 'bizarrerie', 'excentricité', 'singularité', 
-          'rareté', 'rareté', 'rareté', 'pénurie', 'déficience', 'insuffisance', 'inadéquation', 
-          'incomplétude', 'imperfection', 'défaut', 'tache', 'marque', 'taint', 'taint', 'taint'
-        ],
-        de: [
-          'Serendipität', 'flüchtig', 'eloquent', 'widerstandsfähig', 'melodisch', 'allgegenwärtig', 
-          'scharfsinnig', 'leuchtend', 'sprudelnd', 'quintessentiell', 'rätselhaft', 'pragmatisch', 
-          'lebhaft', 'beharrlich', 'großmütig', 'weise', 'wohlwollend', 'kühn', 'pingelig', 
-          'gesellig', 'fleißig', 'tiefgründig', 'genial', 'sorgfältig', 'ehrgeizig', 'mutig', 
-          'großzügig', 'optimistisch', 'leidenschaftlich', 'Weisheit', 'Beredsamkeit', 
-          'Widerstandsfähigkeit', 'Allgegenwart', 'Leuchtkraft', 'Sprudeln', 'Rätsel', 
-          'Pragmatismus', 'Lebhaftigkeit', 'Beharrlichkeit', 'Großmut', 'Weisheit', 
-          'Wohlwollen', 'Kühnheit', 'Pingeligkeit', 'Geselligkeit', 'Fleiß', 'Tiefe', 
-          'Genialität', 'Sorgfalt', 'Ehrgeiz', 'Mut', 'Großzügigkeit', 'Optimismus', 
-          'Leidenschaft', 'Nostalgie', 'Melancholie', 'Euphorie', 'Gelassenheit', 'Ruhe', 
-          'Harmonie', 'Weisheit', 'Neugier', 'Staunen', 'Dankbarkeit', 'Mitgefühl', 
-          'Empathie', 'Güte', 'Demut', 'Integrität', 'Ehrlichkeit', 'Loyalität', 'Hingabe', 
-          'Hingabe', 'Ausdauer', 'Entschlossenheit', 'Stärke', 'Mut', 'Heldentum', 
-          'Altruismus', 'Philanthropie', 'Wohlwollen', 'Wohltätigkeit', 'Großzügigkeit', 
-          'Großmut', 'Anmut', 'Höflichkeit', 'Ritterlichkeit', 'Adel', 'Würde', 'Eleganz', 
-          'Sophistication', 'Raffinesse', 'Kultiviertheit', 'Gelehrsamkeit', 'Lernen', 
-          'Wissen', 'Weisheit', 'Einsicht', 'Wahrnehmung', 'Urteilsvermögen', 'Scharfsinn', 
-          'Schlauheit', 'Intelligenz', 'Brillanz', 'Genie', 'Talent', 'Begabung', 'Fähigkeit', 
-          'Kompetenz', 'Expertise', 'Meisterschaft', 'Virtuosität', 'Kunst', 'Kreativität', 
-          'Innovation', 'Originalität', 'Einzigartigkeit', 'Unterscheidungskraft', 
-          'Individualität', 'Persönlichkeit', 'Charakter', 'Essenz', 'Quintessenz', 'Kern', 
-          'Herz', 'Seele', 'Geist', 'Natur', 'Temperament', 'Disposition', 'Stimmung', 
-          'Atmosphäre', 'Ambiente', 'Aura', 'Energie', 'Vitalität', 'Kraft', 'Lebendigkeit', 
-          'Animation', 'Überschwang', 'Enthusiasmus', 'Eifer', 'Leidenschaft', 'Intensität', 
-          'Wildheit', 'Heftigkeit', 'Ungestüm', 'Tollkühnheit', 'Kühnheit', 'Furchtlosigkeit', 
-          'Mut', 'Tapferkeit', 'Heldentum', 'Ritterlichkeit', 'Adel', 'Ehre', 'Würde', 
-          'Respekt', 'Ehrfurcht', 'Verehrung', 'Anbetung', 'Bewunderung', 'Achtung', 
-          'Wertschätzung', 'Dankbarkeit', 'Verpflichtung', 'Pflicht', 'Verantwortung', 
-          'Engagement', 'Hingabe', 'Loyalität', 'Treue', 'Beständigkeit', 'Beharrlichkeit', 
-          'Ausdauer', 'Entschlossenheit', 'Entschlossenheit', 'Willenskraft', 'Selbstkontrolle', 
-          'Disziplin', 'Zurückhaltung', 'Mäßigung', 'Mäßigkeit', 'Nüchternheit', 'Ernst', 
-          'Feierlichkeit', 'Schwere', 'Gewicht', 'Bedeutung', 'Bedeutung', 'Konsequenz', 
-          'Auswirkung', 'Einfluss', 'Effekt', 'Ergebnis', 'Konsequenz', 'Nachwirkung', 
-          'Auswirkung', 'Verzweigung', 'Implikation', 'Bedeutung', 'Bedeutung', 'Substanz', 
-          'Essenz', 'Kern', 'Herz', 'Zentrum', 'Fokus', 'Betonung', 'Akzent', 'Hervorhebung', 
-          'Aufmerksamkeit', 'Anerkennung', 'Wertschätzung', 'Verständnis', 'Wahrnehmung', 
-          'Bewusstsein', 'Erkenntnis', 'Auffassung', 'Urteilsvermögen', 'Einsicht', 
-          'Durchdringung', 'Wahrnehmungsfähigkeit', 'Empfindlichkeit', 'Reaktionsfähigkeit', 
-          'Empfänglichkeit', 'Offenheit', 'Flexibilität', 'Anpassungsfähigkeit', 'Vielseitigkeit', 
-          'Einfallsreichtum', 'Kreativität', 'Originalität', 'Innovation', 'Neuheit', 
-          'Frische', 'Einzigartigkeit', 'Unterscheidungskraft', 'Individualität', 
-          'Besonderheit', 'Idiosynkrasie', 'Eigenart', 'Exzentrizität', 'Seltsamkeit', 
-          'Seltenheit', 'Seltenheit', 'Seltenheit', 'Knappheit', 'Mangel', 'Unzulänglichkeit', 
-          'Unvollständigkeit', 'Unvollkommenheit', 'Fehler', 'Defekt', 'Makel', 'Fleck', 
-          'Markierung', 'Fleck', 'Fleck', 'Fleck'
-        ]
+      // Language code mapping for API
+      const langMap = {
+        en: 'en',
+        es: 'es',
+        fr: 'fr',
+        de: 'de',
+        it: 'it',
+        pt: 'pt-br',
+        ru: 'ru',
+        ja: 'ja',
+        zh: 'zh',
+        ko: 'ko',
+        ar: 'ar',
+        hi: 'hi',
+        nl: 'nl',
+        sv: 'sv',
+        pl: 'pl'
       };
       
-      // For other languages, use a smaller but still substantial list
-      // In production, these would be expanded similarly
-      const fallbackLists = {
-        it: ['serendipità', 'effimero', 'eloquente', 'resiliente', 'melifluo', 'ubiquo', 'perspicace', 'luminoso', 'effervescente', 'quintessenziale', 'enigmatico', 'pragmatico', 'vivace', 'tenace', 'magnanimo', 'saggio', 'benevolo', 'audace', 'fastidioso', 'gregario', 'diligente', 'profondo', 'ingegnoso', 'meticoloso', 'ambizioso', 'coraggioso', 'generoso', 'ottimista', 'appassionato', 'saggezza'],
-        pt: ['serendipidade', 'efêmero', 'eloquente', 'resiliente', 'melífluo', 'ubíquo', 'perspicaz', 'luminoso', 'efervescente', 'quintessencial', 'enigmático', 'pragmático', 'vivaz', 'tenaz', 'magnânimo', 'sagaz', 'benevolente', 'audaz', 'fastidioso', 'gregário', 'diligente', 'profundo', 'engenhoso', 'meticuloso', 'ambicioso', 'corajoso', 'generoso', 'otimista', 'apaixonado', 'sabedoria'],
-        ru: ['серендипность', 'эфемерный', 'красноречивый', 'устойчивый', 'мелодичный', 'вездесущий', 'проницательный', 'светящийся', 'игривый', 'квинтэссенция', 'загадочный', 'прагматичный', 'живой', 'упорный', 'великодушный', 'мудрый', 'доброжелательный', 'смелый', 'привередливый', 'общительный', 'усердный', 'глубокий', 'гениальный', 'тщательный', 'амбициозный', 'храбрый', 'щедрый', 'оптимистичный', 'страстный', 'мудрость'],
-        ja: ['偶然の幸運', 'はかない', '雄弁な', '回復力のある', '甘美な', '遍在する', '洞察力のある', '光る', '泡立つ', '典型', '謎めいた', '実用的な', '活気のある', '粘り強い', '寛大な', '賢明な', '親切な', '大胆な', '気難しい', '社交的な', '勤勉な', '深い', '独創的な', '細心の', '野心的な', '勇敢な', '寛大な', '楽観的な', '情熱的な', '知恵'],
-        zh: ['意外发现', '短暂的', '雄辩的', '有弹性的', '甜美的', '无处不在的', '敏锐的', '发光的', '冒泡的', '典型的', '神秘的', '实用的', '活泼的', '坚韧的', '宽宏大量的', '明智的', '仁慈的', '大胆的', '挑剔的', '合群的', '勤奋的', '深刻的', '有创造力的', '细致的', '有野心的', '勇敢的', '慷慨的', '乐观的', '热情的', '智慧'],
-        ko: ['우연한 발견', '덧없는', '웅변의', '회복력 있는', '달콤한', '어디에나 있는', '통찰력 있는', '빛나는', '거품나는', '전형적인', '수수께끼 같은', '실용적인', '활기찬', '끈질긴', '관대한', '현명한', '친절한', '대담한', '까다로운', '사교적인', '부지런한', '깊은', '독창적인', '꼼꼼한', '야심찬', '용감한', '관대한', '낙관적인', '열정적인', '지혜'],
-        ar: ['اكتشاف بالصدفة', 'عابر', 'بليغ', 'مرن', 'عذب', 'موجود في كل مكان', 'ثاقب', 'مضيء', 'متدفق', 'مثالي', 'غامض', 'عملي', 'حيوي', 'عنيد', 'كريم', 'حكيم', 'طيب', 'جريء', 'صعب الإرضاء', 'اجتماعي', 'مجتهد', 'عميق', 'مبتكر', 'دقيق', 'طموح', 'شجاع', 'سخي', 'متفائل', 'شغوف', 'حكمة'],
-        hi: ['संयोग', 'अस्थायी', 'वाक्पटु', 'लचीला', 'मधुर', 'सर्वव्यापी', 'तीक्ष्ण', 'चमकदार', 'उत्साही', 'सार', 'रहस्यमय', 'व्यावहारिक', 'जीवंत', 'दृढ़', 'उदार', 'बुद्धिमान', 'दयालु', 'साहसी', 'सावधान', 'सामाजिक', 'परिश्रमी', 'गहरा', 'प्रतिभाशाली', 'सतर्क', 'महत्वाकांक्षी', 'बहादुर', 'उदार', 'आशावादी', 'उत्साही', 'ज्ञान'],
-        nl: ['toevalstreffer', 'vluchtig', 'welsprekend', 'veerkrachtig', 'welluidend', 'alomtegenwoordig', 'scherpzinnig', 'stralend', 'bruisend', 'quintessentieel', 'raadselachtig', 'pragmatisch', 'levendig', 'volhardend', 'grootmoedig', 'wijs', 'welwillend', 'gedurfd', 'kieskeurig', 'sociaal', 'ijverig', 'diepgaand', 'geniaal', 'zorgvuldig', 'ambitieus', 'moedig', 'vrijgevig', 'optimistisch', 'gepassioneerd', 'wijsheid'],
-        sv: ['lyckträff', 'flyktig', 'vältalig', 'motståndskraftig', 'melodisk', 'allestädes närvarande', 'skarpsinnig', 'strålande', 'sprudlande', 'kvintessentiell', 'gåtfull', 'pragmatisk', 'livlig', 'ihärdig', 'storsint', 'vis', 'välvillig', 'djärv', 'petig', 'sällskaplig', 'flitig', 'djup', 'genial', 'noggrann', 'ambitiös', 'modig', 'generös', 'optimistisk', 'passionerad', 'visdom'],
-        pl: ['szczęśliwy traf', 'ulotny', 'wymowny', 'odporny', 'melodyjny', 'wszechobecny', 'przenikliwy', 'świecący', 'musujący', 'kwintesencjalny', 'tajemniczy', 'pragmatyczny', 'żywy', 'wytrwały', 'wielkoduszny', 'mądry', 'życzliwy', 'śmiały', 'wybredny', 'towarzyski', 'pilny', 'głęboki', 'genialny', 'staranny', 'ambitny', 'odważny', 'hojny', 'optymistyczny', 'namiętny', 'mądrość']
-      };
+      const apiLang = langMap[language] || 'en';
       
-      // Get word list for current language, fallback to English
-      const words = wordLists[language] || fallbackLists[language] || wordLists.en;
+      // Try to fetch random word from free API (prefer longer words for complexity)
+      // Limit attempts to prevent long delays
+      let selectedWord = null;
+      const maxAttempts = 3; // Reduced from 10 to prevent long delays
+      
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          // Use random-word-api.herokuapp.com (free, no API key required)
+          // Request longer words (8+ chars) for more complex vocabulary
+          const minLength = 6 + (attempt * 2); // Start at 6, increase to 8, 10, etc.
+          const maxLength = 20;
+          
+          const apiUrl = `https://random-word-api.herokuapp.com/word?number=10&length=${minLength}&lang=${apiLang}`;
+          
+          // Add timeout to prevent hanging
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
+          
+          const response = await fetch(apiUrl, {
+            method: 'GET',
+            headers: {
+              'Accept': 'application/json'
+            },
+            signal: controller.signal
+          });
+          
+          clearTimeout(timeoutId);
+          
+          if (!response.ok) {
+            throw new Error(`API returned ${response.status}`);
+          }
+          
+          const words = await response.json();
+          
+          if (words && Array.isArray(words) && words.length > 0) {
+            // Filter out seen words and pick a random one
+            const availableWords = words.filter(word => 
+              word && 
+              typeof word === 'string' && 
+              word.length >= minLength && 
+              !seenWords.includes(word.toLowerCase()) &&
+              !favorites.includes(word.toLowerCase())
+            );
+            
+            if (availableWords.length > 0) {
+              // Generate deterministic seed from date + user email
+              const seed = generateSeed(date, userEmail);
+              const random = seededRandom(seed + attempt);
+              const randomIndex = Math.floor(random() * availableWords.length);
+              selectedWord = availableWords[randomIndex].toLowerCase();
+              break;
+            }
+          }
+        } catch (apiError) {
+          // Don't log AbortError (timeout) as warning, it's expected
+          if (apiError.name !== 'AbortError') {
+          }
+          // Try fallback API on last attempt
+          if (attempt === maxAttempts - 1) {
+            try {
+              // Fallback to vercel.app API
+              const fallbackUrl = `https://random-word-api.vercel.app/api?words=10&length=${6 + attempt * 2}`;
+              
+              // Add timeout to prevent hanging
+              const fallbackController = new AbortController();
+              const fallbackTimeoutId = setTimeout(() => fallbackController.abort(), 3000); // 3 second timeout
+              
+              const fallbackResponse = await fetch(fallbackUrl, {
+                signal: fallbackController.signal
+              });
+              
+              clearTimeout(fallbackTimeoutId);
+              
+              if (fallbackResponse.ok) {
+                const fallbackData = await fallbackResponse.json();
+                if (fallbackData && Array.isArray(fallbackData) && fallbackData.length > 0) {
+                  const availableWords = fallbackData.filter(word => 
+                    word && 
+                    typeof word === 'string' && 
+                    !seenWords.includes(word.toLowerCase()) &&
+                    !favorites.includes(word.toLowerCase())
+                  );
+                  if (availableWords.length > 0) {
+                    const seed = generateSeed(date, userEmail);
+                    const random = seededRandom(seed + attempt);
+                    const randomIndex = Math.floor(random() * availableWords.length);
+                    selectedWord = availableWords[randomIndex].toLowerCase();
+                    break;
+                  }
+                }
+              }
+            } catch (fallbackError) {
+            }
+          }
+        }
+      }
+      
+      // If API failed completely, use minimal fallback list (only for emergency)
+      if (!selectedWord) {
+        const minimalFallback = {
+          en: ['serendipity', 'ephemeral', 'eloquent', 'resilient', 'mellifluous', 'ubiquitous', 'perspicacious', 'luminous', 'effervescent', 'quintessential'],
+          es: ['serendipidad', 'efímero', 'elocuente', 'resistente', 'melifluo', 'ubicuo', 'perspicaz', 'luminoso', 'efervescente', 'quintaesencial'],
+          fr: ['sérendipité', 'éphémère', 'éloquent', 'résilient', 'méliflu', 'ubiquitaire', 'perspicace', 'lumineux', 'effervescent', 'quintessentiel'],
+          de: ['Serendipität', 'flüchtig', 'eloquent', 'widerstandsfähig', 'melodisch', 'allgegenwärtig', 'scharfsinnig', 'leuchtend', 'sprudelnd', 'quintessentiell']
+        };
+        
+        const words = minimalFallback[language] || minimalFallback.en;
       
       // Generate deterministic seed from date + user email
       const seed = generateSeed(date, userEmail);
       const random = seededRandom(seed);
       
-      // Filter out seen words and favorites (favorites are saved words, not excluded)
+        // Filter out seen words
       const availableWords = words.filter(word => !seenWords.includes(word));
-      
-      // If we've seen all words, reset the seen list (but keep favorites)
       const wordsToChooseFrom = availableWords.length > 0 ? availableWords : words;
       
       // Pick a deterministic random word based on seed
       const randomIndex = Math.floor(random() * wordsToChooseFrom.length);
-      const selectedWord = wordsToChooseFrom[randomIndex];
+        selectedWord = wordsToChooseFrom[randomIndex];
+      }
       
+      if (selectedWord) {
       // Add to seen words (unless it's a favorite - favorites can repeat)
       if (!favorites.includes(selectedWord)) {
         seenWords.push(selectedWord);
@@ -7404,13 +7706,58 @@
       }
       
       return selectedWord;
+      }
+      
+      // Ultimate fallback (should never reach here)
+      return language === 'en' ? 'serendipity' : 
+             language === 'es' ? 'serendipidad' :
+             language === 'fr' ? 'sérendipité' :
+             language === 'de' ? 'Serendipität' : 'serendipity';
     } catch (e) {
-      console.error('Error getting random word', e);
       // Fallback to a default word
       return language === 'en' ? 'serendipity' : 
              language === 'es' ? 'serendipidad' :
              language === 'fr' ? 'sérendipité' :
              language === 'de' ? 'Serendipität' : 'serendipity';
+    }
+  }
+
+  // Free dictionary API fallback when main explain returns "not found" (so WOTD always has a definition)
+  async function fetchFreeDictionaryForWord(word, lang) {
+    const langCode = (lang || 'en').split('-')[0];
+    const supported = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'hi', 'ja', 'ko', 'ar', 'zh'];
+    if (!supported.includes(langCode)) langCode = 'en';
+    try {
+      const url = `https://api.dictionaryapi.dev/api/v2/entries/${langCode}/${encodeURIComponent(word.trim())}`;
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (!Array.isArray(data) || data.length === 0) return null;
+      const entry = data[0];
+      const meanings = entry.meanings || [];
+      const definitions = [];
+      const examples = [];
+      let synonyms = [];
+      for (const m of meanings) {
+        for (const d of (m.definitions || [])) {
+          if (d.definition) definitions.push(d.definition);
+          if (d.example) examples.push(d.example);
+        }
+        if (m.synonyms && Array.isArray(m.synonyms)) {
+          synonyms = synonyms.concat(m.synonyms.filter(s => s && typeof s === 'string'));
+        }
+      }
+      const pronunciation = (entry.phonetic || (entry.phonetics && entry.phonetics[0] && entry.phonetics[0].text)) || getPronunciation(word);
+      const explanation = definitions.length ? definitions.slice(0, 3).join(' ') : null;
+      if (!explanation) return null;
+      return {
+        explanation,
+        synonyms: [...new Set(synonyms)].slice(0, 12),
+        pronunciation: pronunciation || getPronunciation(word),
+        examples: examples.slice(0, 5)
+      };
+    } catch (e) {
+      return null;
     }
   }
 
@@ -7420,14 +7767,12 @@
       const resp = await new Promise((resolve) => {
         try {
           if (!chrome || !chrome.runtime || !chrome.runtime.id) {
-            console.error('Nimbus: Extension context invalidated');
             resolve({ error: 'Extension context invalidated' });
             return;
           }
           
           // Set a timeout for the message
           const timeout = setTimeout(() => {
-            console.error('Nimbus: Timeout waiting for background response');
             resolve({ error: 'Request timeout', explanation: `Definition für "${word}" wird geladen...` });
           }, 15000); // 15 second timeout
           
@@ -7439,14 +7784,12 @@
           }, (response) => {
             clearTimeout(timeout);
             if (chrome.runtime.lastError) {
-              console.error('Nimbus: Error in sendMessage:', chrome.runtime.lastError.message);
               resolve({ error: chrome.runtime.lastError.message });
             } else {
               resolve(response || { error: 'No response' });
             }
           });
         } catch (e) {
-          console.error('Nimbus: Exception in getWordOfDayDetails:', e);
           resolve({ error: e.message });
         }
       });
@@ -7456,25 +7799,29 @@
       if (resp) {
         // Check if response has an error field but also has explanation
         if (resp.error && !resp.explanation) {
-          console.warn('Nimbus: Response has error but no explanation:', resp.error);
-          // Get current language for error message
-          const settings = await new Promise(resolve => {
-            chrome.storage.local.get(['settings'], (result) => {
-              resolve(result.settings || {});
+          const isNotFound = /not found|nicht gefunden/i.test(resp.error);
+          if (isNotFound) {
+            const settings = await new Promise(resolve => {
+              chrome.storage.local.get(['settings'], (result) => { resolve(result.settings || {}); });
             });
+            const lang = (settings.dictionaryLanguage || 'en').split('-')[0];
+            const freeDef = await fetchFreeDictionaryForWord(word, lang);
+            if (freeDef) {
+              return freeDef;
+            }
+          }
+          const settings = await new Promise(resolve => {
+            chrome.storage.local.get(['settings'], (result) => { resolve(result.settings || {}); });
           });
           const lang = settings.dictionaryLanguage || 'en';
-          
-          // Try to return a fallback that still shows the word
           const errorMessages = {
-            'de': resp.error.includes('not found') || resp.error.includes('nicht gefunden')
+            'de': /not found|nicht gefunden/i.test(resp.error)
               ? `"${word}" wurde im Wörterbuch nicht gefunden. Bitte versuchen Sie es später erneut.`
               : `Fehler beim Laden der Definition: ${resp.error}`,
-            'en': resp.error.includes('not found')
+            'en': /not found/i.test(resp.error)
               ? `"${word}" not found in dictionary. Please try again later.`
               : `Error loading definition: ${resp.error}`
           };
-          
           return {
             explanation: errorMessages[lang] || errorMessages['en'],
             synonyms: resp.synonyms || [],
@@ -7484,15 +7831,25 @@
         }
         
         // Return the response even if it has an error field, as long as it has explanation
+        // Ensure synonyms is always an array
+        let synonyms = [];
+        if (resp.synonyms) {
+          if (Array.isArray(resp.synonyms)) {
+            synonyms = resp.synonyms.filter(s => s && typeof s === 'string' && s.trim());
+          } else if (typeof resp.synonyms === 'string') {
+            synonyms = [resp.synonyms.trim()].filter(s => s);
+          }
+        }
+        
+        
         return {
           explanation: resp.explanation || resp.error || `Definition für "${word}"`,
-          synonyms: resp.synonyms || [],
+          synonyms: synonyms,
           pronunciation: resp.pronunciation || getPronunciation(word),
           examples: resp.examples || []
         };
       } else {
         // If no response at all, return fallback
-        console.error('Nimbus: No response received');
         // Get current language for error message
         const settings = await new Promise(resolve => {
           chrome.storage.local.get(['settings'], (result) => {
@@ -7514,7 +7871,6 @@
         };
       }
     } catch (e) {
-      console.error('Nimbus: Error getting word details:', e);
       // Fallback
       return {
         explanation: `Fehler beim Laden der Definition: ${e.message}`,
@@ -7623,7 +7979,6 @@
         btn.classList.add('copied');
         setTimeout(() => btn.classList.remove('copied'), 2000);
       } catch (e) {
-        console.error('Failed to copy', e);
       }
     });
     
@@ -7660,10 +8015,152 @@
     });
   }
 
+  // Unified voice selection function (shared with contentScript logic)
+  function getBestVoice(lang = 'en-US', voicePreference = 'auto') {
+    if (!window.speechSynthesis) return null;
+    
+    let voices = window.speechSynthesis.getVoices();
+    if (!voices || voices.length === 0) {
+      window.speechSynthesis.getVoices();
+      voices = window.speechSynthesis.getVoices();
+    }
+    if (!voices || voices.length === 0) return null;
+    
+    // Filter voices by language first
+    const langCode = lang.split('-')[0];
+    let matchingVoices = voices.filter(v => v.lang.startsWith(langCode));
+    
+    if (matchingVoices.length === 0) {
+      matchingVoices = voices.filter(v => v.lang.includes(langCode));
+    }
+    
+    if (matchingVoices.length === 0) {
+      matchingVoices = voices;
+    }
+    
+    // Apply voice preference (male/female/auto)
+    if (voicePreference === 'female') {
+      // Prioritize more feminine voices - Google Cloud TTS and Apple voices
+      const femaleVoices = matchingVoices.filter(v => 
+        v.name.toLowerCase().includes('female') || 
+        // Google Cloud TTS female voices (C, E, F are typically female)
+        (v.name.includes('Google') && (
+          v.name.includes('en-US-Standard-C') || 
+          v.name.includes('en-US-Standard-E') || 
+          v.name.includes('en-US-Standard-F') ||
+          v.name.includes('en-US-Wavenet-C') || 
+          v.name.includes('en-US-Wavenet-E') || 
+          v.name.includes('en-US-Wavenet-F') ||
+          v.name.includes('en-US-Neural2-C') || 
+          v.name.includes('en-US-Neural2-E') || 
+          v.name.includes('en-US-Neural2-F')
+        )) ||
+        // Apple macOS female voices - prioritize Samantha and Victoria
+        (v.name.includes('Samantha') || v.name.includes('Victoria'))
+      );
+      if (femaleVoices.length > 0) {
+        matchingVoices = femaleVoices;
+      }
+    } else if (voicePreference === 'male') {
+      // Prioritize deeper, more masculine voices - avoid soft voices
+      // Focus on Google Cloud TTS (D and J are deeper than B) and Apple voices
+      const maleVoices = matchingVoices.filter(v => 
+        v.name.toLowerCase().includes('male') || 
+        // Google Cloud TTS - prioritize D and J (deeper), then B
+        (v.name.includes('Google') && (
+          v.name.includes('en-US-Standard-D') || 
+          v.name.includes('en-US-Standard-J') || 
+          v.name.includes('en-US-Wavenet-D') || 
+          v.name.includes('en-US-Wavenet-J') || 
+          v.name.includes('en-US-Neural2-D') || 
+          v.name.includes('en-US-Neural2-J') ||
+          v.name.includes('en-US-Standard-B') || 
+          v.name.includes('en-US-Wavenet-B') || 
+          v.name.includes('en-US-Neural2-B')
+        )) ||
+        // Apple macOS male voices - Alex is good, avoid soft-sounding names
+        (v.name.includes('Alex') || v.name.includes('Daniel') || v.name.includes('Fred'))
+      );
+      if (maleVoices.length > 0) {
+        matchingVoices = maleVoices;
+      }
+    }
+    
+    // Priority order for voice selection (most natural/lifelike first)
+    // NO MICROSOFT VOICES - Google and Apple only
+    const voicePriorities = [
+      // Google Neural/Wavenet voices (best quality) - prioritize deeper male (D, J) and feminine female (C, E, F)
+      (v) => {
+        if (voicePreference === 'male' && (v.name.includes('en-US-Standard-D') || v.name.includes('en-US-Standard-J') || v.name.includes('en-US-Wavenet-D') || v.name.includes('en-US-Wavenet-J') || v.name.includes('en-US-Neural2-D') || v.name.includes('en-US-Neural2-J'))) {
+          return v.name.includes('Google') && (v.name.includes('Neural') || v.name.includes('Wavenet'));
+        }
+        if (voicePreference === 'female' && (v.name.includes('en-US-Standard-C') || v.name.includes('en-US-Standard-E') || v.name.includes('en-US-Standard-F') || v.name.includes('en-US-Wavenet-C') || v.name.includes('en-US-Wavenet-E') || v.name.includes('en-US-Wavenet-F') || v.name.includes('en-US-Neural2-C') || v.name.includes('en-US-Neural2-E') || v.name.includes('en-US-Neural2-F'))) {
+          return v.name.includes('Google') && (v.name.includes('Neural') || v.name.includes('Wavenet'));
+        }
+        if (voicePreference === 'auto') {
+          return v.name.includes('Google') && (v.name.includes('Neural') || v.name.includes('Wavenet'));
+        }
+        return false;
+      },
+      // Google Standard voices (fallback)
+      (v) => {
+        if (voicePreference === 'male' && (v.name.includes('en-US-Standard-D') || v.name.includes('en-US-Standard-J'))) {
+          return v.name.includes('Google');
+        }
+        if (voicePreference === 'female' && (v.name.includes('en-US-Standard-C') || v.name.includes('en-US-Standard-E') || v.name.includes('en-US-Standard-F'))) {
+          return v.name.includes('Google');
+        }
+        if (voicePreference === 'auto') {
+          return v.name.includes('Google');
+        }
+        return false;
+      },
+      // Apple voices (Mac/iOS) - Alex is male, Samantha/Victoria are female
+      (v) => {
+        if (voicePreference === 'male' && v.name.includes('Alex')) return true;
+        if (voicePreference === 'female' && (v.name.includes('Samantha') || v.name.includes('Victoria'))) return true;
+        if (voicePreference === 'auto') {
+          return v.name.includes('Samantha') || v.name.includes('Alex') || v.name.includes('Victoria');
+        }
+        return false;
+      },
+      // Other Google voices (fallback)
+      (v) => v.name.includes('Google') && !v.name.includes('Microsoft'),
+      // Default to any voice matching the language (but NOT Microsoft)
+      (v) => v.lang.startsWith(langCode) && !v.name.includes('Microsoft')
+    ];
+    
+    // Try to find the best voice based on priorities
+    for (const priorityFn of voicePriorities) {
+      const found = matchingVoices.find(priorityFn);
+      if (found) return found;
+    }
+    
+    // Fallback: prefer female voices if auto (often sound more natural) - NO MICROSOFT
+    if (voicePreference === 'auto') {
+      const femaleVoice = matchingVoices.find(v => 
+        (!v.name.includes('Microsoft')) && (
+          v.name.toLowerCase().includes('female') || 
+          v.name.includes('Samantha') || 
+          v.name.includes('Victoria') ||
+          (v.name.includes('Google') && (v.name.includes('en-US-Standard-C') || v.name.includes('en-US-Standard-E') || v.name.includes('en-US-Standard-F')))
+        )
+      );
+      if (femaleVoice) return femaleVoice;
+    }
+    
+    // Last resort: return first matching voice (but NOT Microsoft)
+    const nonMicrosoftVoices = matchingVoices.filter(v => !v.name.includes('Microsoft'));
+    if (nonMicrosoftVoices.length > 0) return nonMicrosoftVoices[0];
+    
+    // Absolute last resort: any voice except Microsoft
+    const anyNonMicrosoft = voices.filter(v => !v.name.includes('Microsoft'));
+    return anyNonMicrosoft[0] || null;
+  }
+
   // Text-to-speech function
   function speakWord(word, pronunciation, buttonElement = null) {
     if (!('speechSynthesis' in window)) {
-      console.warn('Speech synthesis not supported');
       if (buttonElement) {
         buttonElement.classList.remove('speaking');
       }
@@ -7673,10 +8170,11 @@
     // Stop any ongoing speech
     window.speechSynthesis.cancel();
     
-    // Get settings for language
+    // Get settings for language and voice preference
     chrome.storage.local.get(['settings'], (result) => {
       const settings = result.settings || {};
       const lang = settings.dictionaryLanguage || 'en';
+      const voicePreference = settings.voicePreference || 'auto'; // 'auto', 'male', 'female'
       
       // Map language codes to speech synthesis voices
       const langMap = {
@@ -7698,18 +8196,19 @@
         'tr': 'tr-TR'
       };
       
+      const langCode = langMap[lang] || 'en-US';
       const utterance = new SpeechSynthesisUtterance(word);
-      utterance.lang = langMap[lang] || 'en-US';
+      utterance.lang = langCode;
       utterance.rate = 0.9;
       utterance.pitch = 1;
       utterance.volume = 1;
       
       // Function to set voice and speak
       const speakWithVoice = () => {
-        const voices = window.speechSynthesis.getVoices();
-        const preferredVoice = voices.find(v => v.lang.startsWith(langMap[lang] || 'en-US'));
-        if (preferredVoice) {
-          utterance.voice = preferredVoice;
+        const bestVoice = getBestVoice(langCode, voicePreference);
+        if (bestVoice) {
+          utterance.voice = bestVoice;
+          utterance.lang = bestVoice.lang;
         }
         
         // Visual feedback
@@ -7724,7 +8223,6 @@
         };
         
         utterance.onerror = (e) => {
-          console.error('Speech synthesis error:', e);
           if (buttonElement) {
             buttonElement.classList.remove('speaking');
           }
@@ -7753,14 +8251,12 @@
       try {
         chrome.storage.local.get([key], (res) => {
           if (chrome.runtime.lastError) {
-            console.error('Nimbus: Storage get error:', chrome.runtime.lastError);
             resolve(null);
             return;
           }
           resolve(res[key]);
         });
       } catch (e) {
-        console.error('Nimbus: Error in getStorage:', e);
         resolve(null);
       }
     });
@@ -7775,12 +8271,10 @@
         }
         chrome.storage.local.set(data, () => {
           if (chrome.runtime.lastError) {
-            console.error('Storage error', chrome.runtime.lastError);
           }
           resolve();
         });
       } catch (e) {
-        console.error('Storage set error', e);
         resolve();
       }
     });
@@ -7827,7 +8321,8 @@
             return timestamp > fourteenDaysAgo2;
           });
     
-    await setStorage({ recentSearches: cleaned.slice(0, 50) });
+    // Limit to 100 recent searches, auto-delete oldest when exceeded
+    await setStorage({ recentSearches: cleaned.slice(0, 100) });
   }
 
   // Make loadWordOfDay available globally for onclick
