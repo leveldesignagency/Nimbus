@@ -1,5 +1,7 @@
 // Vercel serverless function to create Stripe payment intent
-// This allows embedded payment in the extension
+// Currency is chosen by user location (Vercel X-Vercel-IP-Country). Price 2.49 in local currency.
+
+import { getCurrencyFromRequest } from '../lib/currency.js';
 
 export default async function handler(req, res) {
   // Only allow POST requests
@@ -9,13 +11,12 @@ export default async function handler(req, res) {
 
   try {
     // Get Stripe keys from environment variables
-    // Use production keys by default, only use test if FORCE_TEST_MODE is explicitly set
     const forceTestMode = process.env.FORCE_TEST_MODE === 'true';
     const stripeSecretKey = forceTestMode 
       ? process.env.TEST_STRIPE_SECRET_KEY 
       : process.env.STRIPE_SECRET_KEY;
     const stripePublishableKey = forceTestMode
-      ? process.env.TEST_STRIPE_PUBLISHABLE_KEY
+      ? process.env.TEST_STRIPE_PUBLISHABLE_KEY 
       : process.env.STRIPE_PUBLISHABLE_KEY;
     
     if (!stripeSecretKey || !stripePublishableKey) {
@@ -25,6 +26,9 @@ export default async function handler(req, res) {
 
     // Import Stripe
     const stripe = (await import('stripe')).default(stripeSecretKey);
+
+    // Currency from visitor location
+    const { currency, unitAmount, productLabel } = getCurrencyFromRequest(req);
 
     // Create a customer first (we'll use email if provided, or create anonymous)
     const { email } = req.body;
@@ -46,28 +50,16 @@ export default async function handler(req, res) {
       customer = await stripe.customers.create();
     }
 
-    // Create a subscription with payment intent
-    // First, create or get the price
-    const priceId = process.env.STRIPE_PRICE_ID; // You'll set this in Vercel
-    
-    // If no price ID, create a price on the fly
-    let price;
-    if (priceId) {
-      price = await stripe.prices.retrieve(priceId);
-    } else {
-      // Create a yearly subscription price
-      price = await stripe.prices.create({
-        currency: 'gbp',
-        unit_amount: 299, // £2.99 in pence
-        recurring: {
-          interval: 'year',
-        },
-        product_data: {
-          name: 'Nimbus Yearly Subscription',
-          description: 'Unlock unlimited word definitions, AI explanations, and context for one year',
-        },
-      });
-    }
+    // Create a subscription price in the user's local currency (from location)
+    const price = await stripe.prices.create({
+      currency,
+      unit_amount: unitAmount,
+      recurring: { interval: 'year' },
+      product_data: {
+        name: `Nimbus Yearly Subscription (${productLabel})`,
+        description: 'Unlock unlimited word definitions, AI explanations, and context for one year.',
+      },
+    });
 
     // Create subscription
     const subscription = await stripe.subscriptions.create({

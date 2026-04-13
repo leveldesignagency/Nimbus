@@ -1,5 +1,7 @@
 // Vercel serverless function to create Stripe checkout session
-// This generates a payment link for users to subscribe
+// Currency is chosen by user location (Vercel X-Vercel-IP-Country). Price 2.49 in local currency.
+
+import { getCurrencyFromRequest } from '../lib/currency.js';
 
 export default async function handler(req, res) {
   // Set CORS headers to allow Chrome extension requests
@@ -53,6 +55,9 @@ export default async function handler(req, res) {
     // Import Stripe
     const stripe = (await import('stripe')).default(stripeSecretKey);
 
+    // Currency from visitor location (US→USD, GB→GBP, EU→EUR, etc.)
+    const { currency, unitAmount, productLabel, country } = getCurrencyFromRequest(req);
+
     // Get the return URL and email from request
     const { returnUrl, email } = req.body;
     // Use extension popup URL - background script will handle closing the tab
@@ -95,12 +100,12 @@ export default async function handler(req, res) {
       line_items: [
         {
           price_data: {
-            currency: 'gbp',
+            currency,
             product_data: {
-              name: 'Nimbus Yearly Subscription',
-              description: 'Unlock unlimited word definitions, AI explanations, and context for one year',
+              name: `Nimbus Yearly Subscription (${productLabel})`,
+              description: 'Unlock unlimited word definitions, AI explanations, and context for one year.',
             },
-            unit_amount: 299, // £2.99 in pence
+            unit_amount: unitAmount,
             recurring: {
               interval: 'year',
             },
@@ -131,6 +136,8 @@ export default async function handler(req, res) {
     console.log('Creating checkout session with config:', {
       hasCustomer: !!customerId,
       hasCustomerEmail: !!email,
+      currency,
+      country,
       mode: sessionConfig.mode,
       trialDays: sessionConfig.subscription_data.trial_period_days
     });

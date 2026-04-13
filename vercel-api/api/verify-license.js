@@ -1,8 +1,17 @@
 // Vercel serverless function to verify license keys
-// This checks if a license key is valid and active
+// This checks if a license key is valid and active.
+// CORS: content scripts run in page context, so requests come from page origin (e.g. sportbible.com).
 
 export default async function handler(req, res) {
-  // Only allow POST requests
+  // CORS: allow any origin (extension content scripts run as the page origin)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -72,9 +81,12 @@ export default async function handler(req, res) {
       }
 
       if (!subscription) {
-        return res.status(404).json({ 
-          valid: false, 
-          error: 'License key not found or subscription not active' 
+        // Return 200 with clear message so the extension can show "User not found" instead of "404"
+        return res.status(200).json({
+          valid: false,
+          error: licenseKey && licenseKey.includes('@')
+            ? 'No account or subscription found for this email.'
+            : 'License key not found or subscription not active.',
         });
       }
 

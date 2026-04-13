@@ -35,39 +35,72 @@ export default async function handler(req, res) {
 
   // Handle the event
   switch (event.type) {
-    case 'checkout.session.completed':
+    case 'checkout.session.completed': {
       const session = event.data.object;
-      
-      // Get the subscription
       if (session.mode === 'subscription' && session.subscription) {
         try {
           const subscription = await stripe.subscriptions.retrieve(session.subscription);
-          
-          // Store subscription info (you might want to save this to a database)
-          // For now, we'll just log it - the license key will be the subscription ID
-          console.log('Subscription created:', {
+          console.log('Subscription created (checkout completed):', {
             subscriptionId: subscription.id,
             customerId: subscription.customer,
             status: subscription.status,
             currentPeriodEnd: subscription.current_period_end,
+            trialEnd: subscription.trial_end || null,
           });
-          
-          // The license key is the subscription ID
-          // Users will enter this in the extension
         } catch (error) {
           console.error('Error retrieving subscription:', error);
         }
       }
       break;
+    }
 
-    case 'customer.subscription.updated':
-    case 'customer.subscription.deleted':
+    case 'invoice.paid': {
+      const invoice = event.data.object;
+      const isRenewal = invoice.billing_reason === 'subscription_cycle';
+      console.log('Invoice paid:', {
+        invoiceId: invoice.id,
+        subscriptionId: invoice.subscription,
+        billingReason: invoice.billing_reason,
+        isRenewal,
+        amountPaid: invoice.amount_paid,
+      });
+      break;
+    }
+
+    case 'invoice.payment_failed': {
+      const invoice = event.data.object;
+      console.log('Invoice payment failed:', {
+        invoiceId: invoice.id,
+        subscriptionId: invoice.subscription,
+        attemptCount: invoice.attempt_count,
+        nextPaymentAttempt: invoice.next_payment_attempt,
+        lastPaymentError: invoice.last_payment_error?.message || null,
+      });
+      // Subscription will move to past_due/unpaid. User must update card in portal.
+      break;
+    }
+
+    case 'customer.subscription.updated': {
+      const sub = event.data.object;
+      const prev = event.data.previous_attributes || {};
+      console.log('Subscription updated:', {
+        subscriptionId: sub.id,
+        status: sub.status,
+        previousStatus: prev.status,
+        currentPeriodEnd: sub.current_period_end,
+        cancelAtPeriodEnd: sub.cancel_at_period_end,
+      });
+      break;
+    }
+
+    case 'customer.subscription.deleted': {
       const subscription = event.data.object;
-      console.log('Subscription updated/deleted:', {
+      console.log('Subscription deleted:', {
         subscriptionId: subscription.id,
         status: subscription.status,
       });
       break;
+    }
 
     default:
       console.log(`Unhandled event type ${event.type}`);

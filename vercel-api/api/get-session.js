@@ -68,8 +68,11 @@ export default async function handler(req, res) {
       });
     }
 
-    // Calculate expiry date
-    const expiryDate = new Date(subscription.current_period_end * 1000);
+    // Expiry: use trial_end when trialing, otherwise current_period_end
+    const expiryTimestamp = (subscription.status === 'trialing' && subscription.trial_end)
+      ? subscription.trial_end
+      : subscription.current_period_end;
+    const expiryDate = new Date(expiryTimestamp * 1000);
 
     return res.status(200).json({
       valid: true,
