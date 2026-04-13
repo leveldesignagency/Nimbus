@@ -42,8 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (confirm('Are you sure you want to sign out? You will need to sign in again to use the extension.')) {
       signoutBtn.disabled = true;
       signoutBtn.textContent = 'Signing out...';
-      
-      // Clear all user data
+      await chrome.storage.local.set({ signedOut: true });
       await chrome.storage.local.remove([
         'userEmail', 
         'subscriptionId', 
@@ -54,30 +53,24 @@ document.addEventListener('DOMContentLoaded', () => {
         'pendingCheckoutEmail',
         'checkoutInitiatedAt'
       ]);
-      
-      // Revoke OAuth token if available
       try {
-        chrome.identity.getAuthToken({ interactive: false }, (token) => {
-          if (token && !chrome.runtime.lastError) {
-            chrome.identity.removeCachedAuthToken({ token: token }, () => {
-              console.log('OAuth token revoked');
-            });
-          }
+        await new Promise((resolve) => {
+          chrome.identity.getAuthToken({ interactive: false }, (token) => {
+            if (chrome.runtime.lastError || !token) {
+              resolve();
+              return;
+            }
+            chrome.identity.removeCachedAuthToken({ token }, () => resolve());
+          });
         });
       } catch (error) {
         console.log('No OAuth token to revoke');
       }
-      
       accountInfo.innerHTML = '<strong>Not signed in</strong>';
       status.innerText = '✅ Signed out successfully';
       status.style.color = '#10b981';
-      
-      // Hide subscription section
       subscriptionSection.style.display = 'none';
-      
-      setTimeout(() => {
-        location.reload();
-      }, 1000);
+      setTimeout(() => location.reload(), 1000);
     }
   });
 
@@ -294,7 +287,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (response.ok && data.success) {
           // Clear subscription from storage
           chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive'], () => {
-            subscriptionStatus.innerHTML = `✅ Refund processed successfully! £${data.amount || 2.99} will be refunded to your original payment method.`;
+            subscriptionStatus.innerHTML = `✅ Refund processed successfully! £${data.amount || 2.49} will be refunded to your original payment method.`;
             subscriptionStatus.style.color = '#10b981';
             
             // Update UI
@@ -332,8 +325,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (confirm('Sign out? You will need to sign in again to use the extension.')) {
         simpleSignoutBtn.disabled = true;
         simpleSignoutBtn.textContent = 'Signing out...';
-        
-        // Clear all user data
+        await chrome.storage.local.set({ signedOut: true });
         await chrome.storage.local.remove([
           'userEmail', 
           'subscriptionId', 
@@ -344,26 +336,22 @@ document.addEventListener('DOMContentLoaded', () => {
           'pendingCheckoutEmail',
           'checkoutInitiatedAt'
         ]);
-        
-        // Revoke OAuth token if available
         try {
-          chrome.identity.getAuthToken({ interactive: false }, (token) => {
-            if (token && !chrome.runtime.lastError) {
-              chrome.identity.removeCachedAuthToken({ token: token }, () => {
-                console.log('OAuth token revoked');
-              });
-            }
+          await new Promise((resolve) => {
+            chrome.identity.getAuthToken({ interactive: false }, (token) => {
+              if (chrome.runtime.lastError || !token) {
+                resolve();
+                return;
+              }
+              chrome.identity.removeCachedAuthToken({ token }, () => resolve());
+            });
           });
         } catch (error) {
           console.log('No OAuth token to revoke');
         }
-        
         status.innerText = '✅ Signed out successfully';
         status.style.color = '#10b981';
-        
-        setTimeout(() => {
-          location.reload();
-        }, 1000);
+        setTimeout(() => location.reload(), 1000);
       }
     });
   }

@@ -400,6 +400,14 @@
       return true;
     }
     try {
+      // If user explicitly signed out, never grant access (no tools) until they sign in again
+      const signedOutCheck = await new Promise((resolve) => {
+        chrome.storage.local.get(['signedOut'], resolve);
+      });
+      if (signedOutCheck.signedOut === true) {
+        subscriptionActive = false;
+        return false;
+      }
       // First check if subscriptionActive is set in storage (set by popup/background)
       const storageResult = await new Promise((resolve) => {
         chrome.storage.local.get(['subscriptionActive', 'subscriptionId', 'subscriptionExpiry', 'userEmail'], resolve);
@@ -480,9 +488,14 @@
           return false;
         }
       } catch (apiError) {
-        // If API fails but expiry is still valid, allow access
+        // Fallback: if API fails (network/CORS) but cached expiry is still valid, allow access and persist so popup sees consistent state
         if (expiry && new Date(expiry) > new Date()) {
           subscriptionActive = true;
+          chrome.storage.local.set({
+            subscriptionActive: true,
+            subscriptionId: subscriptionId || undefined,
+            subscriptionExpiry: expiry,
+          });
           return true;
         }
         subscriptionActive = false;
@@ -513,8 +526,8 @@
           if (changes.usage) {
             usage = changes.usage.newValue || usage;
           }
-          // Re-check subscription when subscription data changes
-          if (changes.subscriptionId || changes.subscriptionExpiry || changes.subscriptionActive || changes.userEmail) {
+          // Re-check subscription when subscription or sign-out state changes
+          if (changes.subscriptionId || changes.subscriptionExpiry || changes.subscriptionActive || changes.userEmail || changes.signedOut) {
             checkSubscription().then((isActive) => {
               if (isActive) {
                 chrome.storage.local.set({ subscriptionModalShowCount: 0 }, () => {});
@@ -523,7 +536,8 @@
                   if (upgradePrompt) hideTooltip();
                 }
               } else if (!isDeveloperMode()) {
-                // Subscription inactive: remove floating toolbar so non-subscribers see no tools
+                // Subscription inactive: remove all tools (toolbar, popover, tooltip)
+                removeTooltip();
                 const ft = document.getElementById('cursoriq-float-toolbar');
                 if (ft) ft.remove();
                 const pop = document.getElementById('cursoriq-float-popover');
@@ -1011,6 +1025,12 @@
   function triggerExplain(wordInfo) {
     if (!wordInfo.word || wordInfo.word.length < MIN_WORD_LEN) return;
 
+    // Don't show tooltip for email-like selections (e.g. user@domain.com)
+    const selectedText = (wordInfo.word || '').trim();
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(selectedText) || (selectedText.includes('@') && selectedText.length > 6)) {
+      return;
+    }
+
     // Check if a location tooltip is currently showing - if so, don't show word tooltip
     if (tooltipEl && tooltipEl.classList.contains('cursoriq-location-tooltip')) {
       return; // Location tooltip is showing, don't show word tooltip
@@ -1018,7 +1038,6 @@
 
     // Check if this is an address (not a place name) - addresses should show tooltip with map buttons
     // Place names (like "Sydney", "London") will be detected as entities by background script and go to hub
-    const selectedText = wordInfo.word || '';
     const isAddress = detectLocation(selectedText);
     
     // If it's an address (has postcode, street name, etc.), we'll handle it after getting the response
@@ -1040,7 +1059,7 @@
     // Check subscription before allowing word lookup
     checkSubscription().then((isActive) => {
       if (!isActive) {
-        // Show upgrade prompt
+        // Only the upgrade prompt is allowed before subscribing — no definition tooltip, no other tools
         showUpgradePrompt(wordInfo);
         return;
       }
@@ -1154,7 +1173,7 @@
           <span style="color: #ffffff; font-size: 13px; font-weight: 600;">✨ 3-Day Free Trial</span>
         </div>
         <div style="background: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 18px; border-radius: 10px; margin-bottom: 22px; border: 1px solid rgba(255,255,255,0.2);">
-            <div style="font-size: 32px; font-weight: 700; color: #ffffff; margin-bottom: 5px;">£2.99</div>
+            <div style="font-size: 32px; font-weight: 700; color: #ffffff; margin-bottom: 5px;">£2.49</div>
           <div style="font-size: 13px; color: #cbd5e1;">per year</div>
         </div>
         <button id="nimbus-upgrade-btn" style="background: #ffffff; color: #05007f; border: none; padding: 14px 28px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600; width: 100%; transition: all 0.2s; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">

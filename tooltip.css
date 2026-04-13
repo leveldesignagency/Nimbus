@@ -28,6 +28,11 @@
   transition: opacity 0.3s, width 0.3s;
   pointer-events: none;
   min-width: fit-content;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
 }
 
 .cursoriq-tooltip {
@@ -697,11 +702,9 @@
 }
 
 .cursoriq-synonym-tag:hover {
-  background: rgba(31, 127, 255, 0.25);
+  background: rgba(15, 23, 42, 0.6);
   color: #fff;
-  border-color: rgba(31, 127, 255, 0.6);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(31, 127, 255, 0.25);
+  border-color: rgba(226, 232, 240, 0.5);
 }
 
 /* Examples section */
@@ -1016,45 +1019,6 @@
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
-/* Paste toolbar shown after extension copy */
-.cursoriq-paste-toolbar {
-  position: fixed;
-  z-index: 2147483642;
-  display: flex;
-  align-items: center;
-  padding: 6px;
-  background: linear-gradient(135deg, rgba(5, 0, 127, 0.95) 0%, rgba(31, 127, 255, 0.95) 100%);
-  border: 1px solid rgba(31, 127, 255, 0.6);
-  border-radius: 8px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-}
-
-.cursoriq-paste-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border: none;
-  border-radius: 6px;
-  background: rgba(5, 0, 127, 0.9);
-  color: #ffffff;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
-  transition: transform 0.15s ease, opacity 0.15s ease;
-}
-
-.cursoriq-paste-btn:hover {
-  opacity: 0.95;
-  transform: translateY(-1px);
-}
-
-.cursoriq-paste-btn svg {
-  width: 16px;
-  height: 16px;
-}
-
 .cursoriq-float-grip {
   width: 24px;
   height: 36px;
@@ -1104,7 +1068,7 @@
 
 .cursoriq-float-popover {
   position: absolute;
-  bottom: calc(100% + 10px);
+  top: calc(100% + 10px);
   left: 50%;
   transform: translateX(-50%);
   min-width: 260px;

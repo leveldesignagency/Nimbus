@@ -24,18 +24,22 @@
 
   async function performPopupSignOut(confirmMessage) {
     if (confirmMessage && !confirm(confirmMessage)) return;
+    await chrome.storage.local.set({ signedOut: true });
     await chrome.storage.local.remove([
       'userEmail', 'subscriptionId', 'subscriptionExpiry', 'subscriptionActive',
       'tempSessionData', 'pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt'
     ]);
     try {
-      chrome.identity.getAuthToken({ interactive: false }, (token) => {
-        if (chrome.runtime.lastError) return;
-        if (token) {
+      await new Promise((resolve) => {
+        chrome.identity.getAuthToken({ interactive: false }, (token) => {
+          if (chrome.runtime.lastError || !token) {
+            resolve();
+            return;
+          }
           chrome.identity.removeCachedAuthToken({ token }, () => {
-            if (chrome.runtime.lastError) return;
+            resolve();
           });
-        }
+        });
       });
     } catch (e) {}
     if (typeof showNotification === 'function') {
@@ -44,57 +48,24 @@
     setTimeout(() => { location.reload(); }, confirmMessage ? 500 : 300);
   }
 
-  // Get user email via Google Identity
+  // Get user email — only from app sign-in (OAuth). We do NOT use Chrome profile so that:
+  // 1. New users see "Sign in with Google" and must explicitly sign in.
+  // 2. Sign out actually logs them out (no auto-fill from Chrome).
   async function getUserEmail() {
     return new Promise((resolve) => {
-      // Try to get email from storage first (cached)
-      chrome.storage.local.get(['userEmail'], (result) => {
+      chrome.storage.local.get(['signedOut', 'userEmail'], (result) => {
+        if (result.signedOut === true) {
+          resolve(null);
+          return;
+        }
         if (result.userEmail) {
           userEmail = result.userEmail;
           resolve(result.userEmail);
           return;
         }
-        
-        // Try to get from Chrome identity (works in production Chrome Web Store)
-        chrome.identity.getProfileUserInfo((userInfo) => {
-          if (chrome.runtime.lastError) {
-            resolve(null);
-            return;
-          }
-          if (userInfo && userInfo.email) {
-            userEmail = userInfo.email;
-            // Cache it
-            chrome.storage.local.set({ userEmail: userInfo.email });
-            resolve(userInfo.email);
-          } else {
-            // If getProfileUserInfo doesn't work, try getAuthToken (non-interactive first)
-            chrome.identity.getAuthToken({ interactive: false }, (token) => {
-              if (chrome.runtime.lastError || !token) {
-                resolve(null);
-                return;
-              }
-              if (token) {
-                // Get user info from token
-                fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-                  headers: { 'Authorization': `Bearer ${token}` }
-                })
-                .then(res => res.json())
-                .then(data => {
-                  if (data.email) {
-                    userEmail = data.email;
-                    chrome.storage.local.set({ userEmail: data.email });
-                    resolve(data.email);
-                  } else {
-                    resolve(null);
-                  }
-                })
-                .catch(() => resolve(null));
-              } else {
-                resolve(null);
-              }
-            });
-          }
-        });
+        // No stored email and not signed out: user has not signed in via the app yet.
+        // Do NOT use Chrome profile — require explicit "Sign in with Google" in the extension.
+        resolve(null);
       });
     });
   }
@@ -139,6 +110,7 @@
               const sessionData = await sessionResponse.json();
               if (sessionData.valid) {
                 // Save subscription
+                await chrome.storage.local.remove(['signedOut']);
                 await chrome.storage.local.set({
                   subscriptionId: sessionData.subscriptionId,
                   subscriptionExpiry: sessionData.expiryDate,
@@ -175,14 +147,13 @@
           // Clear pending checkout
           chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail']);
           
-          // Save subscription
+          chrome.storage.local.remove(['signedOut']);
           chrome.storage.local.set({
             subscriptionId: verifyData.subscriptionId,
             subscriptionExpiry: verifyData.expiryDate,
             subscriptionActive: true,
             userEmail: email,
           });
-          
           showNotification('Payment successful! Subscription activated.', 'success');
           setTimeout(() => location.reload(), 1000);
         }
@@ -293,6 +264,7 @@
         if (data.valid) {
           subscriptionActive = true;
           // Update storage with latest info
+          await chrome.storage.local.remove(['signedOut']);
           await chrome.storage.local.set({
             subscriptionExpiry: data.expiryDate,
             subscriptionId: subscriptionId,
@@ -373,8 +345,8 @@
           <span style="color: #ffffff; font-size: 15px; font-weight: 600;">✨ Start with a 3-Day Free Trial</span>
         </div>
         <div style="background: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 25px; border-radius: 12px; margin-bottom: 25px; border: 1px solid rgba(255,255,255,0.2);">
-          <div style="font-size: 42px; font-weight: 700; color: #ffffff; margin-bottom: 5px;">£2.99</div>
-          <div style="font-size: 16px; color: #cbd5e1;">per year • Then £2.99/year</div>
+          <div style="font-size: 42px; font-weight: 700; color: #ffffff; margin-bottom: 5px;">£2.49</div>
+          <div style="font-size: 16px; color: #cbd5e1;">per year • Then £2.49/year</div>
         </div>
         
         ${email ? `<p style="margin: 0 0 25px 0; color: #cbd5e1; font-size: 14px;">Signed in as: <strong style="color: #ffffff;">${email}</strong></p>` : ''}
@@ -400,17 +372,60 @@
           <button id="verify-subscription-btn" style="width: 100%; background: rgba(255,255,255,0.2); color: #ffffff; border: 1px solid rgba(255,255,255,0.3); padding: 10px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; margin-top: 15px; transition: all 0.2s;">
             Already paid? Verify Subscription
           </button>
-          <button id="signout-btn" style="width: 100%; background: transparent; color: #cbd5e1; border: 1px solid rgba(255,255,255,0.2); padding: 8px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 400; margin-top: 10px; transition: all 0.2s;">
+          <div id="verify-error-message" style="display: none; margin-top: 12px; padding: 12px; background: transparent; border: 1px solid rgba(255,255,255,0.35); border-radius: 8px; text-align: left; font-size: 12px; color: rgba(255,255,255,0.92);"></div>
+          <p style="margin: 12px 0 0 0; font-size: 11px; color: rgba(255,255,255,0.85); line-height: 1.5;">Used a different Google account to subscribe? <button type="button" id="signin-different-account-btn" style="background: none; border: none; color: #93c5fd; text-decoration: underline; cursor: pointer; font-size: 11px; padding: 0; font-weight: 500;">Sign in with that account</button></p>
+          <button id="signout-btn" style="width: 100%; background: transparent; color: #cbd5e1; border: 1px solid rgba(255,255,255,0.25); padding: 10px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 500; margin-top: 12px; transition: all 0.2s;">
             Sign Out
           </button>
         ` : ''}
         
-        <p style="margin: 25px 0 0 0; color: #94a3b8; font-size: 12px;">All features are locked until you subscribe</p>
+        <p style="margin: 24px 0 0 0; color: rgba(255,255,255,0.6); font-size: 12px; letter-spacing: 0.02em;">All features are locked until you subscribe</p>
       </div>
     `;
     
     mainContent.innerHTML = upgradeHtml;
     
+    // Show inline error under Verify with "Sign in with Google" so user can get to a login step
+    function showVerifyErrorWithSignIn(message) {
+      const errEl = document.getElementById('verify-error-message');
+      if (!errEl) return;
+      errEl.innerHTML = `
+        <div style="margin-bottom: 10px; line-height: 1.45;">${message}</div>
+        <button type="button" id="verify-signin-google-btn" style="width: 100%; background: rgba(255,255,255,0.95); color: #05007f; border: 1px solid rgba(255,255,255,0.5); padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+          Sign in with Google to verify
+        </button>
+      `;
+      errEl.style.display = 'block';
+      const btn = document.getElementById('verify-signin-google-btn');
+      if (btn) {
+        btn.addEventListener('click', () => {
+          btn.disabled = true;
+          btn.textContent = 'Opening...';
+          chrome.identity.getAuthToken({ interactive: true, scopes: ['https://www.googleapis.com/auth/userinfo.email'] }, async (token) => {
+            btn.disabled = false;
+            btn.innerHTML = `Sign in with Google to verify`;
+            if (chrome.runtime.lastError || !token) {
+              showNotification('Sign-in cancelled or failed. Try again.', 'error');
+              return;
+            }
+            try {
+              const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', { headers: { 'Authorization': `Bearer ${token}` } });
+              if (res.ok) {
+                const userInfo = await res.json();
+                if (userInfo && userInfo.email) {
+                  await chrome.storage.local.remove(['signedOut']);
+                  await chrome.storage.local.set({ userEmail: userInfo.email });
+                  showNotification('Account switched. Click "Verify Subscription" again.', 'success');
+                  setTimeout(() => location.reload(), 500);
+                }
+              }
+            } catch (e) {}
+          });
+        });
+      }
+    }
+
     // Set up button handlers
     setTimeout(() => {
       const subscribeBtn = document.getElementById('subscribe-btn');
@@ -480,7 +495,7 @@
             showNotification('Complete your payment in the new tab. The extension will activate automatically.', 'success');
             
             // Start polling for subscription activation
-            startPaymentPolling(email, data.sessionId);
+            startPaymentPolling(data.sessionId, email);
             
             // Listen for tab updates to detect when user returns
             chrome.tabs.onUpdated.addListener(function listener(tabId, changeInfo, tab) {
@@ -500,9 +515,11 @@
                       
                       const verifyData = await verifyResponse.json();
                       if (verifyData.valid) {
+                        chrome.storage.local.remove(['signedOut']);
                         chrome.storage.local.set({
                           subscriptionId: verifyData.subscriptionId,
                           subscriptionExpiry: verifyData.expiryDate,
+                          subscriptionActive: true,
                           userEmail: email,
                         });
                         showNotification('Payment successful! Activating subscription...', 'success');
@@ -533,9 +550,11 @@
                       
                       const verifyData = await verifyResponse.json();
                       if (verifyData.valid) {
+                        chrome.storage.local.remove(['signedOut']);
                         chrome.storage.local.set({
                           subscriptionId: verifyData.subscriptionId,
                           subscriptionExpiry: verifyData.expiryDate,
+                          subscriptionActive: true,
                           userEmail: email,
                         });
                         showNotification('Payment successful! Activating subscription...', 'success');
@@ -560,7 +579,7 @@
             
             showNotification(errorMsg, 'error');
             subscribeBtn.disabled = false;
-            subscribeBtn.textContent = 'Subscribe Now - £2.99/year';
+            subscribeBtn.textContent = 'Subscribe Now - £2.49/year';
           }
         });
       }
@@ -614,9 +633,9 @@
                 if (response.ok) {
                   const userInfo = await response.json();
                   if (userInfo.email) {
-                    // Save email and reload
+                    await chrome.storage.local.remove(['signedOut']);
                     await chrome.storage.local.set({ userEmail: userInfo.email });
-                  showNotification('Signed in successfully!', 'success');
+                    showNotification('Signed in successfully!', 'success');
                   setTimeout(() => {
                     location.reload();
                   }, 500);
@@ -639,16 +658,44 @@
         };
       }
       
-      // Verify subscription button handler
+      // Verify subscription button handler (also "Update payment method" when payment failed)
       const verifyBtn = document.getElementById('verify-subscription-btn');
       if (verifyBtn && email) {
         verifyBtn.addEventListener('click', async () => {
+          // If we're in "payment failed" state, open Stripe portal to update card
+          if (verifyBtn.dataset.paymentFailed === '1' && verifyBtn.dataset.subscriptionId) {
+            try {
+              const portalUrl = `${API_BASE_URL}/create-portal-session`;
+              const res = await fetch(portalUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  subscriptionId: verifyBtn.dataset.subscriptionId,
+                  email: email,
+                  returnUrl: chrome.runtime.getURL('popup.html'),
+                }),
+              });
+              const portalData = await res.json();
+              if (res.ok && portalData.url) {
+                chrome.tabs.create({ url: portalData.url });
+                showNotification('Opening billing to update your payment method...', 'success');
+              } else {
+                showNotification(portalData.error || 'Could not open billing. Try again.', 'error');
+              }
+            } catch (e) {
+              showNotification('Could not open billing. Try again.', 'error');
+            }
+            return;
+          }
+          
           verifyBtn.disabled = true;
           verifyBtn.textContent = 'Checking...';
+          delete verifyBtn.dataset.paymentFailed;
+          delete verifyBtn.dataset.subscriptionId;
+          const errEl = document.getElementById('verify-error-message');
+          if (errEl) { errEl.style.display = 'none'; errEl.innerHTML = ''; }
           
           try {
-            
-            // First try by session ID if we have one
             const pendingData = await new Promise((resolve) => {
               chrome.storage.local.get(['pendingCheckoutSessionId'], resolve);
             });
@@ -663,34 +710,22 @@
                 
                 if (sessionResponse.ok) {
                   const sessionData = await sessionResponse.json();
-                  
                   if (sessionData.valid) {
-                    // Save subscription
+                    await chrome.storage.local.remove(['signedOut']);
                     await chrome.storage.local.set({
                       subscriptionId: sessionData.subscriptionId,
                       subscriptionExpiry: sessionData.expiryDate,
                       subscriptionActive: true,
                       userEmail: sessionData.email || email,
                     });
-                    
-                    // Clear pending checkout
                     await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
-                    
                     showNotification('Subscription verified! Reloading...', 'success');
-                    setTimeout(() => {
-                      location.reload();
-                    }, 1000);
+                    setTimeout(() => location.reload(), 1000);
                     return;
-                  } else {
                   }
-                } else {
-                  const errorText = await sessionResponse.text();
                 }
-              } catch (e) {
-              }
+              } catch (e) {}
             }
-            
-            // Fallback: Check subscription by email
             
             const response = await fetch(`${API_BASE_URL}/verify-license`, {
               method: 'POST',
@@ -698,52 +733,109 @@
               body: JSON.stringify({ licenseKey: email }),
             });
             
-            
+            let data;
+            try {
+              data = await response.json();
+            } catch (_) {
+              data = { valid: false, error: 'Verification failed. Please try again.' };
+            }
             if (!response.ok) {
-              const errorText = await response.text();
               verifyBtn.disabled = false;
               verifyBtn.textContent = 'Already paid? Verify Subscription';
-              showNotification(`Verification failed (${response.status}). Check Stripe dashboard to confirm payment.`, 'error');
+              const friendlyMsg = (data && data.error) ? data.error : (response.status === 404 ? 'No account or subscription found for this email.' : `Verification failed. Please try again.`);
+              showNotification(friendlyMsg, 'error');
+              showVerifyErrorWithSignIn(friendlyMsg + ' Sign in with the Google account you used to subscribe, then click Verify again.');
               return;
             }
             
-            const data = await response.json();
             if (data.valid) {
-              // Save subscription
+              await chrome.storage.local.remove(['signedOut']);
               await chrome.storage.local.set({
                 subscriptionId: data.subscriptionId,
                 subscriptionExpiry: data.expiryDate,
                 subscriptionActive: true,
                 userEmail: email,
               });
-              
-              
-              // Clear pending checkout
               await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
-              
               showNotification('Subscription verified! Reloading...', 'success');
-              setTimeout(() => {
-                location.reload();
-              }, 1000);
+              setTimeout(() => location.reload(), 1000);
             } else {
-              verifyBtn.disabled = false;
-              verifyBtn.textContent = 'Already paid? Verify Subscription';
-              const errorMsg = data.error || 'No active subscription found for this email.';
-              showNotification(`${errorMsg} Check Stripe dashboard to confirm payment.`, 'error');
+              const isPaymentFailed = data.status === 'past_due' || data.status === 'unpaid';
+              if (isPaymentFailed && data.subscriptionId) {
+                verifyBtn.dataset.paymentFailed = '1';
+                verifyBtn.dataset.subscriptionId = data.subscriptionId;
+                verifyBtn.textContent = 'Update payment method';
+                verifyBtn.disabled = false;
+                showNotification('Payment failed when your trial ended. Click "Update payment method" to add a new card and restore access.', 'error');
+              } else {
+                verifyBtn.disabled = false;
+                verifyBtn.textContent = 'Already paid? Verify Subscription';
+                const errorMsg = data.error || 'No active subscription found for this email.';
+                showNotification(errorMsg, 'error');
+                showVerifyErrorWithSignIn(errorMsg);
+              }
             }
           } catch (error) {
             verifyBtn.disabled = false;
             verifyBtn.textContent = 'Already paid? Verify Subscription';
             showNotification('Verification failed. Please try again.', 'error');
+            showVerifyErrorWithSignIn('Verification failed. Sign in with the Google account you used to subscribe, then click Verify again.');
           }
         });
       }
       
-      // Sign out button handler (payment view)
+      // Sign out button handler (payment view) — one-click so user is never stuck; no confirm
       const signoutBtn = document.getElementById('signout-btn');
-      if (signoutBtn && email) {
-        signoutBtn.addEventListener('click', () => {
-          performPopupSignOut('Sign out? You will need to sign in again to subscribe.');
+      if (signoutBtn) {
+        signoutBtn.addEventListener('click', async () => {
+          signoutBtn.disabled = true;
+          signoutBtn.textContent = 'Signing out...';
+          await performPopupSignOut(); // no confirm; clears storage then reloads so they see Sign in screen
+        });
+      }
+
+      // "Sign in with that account" fallback — use a different Google account (e.g. the one they used to subscribe)
+      const signinDifferentBtn = document.getElementById('signin-different-account-btn');
+      if (signinDifferentBtn && email) {
+        signinDifferentBtn.addEventListener('click', () => {
+          signinDifferentBtn.disabled = true;
+          signinDifferentBtn.textContent = 'Opening...';
+          chrome.identity.getAuthToken({
+            interactive: true,
+            scopes: ['https://www.googleapis.com/auth/userinfo.email'],
+          }, async (token) => {
+            signinDifferentBtn.disabled = false;
+            signinDifferentBtn.textContent = 'Sign in with that account';
+            if (chrome.runtime.lastError || !token) {
+              const msg = (chrome.runtime.lastError && chrome.runtime.lastError.message || '').toLowerCase();
+              if (msg.includes('cancel') || msg.includes('user_cancelled')) {
+                showNotification('Sign-in cancelled.', 'error');
+              } else {
+                showNotification('Sign-in failed. Please try again.', 'error');
+              }
+              return;
+            }
+            try {
+              const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                headers: { 'Authorization': `Bearer ${token}` },
+              });
+              if (res.ok) {
+                const userInfo = await res.json();
+                if (userInfo && userInfo.email) {
+                  await chrome.storage.local.remove(['signedOut']);
+                  await chrome.storage.local.set({ userEmail: userInfo.email });
+                  showNotification('Switched account. Click "Verify Subscription" if this is the account you used to subscribe.', 'success');
+                  setTimeout(() => location.reload(), 600);
+                } else {
+                  showNotification('No email found for that account. Please try again.', 'error');
+                }
+              } else {
+                showNotification('Could not get account info. Please try again.', 'error');
+              }
+            } catch (e) {
+              showNotification('Something went wrong. Please try again.', 'error');
+            }
+          });
         });
       }
       
@@ -1534,18 +1626,14 @@
           if (sessionResponse.ok) {
             const sessionData = await sessionResponse.json();
             if (sessionData.valid) {
-              // Save subscription
+              await chrome.storage.local.remove(['signedOut']);
               await chrome.storage.local.set({
                 subscriptionId: sessionData.subscriptionId,
                 subscriptionExpiry: sessionData.expiryDate,
                 subscriptionActive: true,
                 userEmail: sessionData.email || email,
               });
-              
-              // Clear pending checkout
               await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
-              
-              // Small delay to ensure storage is fully written
               await new Promise(resolve => setTimeout(resolve, 100));
               location.reload();
               return;
@@ -1556,7 +1644,6 @@
         }
       }
       
-      // Fallback: verify by email
       if (email) {
         try {
           const verifyResponse = await fetch(`${API_BASE_URL}/verify-license`, {
@@ -1564,21 +1651,17 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ licenseKey: email }),
           });
-          
           const verifyData = await verifyResponse.json();
           if (verifyData.valid) {
-            // Save subscription
+            await chrome.storage.local.remove(['signedOut']);
             await chrome.storage.local.set({
               subscriptionId: verifyData.subscriptionId,
               subscriptionExpiry: verifyData.expiryDate,
               subscriptionActive: true,
               userEmail: email,
             });
-            
-            // Clear pending checkout
             await chrome.storage.local.remove(['pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt']);
-            
-            // Small delay to ensure storage is fully written
+            await new Promise(resolve => setTimeout(resolve, 100));
             await new Promise(resolve => setTimeout(resolve, 100));
             location.reload();
             return;
@@ -1621,7 +1704,7 @@
           if (verifyResponse.ok) {
             const verifyData = await verifyResponse.json();
             if (verifyData.valid) {
-              // Save subscription data
+              await chrome.storage.local.remove(['signedOut']);
               await chrome.storage.local.set({
                 subscriptionId: verifyData.subscriptionId,
                 subscriptionExpiry: verifyData.expiryDate,
@@ -4258,7 +4341,7 @@
       const result = await chrome.storage.local.get(['subscriptionId', 'userEmail', 'subscriptionExpiry']);
       
       if (!result.subscriptionId && !result.userEmail) {
-        subscriptionInfo.innerHTML = '<strong>Status:</strong> Not subscribed';
+        subscriptionInfo.innerHTML = '<div style="text-align: center; padding: 12px;"><span style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">Status</span><div style="font-size: 14px; font-weight: 600; color: var(--text-muted); margin-top: 4px;">Not subscribed</div></div>';
         cancelBtn.style.display = 'none';
         resubscribeBtn.style.display = 'none';
         refundBtn.style.display = 'none';
@@ -4320,7 +4403,7 @@
         
         subscriptionInfo.innerHTML = `
           <div style="text-align: center;">
-            <div style="margin-bottom: 16px;">
+            <div style="margin-bottom: 18px;">
               <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Status</div>
               <div style="font-size: 16px; font-weight: 700; color: ${isCancelled ? '#f59e0b' : isTrialing ? '#1f7fff' : '#10b981'};">${statusText}</div>
             </div>
@@ -4340,8 +4423,8 @@
             <div style="margin-bottom: 16px;">
               <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Subscription ID</div>
               <div style="display: flex; align-items: center; justify-content: center; gap: 8px;">
-                <code style="font-size: 12px; background: var(--bg-secondary); padding: 6px 12px; border-radius: 6px; color: var(--text-primary); font-family: 'Monaco', 'Courier New', monospace;">${data.subscriptionId}</code>
-                <button id="copy-subscription-id" style="background: linear-gradient(135deg, #05007f 0%, #1f7fff 100%); color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; transition: all 0.2s;" title="Copy Subscription ID">
+                <code style="font-size: 12px; background: var(--bg-secondary); padding: 8px 12px; border-radius: 8px; color: var(--text-primary); font-family: 'Monaco', 'Courier New', monospace; border: 1px solid var(--border-color);">${data.subscriptionId}</code>
+                <button id="copy-subscription-id" style="background: linear-gradient(135deg, #05007f 0%, #1f7fff 100%); color: white; border: none; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 11px; font-weight: 600; transition: transform 0.2s, box-shadow 0.2s;" title="Copy Subscription ID">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -4403,13 +4486,13 @@
       } else {
         const isPaymentFailed = data.status === 'past_due' || data.status === 'unpaid';
         subscriptionInfo.innerHTML = `
-          <div style="text-align: center;">
+          <div style="text-align: center; padding: 14px; border: 1px solid rgba(185,28,28,0.28); border-radius: 10px; background: transparent;">
             <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Status</div>
-            <div style="font-size: 14px; font-weight: 600; color: #dc2626; margin-bottom: 8px;">${data.error || 'Inactive'}</div>
+            <div style="font-size: 14px; font-weight: 600; color: #b91c1c; margin-bottom: 8px;">${data.error || 'Inactive'}</div>
             ${isPaymentFailed ? '<div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">Click the button below to update your card and restore access.</div>' : ''}
           </div>
         `;
-        subscriptionInfo.style.color = '#dc2626';
+        subscriptionInfo.style.color = 'var(--text-primary)';
         cancelBtn.style.display = 'none';
         resubscribeBtn.style.display = 'none';
         refundBtn.style.display = 'none';
@@ -4423,13 +4506,25 @@
         }
       }
     } catch (error) {
-      subscriptionInfo.innerHTML = '<strong>Status:</strong> Error loading subscription. Check your connection and try again.';
-      subscriptionInfo.style.color = '#dc2626';
+      subscriptionInfo.innerHTML = `
+        <div style="text-align: center; padding: 16px; border: 1px solid rgba(185,28,28,0.28); border-radius: 10px; background: transparent;">
+          <div style="font-size: 14px; font-weight: 600; color: #b91c1c; margin-bottom: 8px;">Error loading subscription</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 14px; line-height: 1.5;">Check your connection and try again, or use the buttons below to manage your subscription.</div>
+          <button id="popup-subscription-retry-btn" style="margin-top: 4px; padding: 10px 20px; background: linear-gradient(135deg, #05007f 0%, #1f7fff 100%); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; transition: transform 0.2s, box-shadow 0.2s;">Retry</button>
+        </div>
+      `;
+      subscriptionInfo.style.color = 'var(--text-primary)';
       cancelBtn.style.display = 'none';
       resubscribeBtn.style.display = 'none';
       refundBtn.style.display = 'none';
       const manageBtn = document.getElementById('popup-manage-subscription-btn');
-      if (manageBtn) manageBtn.style.display = 'none';
+      if (manageBtn) {
+        manageBtn.style.display = 'inline-block';
+        manageBtn.textContent = 'Manage Subscription';
+        setupManageSubscriptionButton();
+      }
+      const retryBtn = document.getElementById('popup-subscription-retry-btn');
+      if (retryBtn) retryBtn.addEventListener('click', () => loadPopupSubscriptionInfo());
     }
   }
 
@@ -4507,25 +4602,7 @@
             }
           }
           
-          // If still no data, try to verify by checking if user has active subscription
-          if (!email && !subscriptionId) {
-            // Last resort: try to get email from Chrome identity
-            try {
-              const identityResult = await new Promise((resolve) => {
-                chrome.identity.getProfileUserInfo((userInfo) => {
-                  if (userInfo && userInfo.email) {
-                    resolve(userInfo.email);
-                  } else {
-                    resolve(null);
-                  }
-                });
-              });
-              if (identityResult) {
-                email = identityResult;
-              }
-            } catch (e) {
-            }
-          }
+          // No Chrome profile fallback — we only use app sign-in (storage).
         }
         
         // If we still have nothing, show error
@@ -4663,7 +4740,7 @@
             // Was refunded (within 7 days)
             await chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
             if (statusDiv) {
-              statusDiv.innerHTML = `✅ Subscription cancelled and refunded. £${data.refundAmount || 2.99} will be refunded to your original payment method.`;
+              statusDiv.innerHTML = `✅ Subscription cancelled and refunded. £${data.refundAmount || 2.49} will be refunded to your original payment method.`;
               statusDiv.style.color = '#10b981';
             }
             showNotification('Subscription cancelled and refunded', 'success');
@@ -4818,7 +4895,7 @@
           await chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive']);
           
           if (statusDiv) {
-            statusDiv.innerHTML = `✅ Refund processed successfully! £${data.amount || 2.99} will be refunded to your original payment method.`;
+            statusDiv.innerHTML = `✅ Refund processed successfully! £${data.amount || 2.49} will be refunded to your original payment method.`;
             statusDiv.style.color = '#10b981';
           }
           showNotification('Refund processed successfully', 'success');

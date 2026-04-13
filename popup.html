@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <title>Nimbus Hub</title>
   <link rel="icon" type="image/png" href="favicon_nimbus.png">
-  <script src="https://js.stripe.com/v3/"></script>
   <style>
     /* CSS Variables - Dark theme only */
     :root {
@@ -98,7 +97,8 @@
     }
     
     .refresh-btn,
-    .settings-btn {
+    .settings-btn,
+    .toolbar-toggle-btn {
       position: absolute;
       top: 0;
       width: auto;
@@ -116,6 +116,10 @@
     }
     
     .refresh-btn {
+      right: 64px;
+    }
+    
+    .toolbar-toggle-btn {
       right: 32px;
     }
     
@@ -124,7 +128,8 @@
     }
     
     .refresh-btn:hover,
-    .settings-btn:hover {
+    .settings-btn:hover,
+    .toolbar-toggle-btn:hover {
       color: white;
       opacity: 1;
     }
@@ -134,8 +139,13 @@
       transition: transform 0.3s ease;
     }
     
+    .toolbar-toggle-btn.hidden svg {
+      opacity: 0.5;
+    }
+    
     .refresh-btn svg,
-    .settings-btn svg {
+    .settings-btn svg,
+    .toolbar-toggle-btn svg {
       width: 20px;
       height: 20px;
     }
@@ -551,6 +561,23 @@
       margin-bottom: 0;
     }
     
+    .word-of-day-top .word-card-synonyms-container {
+      background: #ffffff !important;
+      position: relative;
+    }
+    
+    .word-of-day-top .word-card-synonyms-container::after {
+      content: '';
+      position: absolute;
+      top: 16px;
+      right: 18px;
+      bottom: 12px;
+      width: 40px;
+      background: linear-gradient(to right, transparent, #ffffff);
+      pointer-events: none;
+      z-index: 1;
+    }
+    
     .word-of-day-top .word-card-synonyms-label {
       color: #05007f;
     }
@@ -564,11 +591,9 @@
     }
     
     .word-of-day-top .word-card-synonym-tag:hover {
-      background: #05007f;
-      color: #ffffff;
-      border-color: #05007f;
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(5, 0, 127, 0.3);
+      background: rgba(5, 0, 127, 0.08);
+      color: #05007f;
+      border-color: rgba(5, 0, 127, 0.35);
     }
     
     .word-of-day {
@@ -1107,10 +1132,9 @@
     }
     
     .word-card-synonym-tag:hover {
-      background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-blue-light) 100%);
-      color: var(--text-inverse);
-      border-color: var(--accent-blue);
-      box-shadow: var(--card-shadow-inner), 0 0 20px rgba(30, 58, 138, 0.5), 0 0 40px rgba(30, 58, 138, 0.3);
+      background: var(--card-bg);
+      color: var(--text-secondary);
+      border-color: var(--border-color);
     }
     
     .word-card-actions {
@@ -1416,10 +1440,29 @@
       right: 0;
       bottom: 0;
       background: var(--bg-gradient);
-      display: flex;
+      display: none; /* Hidden by default - shown via JS */
       flex-direction: column;
       z-index: 2000;
       isolation: isolate;
+    }
+    
+    .settings-page-footer {
+      padding: 24px;
+      text-align: center;
+      border-top: 2px solid var(--border-color);
+      margin-top: auto;
+      flex-shrink: 0;
+    }
+    
+    .settings-page-footer img {
+      height: 32px;
+      opacity: 0.8;
+      filter: brightness(0) invert(1);
+      transition: opacity 0.2s;
+    }
+    
+    .settings-page-footer img:hover {
+      opacity: 1;
     }
     
     .settings-header {
@@ -1598,6 +1641,9 @@
       scrollbar-width: none;
       -ms-overflow-style: none;
       position: relative;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
     }
     
     .settings-content::-webkit-scrollbar {
@@ -1959,12 +2005,12 @@
     }
     
     .notification-toast.error {
-      border-color: #f87171;
+      border-color: rgba(185, 28, 28, 0.45);
       background: var(--card-bg);
-      box-shadow: var(--card-shadow-inner), 0 8px 24px rgba(248, 113, 113, 0.25);
+      box-shadow: var(--card-shadow-inner);
     }
     .notification-toast.error .notification-content {
-      color: #dc2626;
+      color: #b91c1c;
     }
     
     .notification-content {
@@ -1991,7 +2037,7 @@
     }
     
     .notification-toast.error .notification-content::before {
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23dc2626' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M15 9l-6 6M9 9l6 6'/%3E%3C/svg%3E");
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%23b91c1c' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M15 9l-6 6M9 9l6 6'/%3E%3C/svg%3E");
     }
     
     /* Loading skeleton animation */
@@ -2036,6 +2082,83 @@
     .loading-skeleton-line:last-child {
       margin-bottom: 0;
     }
+    
+    /* Voice Preference Buttons */
+    .voice-preference-buttons {
+      display: flex;
+      gap: 12px;
+      width: 100%;
+    }
+    
+    .voice-preference-btn {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 20px 16px;
+      background: var(--card-bg);
+      border: 2px solid var(--border-color);
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      color: var(--text-primary);
+      font-size: 14px;
+      font-weight: 600;
+      box-shadow: var(--card-shadow-inner), 0 2px 4px rgba(0, 0, 0, 0.1);
+      min-height: 100px;
+    }
+    
+    .voice-preference-btn:hover {
+      border-color: var(--accent-blue);
+      background: var(--bg-secondary);
+      box-shadow: var(--card-shadow-inner), 0 0 20px rgba(30, 58, 138, 0.4), 0 0 40px rgba(30, 58, 138, 0.2);
+      transform: translateY(-2px);
+    }
+    
+    .voice-preference-btn.active {
+      border-color: var(--accent-blue);
+      background: rgba(31, 127, 255, 0.15);
+      color: var(--accent-blue);
+      box-shadow: var(--card-shadow-inner), 0 0 20px rgba(31, 127, 255, 0.5), 0 0 40px rgba(31, 127, 255, 0.3);
+    }
+    
+    .voice-preference-btn svg {
+      width: 32px;
+      height: 32px;
+      stroke-width: 2.5;
+    }
+    
+    .voice-preference-btn.active svg {
+      color: var(--accent-blue);
+    }
+    
+    .voice-preference-btn span {
+      font-weight: 700;
+      font-size: 15px;
+    }
+    
+    /* Small Sign out link-style button */
+    .signout-link-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      padding: 8px 0;
+      margin-top: 12px;
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+    .signout-link-btn:hover {
+      color: #b91c1c;
+    }
+    .settings-page-footer .signout-link-btn {
+      display: block;
+      margin: 12px auto 0;
+    }
   </style>
 </head>
 <body>
@@ -2055,6 +2178,12 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
           <circle cx="12" cy="12" r="3"/>
+        </svg>
+      </button>
+      <button class="toolbar-toggle-btn" id="toolbarToggleBtn" title="Toggle Floating Toolbar">
+        <svg id="toolbarToggleIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 3h18v18H3z"/>
+          <path d="M9 9h6v6H9z"/>
         </svg>
       </button>
       </div>
@@ -2218,10 +2347,13 @@
               <button class="settings-action-btn" id="popup-resubscribe-btn" style="display: none; background: linear-gradient(135deg, #05007f 0%, #1f7fff 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 4px rgba(5, 0, 127, 0.35);" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 4px 8px rgba(31, 127, 255, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 2px 4px rgba(5, 0, 127, 0.35)'">Resubscribe</button>
             </div>
             <div class="settings-item">
-              <button class="settings-action-btn" id="popup-refund-btn" style="display: none; background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 4px rgba(220, 38, 38, 0.3);" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 4px 8px rgba(220, 38, 38, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 2px 4px rgba(220, 38, 38, 0.3)'">Request Refund</button>
+              <button class="settings-action-btn" id="popup-refund-btn" style="display: none; background: transparent; color: #b91c1c; border: 1px solid rgba(185,28,28,0.5); padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(185,28,28,0.08)'; this.style.borderColor='rgba(185,28,28,0.7)'" onmouseout="this.style.background='transparent'; this.style.borderColor='rgba(185,28,28,0.5)'">Request Refund</button>
               <p id="popup-refund-hint" style="display: none; margin: 8px 0 0 0; font-size: 12px; color: var(--text-muted);">Available within 7 days of purchase. Your subscription will be cancelled immediately.</p>
             </div>
             <div id="popup-subscription-status" style="margin-top: 16px; padding: 12px; border-radius: 6px; font-size: 13px; color: var(--text-primary);"></div>
+            <div class="subscription-signout-row" style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-color);">
+              <button type="button" id="popup-subscription-signout-btn" class="signout-link-btn" data-i18n="signOut">Sign out</button>
+            </div>
           </div>
         </div>
       </div>
@@ -2297,6 +2429,33 @@
                 <input type="checkbox" id="showExamples">
                 <span data-i18n="showExamplesLabel">Show example sentences</span>
               </label>
+            </div>
+            <div class="settings-item">
+              <label data-i18n="voicePreferenceLabel">Voice Preference:</label>
+              <input type="hidden" id="voicePreference" value="auto">
+              <div class="voice-preference-buttons">
+                <button type="button" class="voice-preference-btn" data-value="female" id="voiceFemaleBtn">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="8" r="6"/>
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                    <path d="M12 13v3"/>
+                    <path d="M9 16h6"/>
+                  </svg>
+                  <span>Female</span>
+                </button>
+                <button type="button" class="voice-preference-btn" data-value="male" id="voiceMaleBtn">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="8" r="6"/>
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                    <path d="M12 13v3"/>
+                    <path d="M9 16h6"/>
+                    <path d="M12 10v-3"/>
+                    <path d="M9 7h6"/>
+                  </svg>
+                  <span>Male</span>
+                </button>
+              </div>
+              <p class="settings-description">Choose preferred voice gender for text-to-speech</p>
             </div>
             <div class="settings-item">
               <label data-i18n="explanationStyleLabel">Explanation Style:</label>
@@ -2381,6 +2540,11 @@
             </div>
           </div>
         </div>
+      </div>
+      <!-- Logo and Sign out at bottom of settings -->
+      <div class="settings-page-footer">
+        <img id="settingsLogo" src="" alt="Nimbus">
+        <button type="button" id="settings-footer-signout-btn" class="signout-link-btn" data-i18n="signOut">Sign out</button>
       </div>
     </div>
   </div>

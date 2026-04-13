@@ -2,13 +2,17 @@
 
 ## Why This Is Needed
 
-The "Sign in with Google" feature uses Chrome's identity API. For the OAuth flow to work in production (Chrome Web Store), you need to configure an OAuth client ID.
+The "Sign in with Google" feature uses Chrome's identity API with **OAuth only**. The extension does **not** use the Chrome profile (e.g. `getProfileUserInfo`) to identify the user. That way:
+
+- **First-time users** see "Sign in with Google" / "Sign up with Google" and must explicitly sign in.
+- **Sign out** actually logs them out (no auto-fill from Chrome), and they see the sign-in screen again.
+- **Account** is whoever signed in inside the extension, not tied to the Chrome profile.
+
+You need an OAuth client ID for "Sign in with Google" to work in production (Chrome Web Store).
 
 ## Current Implementation
 
-The extension uses a two-step approach:
-1. **First**: Tries `chrome.identity.getProfileUserInfo()` - Works if user is signed into Chrome (no OAuth client ID needed)
-2. **Fallback**: Uses `chrome.identity.getAuthToken()` - Requires OAuth client ID setup
+The extension uses **OAuth only** (`chrome.identity.getAuthToken({ interactive: true })`) when the user clicks "Sign in with Google". Stored `userEmail` comes only from that flow. Chrome profile is never used for identity.
 
 ## Setting Up OAuth Client ID
 
@@ -31,14 +35,13 @@ The extension uses a two-step approach:
 
 ## Testing
 
-- **Unpacked mode**: `getProfileUserInfo` should work if signed into Chrome
-- **Chrome Web Store**: Both methods should work after OAuth client ID is configured
+- **Unpacked mode**: Use a Chrome App OAuth client ID for your unpacked extension ID (see OAUTH_TESTING_SETUP.md).
+- **Chrome Web Store**: Use the production OAuth client ID for the published extension ID.
 
 ## Notes
 
-- The extension will work for users signed into Chrome even without OAuth client ID
-- OAuth client ID is only needed for users NOT signed into Chrome
-- Chrome Web Store reviewers should be able to test if they're signed into Chrome
+- OAuth client ID is required for "Sign in with Google" to work (no Chrome-profile fallback).
+- Sign out clears stored identity and revokes the cached token; the user must sign in again to use the app.
 
 
 

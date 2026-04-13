@@ -43,7 +43,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
                 console.log('Background: get-session response data:', data);
                 
                 if (data.valid) {
-                  // Save subscription
+                  await chrome.storage.local.remove(['signedOut']);
                   await chrome.storage.local.set({
                     subscriptionId: data.subscriptionId,
                     subscriptionExpiry: data.expiryDate,
@@ -92,20 +92,6 @@ const VERCEL_API_URL = 'https://nimbus-api-ten.vercel.app/api/chat';
 
 // CRITICAL: Set up message listener IMMEDIATELY
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg && msg.action === 'nimbusCopyAction') {
-    const ts = Date.now();
-    chrome.storage.local.set({ nimbusLastCopyAt: ts });
-    // Broadcast to all tabs so other pages can react
-    chrome.tabs.query({}, (tabs) => {
-      tabs.forEach((t) => {
-        if (typeof t.id === 'number') {
-          chrome.tabs.sendMessage(t.id, { action: 'nimbusCopyAction', at: ts }, () => {});
-        }
-      });
-    });
-    sendResponse({ ok: true });
-    return true;
-  }
   if (msg && msg.type === 'openTab' && msg.url) {
     chrome.tabs.create({ url: msg.url }, () => {
       sendResponse(chrome.runtime.lastError ? { success: false, error: String(chrome.runtime.lastError.message) } : { success: true });
@@ -202,22 +188,24 @@ IMPORTANT LIMITATIONS:
         if (!Array.isArray(resp.synonyms)) {
           resp.synonyms = resp.synonyms ? [resp.synonyms] : [];
         }
-        
-        // Double-check it's an array
         resp.synonyms = Array.isArray(resp.synonyms) ? resp.synonyms : [];
-        
+        // Fallback: never send empty – ensure explanation or error so UI always has something to show
+        const hasContent = resp.explanation || resp.error || resp.isPerson || resp.isOrganization || resp.isPlace || resp.isPartialName || resp.isPartialNameFallback;
+        if (!hasContent) {
+          resp.error = resp.error || 'Unable to get definition. Please try again.';
+          resp.explanation = resp.explanation || resp.error;
+        }
+        if (resp.explanation == null && resp.error) {
+          resp.explanation = resp.error;
+        }
         sendResponse(resp);
       } catch (err) {
-        console.error('Nimbus Background: ========== HANDLE EXPLAIN ERROR ==========');
-        console.error('Nimbus Background: Error message:', err.message);
-        console.error('Nimbus Background: Error stack:', err.stack);
-        const errorResponse = { 
-          error: err.message || 'unknown error', 
+        const errMsg = err.message || 'Something went wrong. Please try again.';
+        sendResponse({
+          error: errMsg,
           synonyms: [],
-          explanation: null
-        };
-        console.error('Nimbus Background: Sending error response:', errorResponse);
-        sendResponse(errorResponse);
+          explanation: errMsg
+        });
       }
     })();
     
@@ -392,70 +380,397 @@ async function handleExplain(term, context, detailed = false) {
   // Get dictionary language from settings (default to 'en')
   const dictionaryLanguage = cfg.settings?.dictionaryLanguage || 'en';
 
-  // Check if this might be a person, organization, place, or notable entity
-  // Look for capitalized words (proper nouns) - more flexible pattern
-  const trimmedTerm = term.trim();
+  // Strip apostrophes and possessive forms (e.g., "Osama's" -> "Osama")
+  let trimmedTerm = term.trim();
+  trimmedTerm = trimmedTerm.replace(/'s\b/gi, '').trim(); // Remove possessive 's
   const termLower = trimmedTerm.toLowerCase();
   
-  // EXCLUDE medical/anatomical terms - these should use dictionary/modal, not hub
-  const medicalExclusions = [
-    // Common medical/anatomical terms
-    'gallbladder', 'liver', 'kidney', 'stomach', 'intestine', 'bladder', 'spleen', 'pancreas',
-    'heart', 'lung', 'brain', 'muscle', 'bone', 'nerve', 'vein', 'artery', 'cell', 'tissue',
-    'organ', 'organelle', 'molecule', 'protein', 'enzyme', 'hormone', 'vitamin', 'mineral',
-    'bile', 'blood', 'plasma', 'serum', 'urine', 'saliva', 'mucus', 'phlegm',
-    'cartilage', 'ligament', 'tendon', 'joint', 'spine', 'skull', 'rib', 'pelvis',
-    'esophagus', 'trachea', 'bronchus', 'alveolus', 'diaphragm', 'pleura',
-    'duodenum', 'jejunum', 'ileum', 'colon', 'rectum', 'anus',
-    'nephron', 'glomerulus', 'ureter', 'urethra',
-    'neuron', 'synapse', 'dendrite', 'axon', 'myelin',
-    'chromosome', 'gene', 'dna', 'rna', 'nucleotide',
-    // Medical conditions
-    'diabetes', 'cancer', 'flu', 'cold', 'fever', 'headache', 'pain', 'disease', 'syndrome',
-    // Medical term patterns
-    /^(anti|auto|bio|cardio|derm|endo|gastro|hemo|neuro|osteo|patho|psycho|pulmo|thrombo)/i,
-    /(itis|osis|emia|oma|pathy|scopy|tomy|ectomy|plasty|algia|cele|cyte|genesis|gram|graph|lysis|megaly|phage|philia|phobia|plasia|plegia|pnea|rrhea|scope|stasis|trophy|uria)$/i
-  ];
+  // COUNT WORDS FIRST - for 1-2 words, try dictionary/medical BEFORE entity detection
+  const wordCount = term.trim().split(/\s+/).filter(w => w.trim().length > 0).length;
+  const isStatement = wordCount >= 3;
   
-  // Check if term matches medical exclusions
-  const isMedicalTerm = medicalExclusions.some(exclusion => {
-    if (typeof exclusion === 'string') {
-      return termLower === exclusion || termLower.includes(exclusion);
-    } else if (exclusion instanceof RegExp) {
-      return exclusion.test(trimmedTerm);
+  // Declare dictionaryResult at function scope
+  let dictionaryResult = null;
+  
+  // FOR 1-2 WORDS: For names/places/orgs try Wikipedia FIRST; for other terms try dictionary first
+  if (!isStatement) {
+    // Name-like check: if term looks like a person/place/org, try Wikipedia first (primary for names)
+    const medicalExclusionsForEntity = [
+      'gallbladder', 'liver', 'kidney', 'stomach', 'intestine', 'bladder', 'spleen', 'pancreas',
+      'heart', 'lung', 'brain', 'muscle', 'bone', 'nerve', 'vein', 'artery', 'cell', 'tissue',
+      'organ', 'organelle', 'molecule', 'protein', 'enzyme', 'hormone', 'vitamin', 'mineral',
+      'bile', 'blood', 'plasma', 'serum', 'urine', 'saliva', 'mucus', 'phlegm',
+      'cartilage', 'ligament', 'tendon', 'joint', 'spine', 'skull', 'rib', 'pelvis',
+      'esophagus', 'trachea', 'bronchus', 'alveolus', 'diaphragm', 'pleura',
+      'duodenum', 'jejunum', 'ileum', 'colon', 'rectum', 'anus',
+      'nephron', 'glomerulus', 'ureter', 'urethra',
+      'neuron', 'synapse', 'dendrite', 'axon', 'myelin',
+      'chromosome', 'gene', 'dna', 'rna', 'nucleotide',
+      'diabetes', 'cancer', 'flu', 'cold', 'fever', 'headache', 'pain', 'disease', 'syndrome',
+      /^(anti|auto|bio|cardio|derm|endo|gastro|hemo|neuro|osteo|patho|psycho|pulmo|thrombo)/i,
+      /(itis|osis|emia|oma|pathy|scopy|tomy|ectomy|plasty|algia|cele|cyte|genesis|gram|graph|lysis|megaly|phage|philia|phobia|plasia|plegia|pnea|rrhea|scope|stasis|trophy|uria)$/i
+    ];
+    const isMedicalForEntity = medicalExclusionsForEntity.some(ex => {
+      if (typeof ex === 'string') return termLower === ex || termLower.includes(ex);
+      if (ex instanceof RegExp) return ex.test(trimmedTerm);
+      return false;
+    });
+    const commonWordsForEntity = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'up', 'down', 'out', 'off', 'over', 'under', 'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'each', 'both', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'just', 'now'];
+    const wordsForEntity = trimmedTerm.split(/\s+/).filter(w => w.trim().length > 0);
+    const firstWordLower = wordsForEntity[0] ? wordsForEntity[0].toLowerCase() : '';
+    const isLikelyNameOrEntity = !commonWordsForEntity.includes(firstWordLower) &&
+      /^[A-Z][A-Za-z'\-]+(\s+[A-Z][A-Za-z'\-]+)*(\s+(Inc|LLC|Ltd|Corp|Company|Corporation|Foundation|Institute|University|College|Group|Organization|Org))?$/i.test(trimmedTerm) &&
+      wordsForEntity.length >= 1 && wordsForEntity.length <= 6 &&
+      trimmedTerm.length >= 2 && trimmedTerm.length <= 80;
+
+    let triedWikipediaForName = false;
+    if (isLikelyNameOrEntity && !isMedicalForEntity) {
+      try {
+        const wordsE = trimmedTerm.split(/\s+/).filter(w => w.trim().length > 0);
+        const isPartialNameE = wordsE.length === 1 && trimmedTerm.length >= 3 &&
+          /^[A-Z][a-z]+$/.test(trimmedTerm) && !commonWordsForEntity.includes(trimmedTerm.toLowerCase());
+        let entityDataFirst = null;
+        if (!isPartialNameE) {
+          entityDataFirst = await fetchEntityFromWikipedia(term);
+        } else {
+          entityDataFirst = await fetchEntityFromWikipedia(trimmedTerm);
+          if (entityDataFirst && entityDataFirst.isPerson && entityDataFirst.name) {
+            const foundNameLower = entityDataFirst.name.toLowerCase();
+            const searchTermLower = trimmedTerm.toLowerCase();
+            const foundWords = foundNameLower.split(/\s+/);
+            const searchIsFirstName = foundWords.length > 1 && foundWords[0] === searchTermLower;
+            if (foundNameLower !== searchTermLower && searchIsFirstName) {
+              entityDataFirst = null;
+            }
+          }
+        }
+        if (entityDataFirst) {
+          if (entityDataFirst.isPerson) {
+            const newsArticles = await fetchPersonNews(term);
+            return {
+              explanation: entityDataFirst.bio,
+              synonyms: [],
+              pronunciation: null,
+              examples: [],
+              isPerson: true,
+              personData: {
+                name: entityDataFirst.name,
+                image: entityDataFirst.image,
+                birthDate: entityDataFirst.birthDate,
+                age: entityDataFirst.age,
+                occupation: entityDataFirst.occupation,
+                nationality: entityDataFirst.nationality,
+                relationships: entityDataFirst.relationships,
+                notableWorks: entityDataFirst.notableWorks,
+                bio: entityDataFirst.bio || entityDataFirst.summary,
+                summary: entityDataFirst.summary,
+                wikipediaUrl: entityDataFirst.wikipediaUrl,
+                newsArticles: newsArticles || []
+              }
+            };
+          }
+          if (entityDataFirst.isOrganization) {
+            const newsArticles = await fetchPersonNews(term);
+            return {
+              explanation: entityDataFirst.bio,
+              synonyms: [],
+              pronunciation: null,
+              examples: [],
+              isOrganization: true,
+              organizationData: {
+                name: entityDataFirst.name,
+                image: entityDataFirst.image,
+                founded: entityDataFirst.founded,
+                headquarters: entityDataFirst.headquarters,
+                industry: entityDataFirst.industry,
+                relatedCompanies: entityDataFirst.relatedCompanies,
+                keyPeople: entityDataFirst.keyPeople,
+                revenue: entityDataFirst.revenue,
+                employees: entityDataFirst.employees,
+                summary: entityDataFirst.summary,
+                wikipediaUrl: entityDataFirst.wikipediaUrl,
+                newsArticles: newsArticles || []
+              }
+            };
+          }
+          if (entityDataFirst.isPlace) {
+            const newsArticles = await fetchPersonNews(term);
+            return {
+              explanation: entityDataFirst.bio,
+              synonyms: [],
+              pronunciation: null,
+              examples: [],
+              isPlace: true,
+              placeData: {
+                name: entityDataFirst.name,
+                image: entityDataFirst.image,
+                population: entityDataFirst.population,
+                country: entityDataFirst.country,
+                coordinates: entityDataFirst.coordinates,
+                area: entityDataFirst.area,
+                elevation: entityDataFirst.elevation,
+                timeZone: entityDataFirst.timeZone,
+                summary: entityDataFirst.summary,
+                wikipediaUrl: entityDataFirst.wikipediaUrl,
+                newsArticles: newsArticles || []
+              }
+            };
+          }
+        }
+        triedWikipediaForName = true;
+      } catch (err) {
+        triedWikipediaForName = true;
+      }
     }
-    return false;
-  });
-  
-  if (isMedicalTerm) {
-    // Skip entity detection, fall through to dictionary lookup (modal)
-  } else {
+
+    // Dictionary lookup for 1-2 words (skip if not name-like; names already tried Wikipedia first)
+    try {
+      dictionaryResult = await fetchFreeDictionary(term, dictionaryLanguage);
+      
+      // Fix synonyms array
+      if (!dictionaryResult.synonyms) {
+        dictionaryResult.synonyms = [];
+      } else if (!Array.isArray(dictionaryResult.synonyms)) {
+        dictionaryResult.synonyms = [dictionaryResult.synonyms];
+      }
+      dictionaryResult.synonyms = Array.isArray(dictionaryResult.synonyms) ? dictionaryResult.synonyms : [];
+      
+      // Ensure synonyms is always an array, even if empty
+      if (!Array.isArray(dictionaryResult.synonyms)) {
+        dictionaryResult.synonyms = [];
+      }
+      
+      // If dictionary succeeded with good result, return it immediately
+      if (dictionaryResult && !dictionaryResult.error && dictionaryResult.explanation && 
+          dictionaryResult.explanation.length > 20 && 
+          !dictionaryResult.explanation.toLowerCase().includes('not found') &&
+          !dictionaryResult.explanation.toLowerCase().includes('no definition')) {
+        // Ensure all required fields are present
+        return {
+          explanation: dictionaryResult.explanation,
+          synonyms: dictionaryResult.synonyms || [],
+          pronunciation: dictionaryResult.pronunciation || null,
+          examples: dictionaryResult.examples || [],
+          source: 'dictionary'
+        };
+      }
+    } catch (err) {
+      dictionaryResult = { error: err.message };
+    }
+    
+    // SECOND: If regular dictionary failed, try medical dictionary
+    if (!dictionaryResult || dictionaryResult.error || !dictionaryResult.explanation || 
+        dictionaryResult.explanation.length <= 20 || 
+        dictionaryResult.explanation.toLowerCase().includes('not found') ||
+        dictionaryResult.explanation.toLowerCase().includes('no definition')) {
+      // Check if term looks medical before trying medical dictionary
+      const termLower = term.toLowerCase();
+      const termWords = termLower.split(/\s+/);
+      
+      const medicalPatterns = [
+        /^(anti|auto|bio|cardio|derm|endo|gastro|hemo|neuro|osteo|patho|psycho|pulmo|thrombo|oesophago|esophago|hyper|hypo|poly|mono|di|tri)/i,
+        /(itis|osis|emia|oma|pathy|scopy|tomy|ectomy|plasty|algia|cele|cyte|genesis|gram|graph|logy|lysis|megaly|phage|philia|phobia|plasia|plegia|pnea|rrhea|scope|stasis|trophy|uria)$/i,
+        /(gastric|oesophageal|esophageal|intestinal|hepatic|renal|cardiac|pulmonary|neural|dermal|vascular|muscular|skeletal|nervous|digestive|respiratory|circulatory|endocrine|reproductive|urinary|lymphatic)/i
+      ];
+      
+      // Medical keywords that indicate medical terms (including multi-word)
+      const medicalKeywords = ['gi', 'gastrointestinal', 'upper', 'lower', 'ct', 'mri', 'x-ray', 'xray', 'ekg', 'ecg', 'iv', 'ivf', 'cpr', 'er', 'icu', 'or'];
+      
+      const looksMedical = medicalPatterns.some(pattern => pattern.test(term)) ||
+                          medicalKeywords.some(keyword => termLower.includes(keyword)) ||
+                          (termWords.length === 2 && (
+                            (termWords[0] === 'upper' && termWords[1] === 'gi') ||
+                            (termWords[0] === 'lower' && termWords[1] === 'gi') ||
+                            (termWords[0] === 'upper' && termWords[1] === 'endoscopy') ||
+                            (termWords[0] === 'lower' && termWords[1] === 'endoscopy')
+                          ));
+      
+      if (looksMedical) {
+        // Try medical dictionary for medical terms
+        try {
+          const medicalResult = await tryMedicalDictionaries(term);
+          if (medicalResult && medicalResult.explanation && !medicalResult.error) {
+            // Check if the medical result is too generic
+            const explanation = medicalResult.explanation.toLowerCase();
+            const isGeneric = explanation.length < 50 || 
+                            explanation.includes('is a medical term') ||
+                            explanation.includes('typically relates to') ||
+                            explanation.includes('typically refers to') ||
+                            explanation.includes('medical compound term') ||
+                            (explanation.split('.').length <= 2 && explanation.length < 100);
+            
+            // Always return medical dictionary result, but enhance it with AI if generic
+            if (!isGeneric) {
+              // Medical dictionary found a good, detailed result - return it
+                return {
+                explanation: medicalResult.explanation,
+                synonyms: medicalResult.synonyms || [],
+                pronunciation: medicalResult.pronunciation || null,
+                examples: medicalResult.examples || [],
+                source: 'medical-dictionary'
+              };
+            }
+            
+            // If generic, synthesize with AI to enhance the medical API result
+            if (VERCEL_API_URL !== 'YOUR_VERCEL_URL_HERE/api/chat') {
+              try {
+                const aiController = new AbortController();
+                const aiTimeout = setTimeout(() => aiController.abort(), 5000); // 5 second timeout for medical terms
+                
+                // Synthesize: Use medical API result as base, enhance with AI
+                const medicalPrompt = `The medical term "${term}" has been identified as: "${medicalResult.explanation}". Please provide a more detailed, in-depth explanation of this medical term. Explain what it means, what part of the body or system it relates to, its medical significance, and provide clinical context. Build upon the basic information provided. Keep it comprehensive but concise (4-6 sentences).`;
+                
+                const resp = await fetch(VERCEL_API_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    model: cfg.model || 'gpt-4o-mini',
+                    messages: [{ role: 'user', content: medicalPrompt }],
+                    temperature: 0.7
+                  }),
+                  signal: aiController.signal
+                });
+                clearTimeout(aiTimeout);
+                
+                if (resp.ok) {
+                  const json = await resp.json();
+                  const aiEnhancedExplanation = json.choices?.[0]?.message?.content?.trim();
+                  if (aiEnhancedExplanation && aiEnhancedExplanation.length > 50) {
+                    // Synthesize: Combine medical API base with AI enhancement
+                    return {
+                      explanation: aiEnhancedExplanation,
+                      synonyms: medicalResult.synonyms || [],
+                      pronunciation: medicalResult.pronunciation || null,
+                      examples: medicalResult.examples || [],
+                      source: 'medical-dictionary-synthesized'
+                    };
+                  }
+                }
+              } catch (aiErr) {
+                if (aiErr.name !== 'AbortError') { /* AI synthesis failed */ }
+                // If AI synthesis fails, return the medical API result anyway (better than nothing)
+              }
+            }
+            
+            // Return medical API result even if generic (or if AI synthesis failed)
+            return {
+              explanation: medicalResult.explanation,
+              synonyms: medicalResult.synonyms || [],
+              pronunciation: medicalResult.pronunciation || null,
+              examples: medicalResult.examples || [],
+              source: 'medical-dictionary'
+            };
+          }
+        } catch (err) {
+          // Medical dictionary failed, continue to entity detection
+        }
+      }
+    }
+    
+    // Dictionary and medical dictionary both failed - NOW check if it might be an entity
+    // Check if this might be a person, organization, place, or notable entity
+    // Look for capitalized words (proper nouns) - more flexible pattern
+    // EXCLUDE medical/anatomical terms - these should use dictionary/modal, not hub
+    const medicalExclusions = [
+      // Common medical/anatomical terms
+      'gallbladder', 'liver', 'kidney', 'stomach', 'intestine', 'bladder', 'spleen', 'pancreas',
+      'heart', 'lung', 'brain', 'muscle', 'bone', 'nerve', 'vein', 'artery', 'cell', 'tissue',
+      'organ', 'organelle', 'molecule', 'protein', 'enzyme', 'hormone', 'vitamin', 'mineral',
+      'bile', 'blood', 'plasma', 'serum', 'urine', 'saliva', 'mucus', 'phlegm',
+      'cartilage', 'ligament', 'tendon', 'joint', 'spine', 'skull', 'rib', 'pelvis',
+      'esophagus', 'trachea', 'bronchus', 'alveolus', 'diaphragm', 'pleura',
+      'duodenum', 'jejunum', 'ileum', 'colon', 'rectum', 'anus',
+      'nephron', 'glomerulus', 'ureter', 'urethra',
+      'neuron', 'synapse', 'dendrite', 'axon', 'myelin',
+      'chromosome', 'gene', 'dna', 'rna', 'nucleotide',
+      // Medical conditions
+      'diabetes', 'cancer', 'flu', 'cold', 'fever', 'headache', 'pain', 'disease', 'syndrome',
+      // Medical term patterns
+      /^(anti|auto|bio|cardio|derm|endo|gastro|hemo|neuro|osteo|patho|psycho|pulmo|thrombo)/i,
+      /(itis|osis|emia|oma|pathy|scopy|tomy|ectomy|plasty|algia|cele|cyte|genesis|gram|graph|lysis|megaly|phage|philia|phobia|plasia|plegia|pnea|rrhea|scope|stasis|trophy|uria)$/i
+    ];
+    
+    // Check if term matches medical exclusions
+    const isMedicalTerm = medicalExclusions.some(exclusion => {
+      if (typeof exclusion === 'string') {
+        return termLower === exclusion || termLower.includes(exclusion);
+      } else if (exclusion instanceof RegExp) {
+        return exclusion.test(trimmedTerm);
+      }
+      return false;
+    });
+    
+    if (isMedicalTerm) {
+      // Medical term - skip entity detection, fall through to AI (if dictionary failed)
+    } else if (!triedWikipediaForName) {
+    // Only try entity (Wikipedia) here if we did NOT already try Wikipedia first for this name-like term
     // More precise entity detection - only match actual proper nouns
-    // Must start with capital letter and be a proper noun pattern
-    // Exclude common words that might be capitalized at sentence start
     const commonWords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'up', 'down', 'out', 'off', 'over', 'under', 'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'each', 'both', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'just', 'now', 'get', 'got', 'go', 'went', 'come', 'came', 'see', 'saw', 'know', 'knew', 'think', 'thought', 'take', 'took', 'make', 'made', 'give', 'gave', 'say', 'said', 'tell', 'told', 'ask', 'asked', 'work', 'worked', 'call', 'called', 'try', 'tried', 'use', 'used', 'find', 'found', 'want', 'wanted', 'look', 'looked', 'need', 'needed', 'become', 'became', 'leave', 'left', 'put', 'put', 'mean', 'meant', 'keep', 'kept', 'let', 'let', 'begin', 'began', 'seem', 'seemed', 'help', 'helped', 'show', 'showed', 'hear', 'heard', 'play', 'played', 'run', 'ran', 'move', 'moved', 'live', 'lived', 'believe', 'believed', 'bring', 'brought', 'happen', 'happened', 'write', 'wrote', 'sit', 'sat', 'stand', 'stood', 'lose', 'lost', 'pay', 'paid', 'meet', 'met', 'include', 'included', 'continue', 'continued', 'set', 'set', 'learn', 'learned', 'change', 'changed', 'lead', 'led', 'understand', 'understood', 'watch', 'watched', 'follow', 'followed', 'stop', 'stopped', 'create', 'created', 'speak', 'spoke', 'read', 'read', 'allow', 'allowed', 'add', 'added', 'spend', 'spent', 'grow', 'grew', 'open', 'opened', 'walk', 'walked', 'win', 'won', 'offer', 'offered', 'remember', 'remembered', 'love', 'loved', 'consider', 'considered', 'appear', 'appeared', 'buy', 'bought', 'wait', 'waited', 'serve', 'served', 'die', 'died', 'send', 'sent', 'build', 'built', 'stay', 'stayed', 'fall', 'fell', 'cut', 'cut', 'reach', 'reached', 'kill', 'killed', 'raise', 'raised', 'pass', 'passed', 'sell', 'sold', 'decide', 'decided', 'return', 'returned', 'explain', 'explained', 'develop', 'developed', 'carry', 'carried', 'break', 'broke', 'receive', 'received', 'agree', 'agreed', 'support', 'supported', 'hit', 'hit', 'produce', 'produced', 'eat', 'ate', 'cover', 'covered', 'catch', 'caught', 'draw', 'drew', 'choose', 'chose'];
     
     const words = trimmedTerm.split(/\s+/).filter(w => w.trim().length > 0);
     const firstWord = words[0] ? words[0].toLowerCase() : '';
     
-    // Exclude if it's a common word (likely just capitalized at sentence start)
     if (commonWords.includes(firstWord)) {
-      // Not an entity - skip to dictionary lookup
+      // Not an entity - skip
     } else {
-      // More flexible pattern: allows hyphens, apostrophes, multiple capitals (e.g., McDonald, O'Brien, Mary-Jane)
-      // Also allows common organization suffixes
-      // Must start with capital letter and not be a common word
       const isLikelyEntity = /^[A-Z][A-Za-z'\-]+(\s+[A-Z][A-Za-z'\-]+)*(\s+(Inc|LLC|Ltd|Corp|Company|Corporation|Foundation|Institute|University|College|Group|Organization|Org))?$/i.test(trimmedTerm) && 
                             trimmedTerm.split(/\s+/).length >= 1 && 
-                            trimmedTerm.split(/\s+/).length <= 6 && // Increased to 6 for organizations
+                            trimmedTerm.split(/\s+/).length <= 6 &&
                             trimmedTerm.length >= 2 &&
-                            trimmedTerm.length <= 80 && // Increased for organization names
-                            !commonWords.includes(firstWord); // Exclude common words
+                            trimmedTerm.length <= 80 &&
+                            !commonWords.includes(firstWord);
       
       if (isLikelyEntity) {
       try {
-      // First try to fetch from Wikipedia
-      const entityData = await fetchEntityFromWikipedia(term);
+      // Check if it's a partial name (single word) BEFORE trying Wikipedia
+      const words = trimmedTerm.split(/\s+/).filter(w => w.trim().length > 0);
+      const isPartialName = words.length === 1 && 
+                            trimmedTerm.length >= 3 && 
+                            /^[A-Z][a-z]+$/.test(trimmedTerm) && // Starts with capital, rest lowercase
+                            !commonWords.includes(trimmedTerm.toLowerCase()); // Not a common word
+      
+      // For partial names, try Wikipedia first, but if it finds someone with a different full name,
+      // treat it as partial and use AI/fallback
+      let entityData = null;
+      if (!isPartialName) {
+        // Full name - try Wikipedia normally
+        entityData = await fetchEntityFromWikipedia(term);
+      } else {
+        // Partial name - try Wikipedia but check if result matches
+        entityData = await fetchEntityFromWikipedia(trimmedTerm); // Use trimmed term (apostrophe already stripped)
+        // If Wikipedia found someone but the name doesn't match (e.g., "Osama" found "Osama Saeed"),
+        // treat as partial name and use AI/fallback instead
+        if (entityData && entityData.isPerson && entityData.name) {
+          const foundNameLower = entityData.name.toLowerCase();
+          const searchTermLower = trimmedTerm.toLowerCase();
+          // If the found name is longer than the search term, it's likely a different person
+          // Only use Wikipedia result if the found name exactly matches or is the same length
+          const foundWords = foundNameLower.split(/\s+/);
+          const searchIsFirstName = foundWords.length > 1 && foundWords[0] === searchTermLower;
+          // If Wikipedia found a full name but we only searched for first name, treat as partial
+          if (foundNameLower !== searchTermLower && searchIsFirstName) {
+            // Wikipedia found a different person - treat as partial name
+            entityData = null;
+          }
+        }
+      }
+      
+      // Acronyms/terms (SMME, SaaS, B2B, B2C etc): don't show in hub; AI response shows in modal (tooltip)
+      // Real organisations (e.g. BBC) match by name/initialism; wrong matches (e.g. SMME -> SM Megamall) use AI.
+      const isAcronymLike = words.length === 1 && trimmedTerm.length >= 2 && trimmedTerm.length <= 10 &&
+        (/^[A-Z]{2,10}$/.test(trimmedTerm) ||
+         /^[A-Za-z0-9]{2,10}$/i.test(trimmedTerm) && (/[0-9]/.test(trimmedTerm) || /[A-Z].*[a-z]|[a-z].*[A-Z]/.test(trimmedTerm)));
+      if (entityData && isAcronymLike) {
+        const entityName = entityData.name || '';
+        if (!acronymEntityNameMatches(trimmedTerm, entityName)) {
+          entityData = null;
+        } else if (entityData.isOrganization) {
+          const bio = entityData.bio || entityData.summary || '';
+          if (looksLikeAcronymTermDefinition(bio)) {
+            entityData = null;
+          }
+        }
+      }
       
       if (entityData) {
         if (entityData.isPerson) {
@@ -535,55 +850,121 @@ async function handleExplain(term, context, detailed = false) {
           };
         }
       } else {
+        // Wikipedia didn't find entity or found wrong person - check if it's a partial name
+        // (trimmedTerm already has apostrophes stripped)
+        const words = trimmedTerm.split(/\s+/).filter(w => w.trim().length > 0);
+        const isPartialName = words.length === 1 && 
+                              trimmedTerm.length >= 3 && 
+                              /^[A-Z][a-z]+$/.test(trimmedTerm) && // Starts with capital, rest lowercase
+                              !commonWords.includes(trimmedTerm.toLowerCase()); // Not a common word
+        
+        if (isPartialName) {
+          // Try AI with 3-second timeout for partial names
+          try {
+            const aiController = new AbortController();
+            const aiTimeout = setTimeout(() => aiController.abort(), 3000);
+            
+            const prompt = `Provide a brief explanation about the name "${trimmedTerm}". This could be a first name, last name, or a person's name. If it's a common name, explain its origin, meaning, or notable people with this name. Keep it concise (2-3 sentences).`;
+            
+            let aiResponse = null;
+            try {
+              if (VERCEL_API_URL !== 'YOUR_VERCEL_URL_HERE/api/chat') {
+                const resp = await fetch(VERCEL_API_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    model: cfg.model || 'gpt-4o-mini',
+                    messages: [{ role: 'user', content: prompt }],
+                    temperature: 0.7
+                  }),
+                  signal: aiController.signal
+                });
+                clearTimeout(aiTimeout);
+                
+                if (resp.ok) {
+                  const json = await resp.json();
+                  const text = json.choices?.[0]?.message?.content?.trim();
+                  if (text && text.length > 0) {
+                    aiResponse = text;
+                  }
+                }
+              }
+            } catch (aiErr) {
+              clearTimeout(aiTimeout);
+              if (aiErr.name !== 'AbortError') { /* partial name AI failed */ }
+            }
+            
+            // If AI succeeded, return it with news articles as links
+            if (aiResponse) {
+              const newsArticles = await fetchPersonNews(trimmedTerm);
+              return {
+                explanation: aiResponse,
+                synonyms: [],
+                pronunciation: null,
+                examples: [],
+                isPartialName: true,
+                partialNameData: {
+                  name: trimmedTerm,
+                  explanation: aiResponse,
+                  newsArticles: newsArticles || []
+                }
+              };
+            } else {
+              // AI failed or timed out - return fallback with news articles; always provide text so nothing is empty
+              const newsArticles = await fetchPersonNews(trimmedTerm);
+              const fallbackText = `No definition found for "${trimmedTerm}". Try searching the web or check spelling.`;
+              return {
+                explanation: fallbackText,
+                synonyms: [],
+                pronunciation: null,
+                examples: [],
+                isPartialNameFallback: true,
+                partialNameData: {
+                  name: trimmedTerm,
+                  explanation: fallbackText,
+                  newsArticles: newsArticles || []
+                }
+              };
+            }
+          } catch (err) {
+            const newsArticles = await fetchPersonNews(trimmedTerm);
+            const fallbackText = `No definition found for "${trimmedTerm}". Try searching the web or check spelling.`;
+            return {
+              explanation: fallbackText,
+              synonyms: [],
+              pronunciation: null,
+              examples: [],
+              isPartialNameFallback: true,
+              partialNameData: {
+                name: trimmedTerm,
+                explanation: fallbackText,
+                newsArticles: newsArticles || []
+              }
+            };
+          }
+        }
       }
       } catch (err) {
-        // Continue to dictionary lookup
+        // Continue to AI lookup
       }
       }
+    }
     }
   }
-
-  // SMART ROUTING: ALWAYS try dictionary first, then AI if dictionary fails
-  let dictionaryResult = null;
   
-  // For statements (3+ words), skip dictionary and go straight to AI
-  const wordCount = term.trim().split(/\s+/).filter(w => w.trim().length > 0).length;
-  const isStatement = wordCount >= 3;
-  
-  // ALWAYS try dictionary first (fast, free) for ALL words, EXCEPT statements
-  if (!isStatement) {
-    try {
-      dictionaryResult = await fetchFreeDictionary(term, dictionaryLanguage);
-    
-    // Fix synonyms array
-    if (!dictionaryResult.synonyms) {
-      dictionaryResult.synonyms = [];
-    } else if (!Array.isArray(dictionaryResult.synonyms)) {
-      dictionaryResult.synonyms = [dictionaryResult.synonyms];
-    }
-    dictionaryResult.synonyms = Array.isArray(dictionaryResult.synonyms) ? dictionaryResult.synonyms : [];
-    
-      // If dictionary succeeded with good result, return it
-      if (dictionaryResult && !dictionaryResult.error && dictionaryResult.explanation && 
-          dictionaryResult.explanation.length > 20 && 
-          !dictionaryResult.explanation.toLowerCase().includes('not found') &&
-          !dictionaryResult.explanation.toLowerCase().includes('no definition')) {
-        return dictionaryResult;
-      }
-    } catch (err) {
-      dictionaryResult = { error: err.message };
-    }
-  } else {
-  }
+  // SMART ROUTING: If we get here, dictionary either failed or was skipped (statements)
+  // Now try AI if available
+  // dictionaryResult is already set from earlier (or null for statements)
   
   // If dictionary failed or result is poor, use AI (if available)
   // For statements, always use AI
   const useAI = VERCEL_API_URL !== 'YOUR_VERCEL_URL_HERE/api/chat' && (isStatement || shouldUseAI(term, context, dictionaryResult));
   
   if (VERCEL_API_URL === 'YOUR_VERCEL_URL_HERE/api/chat') {
+    const msg = 'Vercel API not configured. Using free dictionary only.';
     return {
-      error: 'Vercel API not configured. Using free dictionary only.',
-      explanation: null,
+      error: msg,
+      explanation: msg,
       synonyms: [],
       examples: []
     };
@@ -649,24 +1030,19 @@ async function handleExplain(term, context, detailed = false) {
           synonyms: synonyms || [],
           pronunciation: dictionaryResult?.pronunciation || null,
           examples: detailed ? await generateExamples(term, model) : [],
-          newsArticles: newsArticles || [] // Add news articles for statements
+          newsArticles: newsArticles || [], // Add news articles for statements
+          source: 'ai-general'
         };
         
         return aiResult;
       } else {
         const errorText = await resp.text();
-        console.error('Nimbus: ========== AI REQUEST FAILED ==========');
-        console.error('Nimbus: Status:', resp.status);
-        console.error('Nimbus: Status text:', resp.statusText);
-        console.error('Nimbus: Error response:', errorText);
-        
         // Parse error to give better message
         let errorMessage = `AI request failed: ${resp.status} ${resp.statusText}`;
         try {
           const errorJson = JSON.parse(errorText);
           if (errorJson.error) {
             errorMessage = errorJson.error.message || errorJson.error.code || errorMessage;
-            console.error('Nimbus: Parsed error:', errorJson.error);
           }
         } catch (e) {
           // Not JSON, use raw text
@@ -676,10 +1052,6 @@ async function handleExplain(term, context, detailed = false) {
         throw new Error(errorMessage);
       }
     } catch (err) {
-      console.error('Nimbus: ========== AI REQUEST ERROR ==========');
-      console.error('Nimbus: Error message:', err.message);
-      console.error('Nimbus: Error stack:', err.stack);
-      
       // If it's an abort error, return a timeout message
       if (err.name === 'AbortError') {
         throw new Error('AI request timed out. Please try again.');
@@ -703,8 +1075,6 @@ async function handleExplain(term, context, detailed = false) {
   
   // If we got here and dictionary failed, return error result for statements
   if (wordCount >= 3 && (!dictionaryResult || dictionaryResult.error)) {
-    console.error('Nimbus: Statement search failed - no AI result and no dictionary result');
-    console.error('Nimbus: useAI was:', useAI, 'Vercel API configured:', VERCEL_API_URL !== 'YOUR_VERCEL_URL_HERE/api/chat');
     if (VERCEL_API_URL === 'YOUR_VERCEL_URL_HERE/api/chat') {
       return {
         explanation: 'Vercel API not configured. Using free dictionary only.',
@@ -723,8 +1093,47 @@ async function handleExplain(term, context, detailed = false) {
     };
   }
   
-  // Return dictionary result (or enhanced with AI if available)
-  if (dictionaryResult && !dictionaryResult.error) {
+  // Never return "not found in dictionary" as the final answer - always try AI for name/place/org or general fallback
+  const isNotFoundMessage = dictionaryResult && dictionaryResult.explanation &&
+    /not found in dictionary|not found in the dictionary|proper noun|technical term|misspelling/i.test(dictionaryResult.explanation);
+
+  if (isNotFoundMessage && VERCEL_API_URL !== 'YOUR_VERCEL_URL_HERE/api/chat') {
+    try {
+      const prompt = buildPrompt(term, context, style);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), wordCount >= 3 ? 30000 : 20000);
+      const resp = await fetch(VERCEL_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: wordCount >= 3 ? 0.8 : 0.7
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      if (resp.ok) {
+        const json = await resp.json();
+        const text = json.choices?.[0]?.message?.content?.trim();
+        if (text && text.length > 0) {
+          const synonyms = await extractSynonyms(term, model);
+          return {
+            explanation: text,
+            synonyms: synonyms || [],
+            pronunciation: null,
+            examples: detailed ? await generateExamples(term, model) : [],
+            source: 'ai-fallback'
+          };
+        }
+      }
+    } catch (err) {
+        if (err.name !== 'AbortError') { /* AI fallback failed */ }
+    }
+  }
+
+  // Return dictionary result only if it's a real definition (not the "not found" message)
+  if (dictionaryResult && !dictionaryResult.error && !isNotFoundMessage) {
     // Enhance dictionary result with AI examples if available and detailed
     if (detailed && VERCEL_API_URL !== 'YOUR_VERCEL_URL_HERE/api/chat' && dictionaryResult.explanation) {
       if (!dictionaryResult.examples || dictionaryResult.examples.length === 0) {
@@ -755,11 +1164,12 @@ async function handleExplain(term, context, detailed = false) {
     return dictionaryResult;
   }
   
-  // Last resort: return error
+  const lastResortMsg = VERCEL_API_URL !== 'YOUR_VERCEL_URL_HERE/api/chat'
+    ? 'Unable to find definition. Please try again.'
+    : 'Free dictionary API failed. AI enhancement requires Vercel API configuration.';
   return {
-    error: VERCEL_API_URL !== 'YOUR_VERCEL_URL_HERE/api/chat'
-      ? 'Unable to find definition. Please try again.' 
-      : 'Free dictionary API failed. AI enhancement requires Vercel API configuration.',
+    error: lastResortMsg,
+    explanation: lastResortMsg,
     synonyms: []
   };
 
@@ -1003,48 +1413,27 @@ async function fetchFreeDictionary(term, language = 'en') {
     }
     
     const entry = data[0];
-    console.log('CursorIQ Background: Entry structure:', JSON.stringify(entry, null, 2));
     let explanation = '';
     const synonyms = [];
     let examples = [];
     
     // Collect synonyms from ALL meanings
     if (entry.meanings && entry.meanings.length > 0) {
-      console.log('CursorIQ Background: Processing', entry.meanings.length, 'meanings for term:', term);
       for (const meaning of entry.meanings) {
-        console.log('CursorIQ Background: Meaning partOfSpeech:', meaning.partOfSpeech);
-        console.log('CursorIQ Background: Meaning object keys:', Object.keys(meaning));
-        console.log('CursorIQ Background: Meaning synonyms (raw):', meaning.synonyms);
-        console.log('CursorIQ Background: Meaning synonyms type:', typeof meaning.synonyms, 'isArray:', Array.isArray(meaning.synonyms));
-        
-        // Collect synonyms from this meaning level
         if (meaning.synonyms) {
           if (Array.isArray(meaning.synonyms) && meaning.synonyms.length > 0) {
-            console.log('CursorIQ Background: Adding meaning-level synonyms:', meaning.synonyms);
             synonyms.push(...meaning.synonyms);
-          } else {
-            console.log('CursorIQ Background: Meaning synonyms is not a valid array or is empty');
           }
-        } else {
-          console.log('CursorIQ Background: No synonyms property on meaning');
         }
-        
-        // Also check definitions for synonyms (some APIs put them here)
         if (meaning.definitions && Array.isArray(meaning.definitions)) {
-          console.log('CursorIQ Background: Checking', meaning.definitions.length, 'definitions');
           for (const def of meaning.definitions) {
             if (def.synonyms && Array.isArray(def.synonyms) && def.synonyms.length > 0) {
-              console.log('CursorIQ Background: Adding definition-level synonyms:', def.synonyms);
               synonyms.push(...def.synonyms);
             }
           }
         }
       }
-    } else {
-      console.log('CursorIQ Background: No meanings found in entry');
     }
-    console.log('CursorIQ Background: Total collected synonyms before dedupe:', synonyms);
-    console.log('CursorIQ Background: Synonyms array length:', synonyms.length);
     
     // Collect ALL examples from ALL definitions
     if (entry.meanings && entry.meanings.length > 0) {
@@ -1104,7 +1493,6 @@ async function fetchFreeDictionary(term, language = 'en') {
     
     // Translate explanation to target language if not English
     if (language !== 'en') {
-      console.log(`Nimbus: Translating definition to ${language}...`);
       formattedExplanation = await translateText(formattedExplanation, language);
     }
     
@@ -1119,32 +1507,16 @@ async function fetchFreeDictionary(term, language = 'en') {
       pronunciation = `/${term}/`;
     }
     
-    console.log('CursorIQ Background: Raw synonyms before processing:', synonyms);
-    console.log('CursorIQ Background: Term being filtered:', term);
-    
     // Remove duplicates and filter out the term itself
     const uniqueSynonyms = [...new Set(synonyms)]
       .filter(s => {
-        if (!s || typeof s !== 'string') {
-          console.log('CursorIQ Background: Filtering out non-string synonym:', s);
-          return false;
-        }
+        if (!s || typeof s !== 'string') return false;
         const trimmed = s.trim();
-        if (!trimmed) {
-          console.log('CursorIQ Background: Filtering out empty synonym');
-          return false;
-        }
-        if (trimmed.toLowerCase() === term.toLowerCase()) {
-          console.log('CursorIQ Background: Filtering out synonym that matches term:', trimmed);
-          return false;
-        }
-        console.log('CursorIQ Background: Keeping synonym:', trimmed);
+        if (!trimmed) return false;
+        if (trimmed.toLowerCase() === term.toLowerCase()) return false;
         return true;
       })
       .slice(0, 8);
-    
-    console.log('CursorIQ Background: Final unique synonyms after filtering:', uniqueSynonyms);
-    console.log('CursorIQ Background: Synonyms count:', uniqueSynonyms.length);
     
     // FORCE synonyms to be an array - ensure it's never undefined or null
     const finalSynonyms = Array.isArray(uniqueSynonyms) ? uniqueSynonyms : [];
@@ -1170,7 +1542,6 @@ async function fetchFreeDictionary(term, language = 'en') {
     // Translate examples to target language if not English
     let finalExamples = uniqueExamples.slice(0, 5);
     if (language !== 'en' && finalExamples.length > 0) {
-      console.log(`Nimbus: Translating ${finalExamples.length} dictionary examples to ${language}...`);
       const translated = [];
       for (const example of finalExamples) {
         const translatedExample = await translateText(example, language);
@@ -1185,32 +1556,12 @@ async function fetchFreeDictionary(term, language = 'en') {
       pronunciation: pronunciation
     };
     
-    // Add examples if available (up to 5 examples)
     if (finalExamples.length > 0) {
       result.examples = finalExamples;
-      console.log('CursorIQ Background: Collected examples:', result.examples);
-    } else {
-      console.log('CursorIQ Background: No examples found in API response');
-    }
-    
-    console.log('CursorIQ Background: ========== FINAL RESULT ==========');
-    console.log('CursorIQ Background: Result object:', JSON.stringify(result, null, 2));
-    console.log('CursorIQ Background: Result.synonyms:', result.synonyms);
-    console.log('CursorIQ Background: Result.synonyms type:', typeof result.synonyms);
-    console.log('CursorIQ Background: Result.synonyms isArray:', Array.isArray(result.synonyms));
-    console.log('CursorIQ Background: Result.synonyms length:', result.synonyms.length);
-    console.log('CursorIQ Background: Result.examples:', result.examples);
-    console.log('CursorIQ Background: Result.examples length:', result.examples?.length || 0);
-    console.log('CursorIQ Background: ===================================');
-    
-    // Add examples if available
-    if (examples.length > 0) {
-      result.examples = examples.slice(0, 3);
     }
     
     return result;
   } catch (err) {
-    console.error('Free dictionary fetch error', err);
     // Check if it's a timeout
     if (err.name === 'AbortError') {
       // Try medical dictionaries on timeout too
@@ -1488,6 +1839,34 @@ async function tryMedicalDictionaries(term) {
   return null; // No medical dictionary found the term
 }
 
+// For acronym-like search term, entity name "matches" if it's the same or its initialism equals the term
+// e.g. BBC matches "British Broadcasting Corporation" (B-B-C); SMME does not match "SM Megamall" (S-M = SM)
+function acronymEntityNameMatches(searchTerm, entityName) {
+  if (!searchTerm || !entityName) return false;
+  const term = searchTerm.trim().toUpperCase();
+  const name = String(entityName).trim();
+  if (name.toUpperCase() === term) return true;
+  const initialism = name.split(/\s+/).map(w => w.charAt(0)).join('').toUpperCase();
+  if (initialism === term) return true;
+  return false;
+}
+
+// Acronym/term (e.g. SMME, SaaS, B2B) not organisation (e.g. BBC): summary reads like a definition
+// Don't show in hub; AI response shows in modal (tooltip). Only when Wikipedia returned organisation type.
+function looksLikeAcronymTermDefinition(bioOrSummary) {
+  if (!bioOrSummary || typeof bioOrSummary !== 'string') return false;
+  const t = bioOrSummary.toLowerCase();
+  if (!/\bstands for\b|\bacronym for\b|\babbreviation for\b|\bis an acronym\b|\brefers to\b|\bmeans\b|\bdenotes\b/.test(t)) return false;
+  const afterStandsFor = t.replace(/.*?\bstands for\s+/, '').slice(0, 120);
+  if (/\b(small|medium|sized|enterprise|executive|officer|chief|and\s+medium)\b/.test(afterStandsFor)) return true;
+  if (/\b(software as a service|business to business|business to consumer|business to government)\b/.test(t)) return true;
+  if (/\b(as a service|software|subscription|b2b|b2c|saas)\b/.test(afterStandsFor)) return true;
+  const afterAcronym = t.replace(/.*?\b(?:acronym|abbreviation) for\s+/, '').slice(0, 120);
+  if (/\b(small|medium|sized|enterprise|and\s+medium|software|business)\b/.test(afterAcronym)) return true;
+  if (/\brefers to\s+[^.]*?(?:small|medium|enterprise|business|software|service)\b/.test(t)) return true;
+  return false;
+}
+
 // Fetch entity (person, organization, or place) information from Wikipedia
 // Try PERSON first: place parser was misclassifying people (e.g. Donald Trump) when the
 // article mentioned "city", "located", etc. and lacked "died" (living people). Person parser
@@ -1632,6 +2011,22 @@ async function fetchWikidataSocialLinks(wikiTitle) {
   return out;
 }
 
+// Wikipedia REST v1 page/summary uses `originalimage.source`, not `original`.
+// Thumbnail URLs must not be rewritten to arbitrary widths (e.g. /800px-) — many files have no such size and 404.
+function wikipediaSummaryOriginalUrl(data) {
+  const raw = data?.originalimage?.source || data?.original?.source;
+  if (!raw || typeof raw !== 'string') return null;
+  const t = raw.trim();
+  return t.startsWith('//') ? `https:${t}` : t;
+}
+
+function wikipediaSummaryThumbnailUrl(data) {
+  const raw = data?.thumbnail?.source;
+  if (!raw || typeof raw !== 'string') return null;
+  const t = raw.trim();
+  return t.startsWith('//') ? `https:${t}` : t;
+}
+
 // Parse Wikipedia API response to extract person information
 async function parseWikipediaPersonData(data, originalName) {
   // Check if this is actually a person page
@@ -1752,14 +2147,10 @@ async function parseWikipediaPersonData(data, originalName) {
   let imageUrl = await findPersonFaceImage(data, title);
   console.log('Nimbus: Final imageUrl after face detection:', imageUrl);
   
-  // If no face image found, use fallback
+  // If no face image found, use fallback (valid URLs only — no /800px- guesswork)
   if (!imageUrl) {
     console.log('Nimbus: No face image found, using fallback');
-    if (data.original && data.original.source) {
-      imageUrl = data.original.source;
-    } else if (data.thumbnail && data.thumbnail.source) {
-      imageUrl = data.thumbnail.source.replace(/\/\d+px-/, '/800px-');
-    }
+    imageUrl = wikipediaSummaryOriginalUrl(data) || wikipediaSummaryThumbnailUrl(data);
   }
   
   // Extract birth date - multiple patterns
@@ -1892,32 +2283,30 @@ async function parseWikipediaPersonData(data, originalName) {
 
 // Find person face image - prioritize portrait/face photos
 async function findPersonFaceImage(data, title) {
+  const originalUrl = wikipediaSummaryOriginalUrl(data);
+  const thumbUrl = wikipediaSummaryThumbnailUrl(data);
   console.log('Nimbus: findPersonFaceImage called for:', title);
-  console.log('Nimbus: data.original:', data.original?.source);
-  console.log('Nimbus: data.thumbnail:', data.thumbnail?.source);
+  console.log('Nimbus: originalimage:', originalUrl);
+  console.log('Nimbus: thumbnail:', thumbUrl);
   
-  // First check if the original/thumbnail from summary is a portrait
-  if (data.original && data.original.source) {
-    const imgUrl = data.original.source;
-    const isPortrait = isLikelyPortrait(imgUrl);
-    console.log('Nimbus: Original image portrait check:', isPortrait, imgUrl);
+  if (originalUrl) {
+    const isPortrait = isLikelyPortrait(originalUrl);
+    console.log('Nimbus: Original image portrait check:', isPortrait, originalUrl);
     if (isPortrait) {
-      console.log('Nimbus: Found portrait in original image:', imgUrl);
-      return imgUrl;
+      console.log('Nimbus: Found portrait in original image:', originalUrl);
+      return originalUrl;
     }
   }
   
-  if (data.thumbnail && data.thumbnail.source) {
-    const imgUrl = data.thumbnail.source.replace(/\/\d+px-/, '/800px-');
-    const isPortrait = isLikelyPortrait(imgUrl);
-    console.log('Nimbus: Thumbnail image portrait check:', isPortrait, imgUrl);
+  if (thumbUrl) {
+    const isPortrait = isLikelyPortrait(thumbUrl);
+    console.log('Nimbus: Thumbnail portrait check:', isPortrait, thumbUrl);
     if (isPortrait) {
-      console.log('Nimbus: Found portrait in thumbnail (upgraded):', imgUrl);
-      return imgUrl;
+      console.log('Nimbus: Using summary thumbnail (API size, no URL rewrite):', thumbUrl);
+      return thumbUrl;
     }
   }
   
-  // If summary images aren't portraits, try fetching from full page media API
   console.log('Nimbus: No portrait in summary, trying full page media API...');
   const faceImage = await fetchPersonFaceFromMediaAPI(title);
   if (faceImage) {
@@ -1925,16 +2314,14 @@ async function findPersonFaceImage(data, title) {
     return faceImage;
   }
   
-  // Fallback to original if available (even if not a portrait)
-  if (data.original && data.original.source) {
-    console.log('Nimbus: Using original image as fallback:', data.original.source);
-    return data.original.source;
+  if (originalUrl) {
+    console.log('Nimbus: Using original image as fallback:', originalUrl);
+    return originalUrl;
   }
   
-  if (data.thumbnail && data.thumbnail.source) {
-    const imgUrl = data.thumbnail.source.replace(/\/\d+px-/, '/800px-');
-    console.log('Nimbus: Using thumbnail as fallback:', imgUrl);
-    return imgUrl;
+  if (thumbUrl) {
+    console.log('Nimbus: Using thumbnail as fallback:', thumbUrl);
+    return thumbUrl;
   }
   
   console.log('Nimbus: No image found at all');
@@ -2143,21 +2530,20 @@ function parseWikipediaOrganizationData(data, originalName) {
   
   const hasOrgIndicator = orgIndicators.some(indicator => indicator === true);
   const isDisambiguation = type === 'disambiguation';
-  const isOrganization = hasOrgIndicator && !isDisambiguation;
   
-  console.log('Nimbus: Organization detection - hasOrgIndicator:', hasOrgIndicator, 'type:', type, 'isOrganization:', isOrganization);
+  // Exclude if it's clearly a place (has place keywords)
+  const hasPlaceKeywords = /(capital|city|town|village|municipality|county|region|state|province|country|borough|district|located|situated|population|inhabitants)/i.test(content);
+  const isPlace = hasPlaceKeywords && !isDisambiguation;
+  
+  const isOrganization = hasOrgIndicator && !isDisambiguation && !isPlace;
+  
+  console.log('Nimbus: Organization detection - hasOrgIndicator:', hasOrgIndicator, 'hasPlaceKeywords:', hasPlaceKeywords, 'type:', type, 'isOrganization:', isOrganization);
   
   if (!isOrganization) {
     return null;
   }
   
-  // Extract image
-  let imageUrl = null;
-  if (data.original && data.original.source) {
-    imageUrl = data.original.source;
-  } else if (data.thumbnail && data.thumbnail.source) {
-    imageUrl = data.thumbnail.source.replace(/\/\d+px-/, '/800px-');
-  }
+  let imageUrl = wikipediaSummaryOriginalUrl(data) || wikipediaSummaryThumbnailUrl(data);
   
   // Extract founded date
   let founded = null;
@@ -2407,26 +2793,41 @@ function parseWikipediaPlaceData(data, originalName) {
                            /^(a|an|the)\s+[a-z]+\s+(can|may|might|should|will)/i.test(content) ||
                            /definition|meaning|concept|term|word|phrase/i.test(content.substring(0, 100));
 
-  // Require STRONG place indicators: title indicates place OR (geographic data AND explicit place type)
+  // Check for common place keywords in content (more lenient)
+  const hasPlaceKeywords = /(capital|city|town|village|municipality|county|region|state|province|country|borough|district|located|situated|in\s+[A-Z][a-z]+)/i.test(content);
+  
+  // Check if Wikipedia provides coordinates directly (strong indicator of a place)
+  const hasWikiCoordinates = data.coordinates && (data.coordinates.lat || data.coordinates.lon);
+  
+  // Well-known cities often start with "X is the capital/city of..." - check first sentence
+  // Well-known places often start with "X is the capital/city of..." - check if content starts with place name
+  const firstWords = content.substring(0, 100).split(/\s+/).slice(0, 3).join(' ').toLowerCase();
+  const titleWords = title.split(/\s+/).slice(0, 2).join(' ').toLowerCase();
+  const startsWithPlaceName = firstWords.includes(titleWords) || firstWords.startsWith(originalLower.split(/\s+/)[0]);
+  const startsWithPlaceDescription = startsWithPlaceName && /(is|was)\s+(the|a|an)\s+(capital|city|town|village|municipality|county|region|state|province|country|borough|district)/i.test(content.substring(0, 150));
+  
+  // OLD CODE REMOVED - was using hardcoded city list:
+  // const startsWithPlaceDescription = /^(London|Paris|New York|Tokyo|Berlin|Rome|Madrid|Moscow|Sydney|Toronto|Vancouver|Melbourne|Barcelona|Amsterdam|Vienna|Prague|Budapest|Warsaw|Stockholm|Copenhagen|Oslo|Helsinki|Dublin|Edinburgh|Glasgow|Manchester|Liverpool|Birmingham|Leeds|Bristol|Cardiff|Belfast|Bath|Cambridge|Oxford|York|Canterbury|Winchester|Salisbury|Durham|Exeter|Norwich|Ipswich|Colchester|Chelmsford|Hertford|St Albans|Watford|Hemel Hempstead|Stevenage|Welwyn|Hatfield|Borehamwood|Potters Bar|Berkhamsted|Tring|Rickmansworth|Chorleywood|Chesham|Amersham|High Wycombe|Marlow|Maidenhead|Slough|Windsor|Eton|Reading|Basingstoke|Andover|Salisbury|Shaftesbury|Gillingham|Sittingbourne|Faversham|Canterbury|Dover|Folkestone|Hythe|Romney|Dungeness|Rye|Hastings|Eastbourne|Brighton|Hove|Worthing|Littlehampton|Bognor Regis|Chichester|Portsmouth|Southampton|Winchester|Andover|Basingstoke|Newbury|Hungerford|Marlborough|Devizes|Trowbridge|Westbury|Warminster|Frome|Shepton Mallet|Glastonbury|Wells|Bath|Bristol|Weston-super-Mare|Clevedon|Portishead|Nailsea|Yatton|Congresbury|Winscombe|Cheddar|Axbridge|Burnham-on-Sea|Highbridge|Bridgwater|Taunton|Wellington|Wiveliscombe|Dulverton|Minehead|Porlock|Lynton|Lynmouth|Barnstaple|Bideford|Torrington|Great Torrington|Holsworthy|Hatherleigh|Okehampton|Tavistock|Plymouth|Ivybridge|Totnes|Dartmouth|Kingsbridge|Salcombe|Modbury|Yealmpton|Plympton|Plymstock|Saltash|Callington|Liskeard|Launceston|Camelford|Wadebridge|Padstow|Newquay|Perranporth|St Agnes|Redruth|Camborne|Hayle|Penzance|St Ives|Marazion|Helston|Falmouth|Truro|St Austell|Newquay|Fowey|Looe|Polperro|Lostwithiel|Bodmin|Wadebridge|Padstow|Rock|Port Isaac|Tintagel|Boscastle|Bude|Stratton|Kilkhampton|Morwenstow|Hartland|Clovelly|Westward Ho!|Appledore|Instow|Bideford|Great Torrington|Holsworthy|Hatherleigh|Okehampton|Tavistock|Plymouth|Ivybridge|Totnes|Dartmouth|Kingsbridge|Salcombe|Modbury|Yealmpton|Plympton|Plymstock|Saltash|Callington|Liskeard|Launceston|Camelford|Wadebridge|Padstow|Newquay|Perranporth|St Agnes|Redruth|Camborne|Hayle|Penzance|St Ives|Marazion|Helston|Falmouth|Truro|St Austell|Newquay|Fowey|Looe|Polperro|Lostwithiel|Bodmin|Wadebridge|Padstow|Rock|Port Isaac|Tintagel|Boscastle|Bude|Stratton|Kilkhampton|Morwenstow|Hartland|Clovelly|Westward Ho!|Appledore|Instow|Bideford|Great Torrington|Holsworthy|Hatherleigh|Okehampton|Tavistock|Plymouth|Ivybridge|Totnes|Dartmouth|Kingsbridge|Salcombe|Modbury|Yealmpton|Plympton|Plymstock|Saltash|Callington|Liskeard|Launceston|Camelford|Wadebridge|Padstow|Newquay|Perranporth|St Agnes|Redruth|Camborne|Hayle|Penzance|St Ives|Marazion|Helston|Falmouth|Truro|St Austell|Newquay|Fowey|Looe|Polperro|Lostwithiel|Bodmin|Wadebridge|Padstow|Rock|Port Isaac|Tintagel|Boscastle|Bude|Stratton|Kilkhampton|Morwenstow|Hartland|Clovelly|Westward Ho!|Appledore|Instow)\s+(is|was|the)/i.test(content);
+  
+  // Require STRONG place indicators: title indicates place OR (geographic data AND explicit place type) OR (place keywords AND geographic data) OR (has Wikipedia coordinates) OR (starts with well-known place description)
+  // Also accept if it has place keywords and isn't clearly a person/org/concept (more lenient for well-known places)
   const hasStrongPlaceIndicator = titleIsPlace || 
-                                   (isExplicitPlaceType && (hasPopulationNumber || hasCoordinates || hasArea || hasCountry));
+                                   (isExplicitPlaceType && (hasPopulationNumber || hasCoordinates || hasArea || hasCountry)) ||
+                                   (hasPlaceKeywords && (hasPopulationNumber || hasCoordinates || hasArea || hasCountry || isExplicitPlaceType)) ||
+                                   hasWikiCoordinates ||
+                                   startsWithPlaceDescription ||
+                                   (hasPlaceKeywords && !personExclude && !orgExclude && !isConceptExclude && type !== 'disambiguation');
   
   const isDisambiguation = type === 'disambiguation';
   const isPlace = hasStrongPlaceIndicator && !isDisambiguation && !personExclude && !orgExclude && !isConceptExclude;
   
-  console.log('Nimbus: Place detection - titleIsPlace:', titleIsPlace, 'hasStrongPlaceIndicator:', hasStrongPlaceIndicator, 'type:', type, 'isPlace:', isPlace);
+  console.log('Nimbus: Place detection - titleIsPlace:', titleIsPlace, 'hasPlaceKeywords:', hasPlaceKeywords, 'hasStrongPlaceIndicator:', hasStrongPlaceIndicator, 'type:', type, 'isPlace:', isPlace);
   
   if (!isPlace) {
     return null;
   }
   
-  // Extract image
-  let imageUrl = null;
-  if (data.original && data.original.source) {
-    imageUrl = data.original.source;
-  } else if (data.thumbnail && data.thumbnail.source) {
-    imageUrl = data.thumbnail.source.replace(/\/\d+px-/, '/800px-');
-  }
+  let imageUrl = wikipediaSummaryOriginalUrl(data) || wikipediaSummaryThumbnailUrl(data);
   
   // Extract population
   let population = null;
@@ -2481,18 +2882,27 @@ function parseWikipediaPlaceData(data, originalName) {
     }
   }
   
-  // Extract coordinates (latitude, longitude)
+  // Extract coordinates - prefer Wikipedia API coordinates if available
   let coordinates = null;
-  const coordPatterns = [
-    /coordinates[:\s]+([\d\.]+[°\s]*[NS]?[,\s]+[\d\.]+[°\s]*[EW]?)/i,
-    /([\d\.]+[°\s]*[NS]?[,\s]+[\d\.]+[°\s]*[EW]?)/i
-  ];
+  if (data.coordinates) {
+    if (data.coordinates.lat && data.coordinates.lon) {
+      coordinates = `${data.coordinates.lat}, ${data.coordinates.lon}`;
+    }
+  }
   
-  for (const pattern of coordPatterns) {
-    const match = content.match(pattern);
-    if (match && match[1]) {
-      coordinates = match[1].trim();
-      break;
+  // Fallback to parsing from content
+  if (!coordinates) {
+    const coordPatterns = [
+      /coordinates[:\s]+([\d\.]+[°\s]*[NS]?[,\s]+[\d\.]+[°\s]*[EW]?)/i,
+      /([\d\.]+[°\s]*[NS]?[,\s]+[\d\.]+[°\s]*[EW]?)/i
+    ];
+    
+    for (const pattern of coordPatterns) {
+      const match = content.match(pattern);
+      if (match && match[1]) {
+        coordinates = match[1].trim();
+        break;
+      }
     }
   }
   
