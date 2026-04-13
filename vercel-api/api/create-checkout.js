@@ -121,7 +121,7 @@ export default async function handler(req, res) {
       },
       metadata: {
         extension: 'nimbus',
-        version: '1.0.7',
+        version: '1.0.27',
         userEmail: email || '',
       },
     };
