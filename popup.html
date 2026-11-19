@@ -2321,6 +2321,32 @@
       </div>
     </div>
     <div class="settings-content">
+      <!-- Profile / Account Tab -->
+      <div class="settings-tab-item">
+        <button class="settings-tab-header active" data-tab="profile">
+          <span>Profile</span>
+          <svg class="tab-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M6 9l6 6 6-6"/>
+          </svg>
+        </button>
+        <div class="settings-tab-content expanded" id="tab-profile">
+          <div class="settings-section">
+            <div class="settings-item">
+              <div id="popup-profile-info" style="margin-bottom: 16px; padding: 16px; background: linear-gradient(135deg, rgba(5, 0, 127, 0.12) 0%, rgba(0, 0, 235, 0.08) 100%); border: 1px solid rgba(31, 127, 255, 0.25); border-radius: 12px; font-size: 14px; color: var(--text-primary);">
+                <div class="loading" style="text-align: center; color: var(--text-muted);">Loading profile...</div>
+              </div>
+            </div>
+            <div class="settings-item">
+              <button class="settings-action-btn" id="popup-signin-google-btn" style="display: none; background: #ffffff; color: #05007f; border: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; cursor: pointer; width: 100%;">Sign in with Google</button>
+            </div>
+            <div class="settings-item">
+              <button class="settings-action-btn danger" id="popup-profile-signout-btn" style="display: none;">Sign out</button>
+              <p class="settings-description" id="popup-profile-hint">Sign in with Google to link your account for subscriptions and profile.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Subscription Tab -->
       <div class="settings-tab-item">
         <button class="settings-tab-header" data-tab="subscription">

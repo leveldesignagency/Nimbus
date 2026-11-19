@@ -34,8 +34,11 @@
   <div id="account-section" style="margin-bottom: 28px;">
     <h3 style="margin-top: 0;">Profile</h3>
     <div id="account-info" style="margin-bottom: 16px; padding: 16px; background: #f8fafc; font-size: 13px;"></div>
-    <button id="signout-btn" style="background: transparent; color: #b91c1c; border: 1px solid rgba(185,28,28,0.5); padding: 10px 18px;">Sign Out</button>
-    <div class="hint" style="margin-top: 8px;">Signing out clears your Google account and subscription data on this device. Sign in again to use premium features.</div>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+      <button id="signin-btn" style="display: none; background: #05007f; color: white; border: none; padding: 10px 18px;">Sign in with Google</button>
+      <button id="signout-btn" style="background: transparent; color: #b91c1c; border: 1px solid rgba(185,28,28,0.5); padding: 10px 18px;">Sign Out</button>
+    </div>
+    <div class="hint" style="margin-top: 8px;">Sign in with Google to show your name and photo here, and to manage your subscription. Signing out clears account data on this device.</div>
   </div>
 
   <label>OpenAI API Key (Optional)</label>

@@ -16,6 +16,15 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function updateAuthButtons(signedIn) {
+  const signinBtn = document.getElementById('signin-btn');
+  const signoutBtn = document.getElementById('signout-btn');
+  const simpleSignoutBtn = document.getElementById('simple-signout-btn');
+  if (signinBtn) signinBtn.style.display = signedIn ? 'none' : 'inline-block';
+  if (signoutBtn) signoutBtn.style.display = signedIn ? 'inline-block' : 'none';
+  if (simpleSignoutBtn) simpleSignoutBtn.style.display = signedIn ? 'inline-block' : 'none';
+}
+
 function renderAccountInfo(profile) {
   const accountInfo = document.getElementById('account-info');
   if (!accountInfo) return;
@@ -24,8 +33,9 @@ function renderAccountInfo(profile) {
     accountInfo.innerHTML = `
       <p class="profile-label">Google account</p>
       <strong>Not signed in</strong>
-      <p class="hint" style="margin-top: 8px;">Open the Nimbus popup and use <em>Sign in with Google</em> to link your account.</p>
+      <p class="hint" style="margin-top: 8px;">Click <em>Sign in with Google</em> below to link your account (needed for subscription + profile).</p>
     `;
+    updateAuthButtons(false);
     return;
   }
 
@@ -48,6 +58,76 @@ function renderAccountInfo(profile) {
       </div>
     </div>
   `;
+  updateAuthButtons(true);
+}
+
+async function signInWithGoogleInteractive() {
+  const signinBtn = document.getElementById('signin-btn');
+  if (signinBtn) {
+    signinBtn.disabled = true;
+    signinBtn.textContent = 'Opening Google...';
+  }
+  return new Promise((resolve) => {
+    chrome.identity.getAuthToken({
+      interactive: true,
+      scopes: [
+        'https://www.googleapis.com/auth/userinfo.email',
+        'https://www.googleapis.com/auth/userinfo.profile'
+      ]
+    }, async (token) => {
+      if (chrome.runtime.lastError || !token) {
+        if (signinBtn) {
+          signinBtn.disabled = false;
+          signinBtn.textContent = 'Sign in with Google';
+        }
+        resolve({ ok: false, error: (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'cancelled' });
+        return;
+      }
+      try {
+        const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!res.ok) {
+          if (signinBtn) {
+            signinBtn.disabled = false;
+            signinBtn.textContent = 'Sign in with Google';
+          }
+          resolve({ ok: false, error: 'userinfo_failed' });
+          return;
+        }
+        const userInfo = await res.json();
+        if (!userInfo || !userInfo.email) {
+          if (signinBtn) {
+            signinBtn.disabled = false;
+            signinBtn.textContent = 'Sign in with Google';
+          }
+          resolve({ ok: false, error: 'no_email' });
+          return;
+        }
+        const profile = {
+          userEmail: userInfo.email,
+          userName: userInfo.name || '',
+          userGivenName: userInfo.given_name || '',
+          userFamilyName: userInfo.family_name || '',
+          userPicture: userInfo.picture || '',
+          userGoogleId: userInfo.id || '',
+        };
+        await chrome.storage.local.remove(['signedOut']);
+        await chrome.storage.local.set(profile);
+        if (signinBtn) {
+          signinBtn.disabled = false;
+          signinBtn.textContent = 'Sign in with Google';
+        }
+        resolve({ ok: true, profile });
+      } catch (e) {
+        if (signinBtn) {
+          signinBtn.disabled = false;
+          signinBtn.textContent = 'Sign in with Google';
+        }
+        resolve({ ok: false, error: e.message || 'network' });
+      }
+    });
+  });
 }
 
 async function refreshGoogleProfileIfPossible() {
@@ -150,6 +230,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  const signinBtn = document.getElementById('signin-btn');
+  if (signinBtn) {
+    signinBtn.addEventListener('click', async () => {
+      const result = await signInWithGoogleInteractive();
+      if (result.ok) {
+        renderAccountInfo(result.profile);
+        status.innerText = '✅ Signed in successfully';
+        status.style.color = '#10b981';
+        if (result.profile.userEmail) {
+          loadSubscriptionInfo(null, result.profile.userEmail, null);
+        }
+      } else if (result.error && !String(result.error).toLowerCase().includes('cancel')) {
+        status.innerText = '❌ Sign-in failed. Please try again.';
+        status.style.color = '#dc2626';
+      }
+    });
+  }
+
   signoutBtn.addEventListener('click', async () => {
     if (!confirm('Are you sure you want to sign out? You will need to sign in again to use the extension.')) return;
     signoutBtn.disabled = true;
@@ -159,7 +257,8 @@ document.addEventListener('DOMContentLoaded', () => {
     status.innerText = '✅ Signed out successfully';
     status.style.color = '#10b981';
     subscriptionSection.style.display = 'none';
-    setTimeout(() => location.reload(), 1000);
+    signoutBtn.disabled = false;
+    signoutBtn.textContent = 'Sign Out';
   });
 
   saveBtn.addEventListener('click', () => {

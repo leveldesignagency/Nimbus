@@ -2108,11 +2108,68 @@
     });
   }
   
+  function escapeProfileHtml(str) {
+    return String(str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function renderPopupProfile(profile) {
+    const el = document.getElementById('popup-profile-info');
+    const signinBtn = document.getElementById('popup-signin-google-btn');
+    const signoutBtn = document.getElementById('popup-profile-signout-btn');
+    const hint = document.getElementById('popup-profile-hint');
+    if (!el) return;
+
+    if (!profile || !profile.userEmail) {
+      el.innerHTML = `<strong>Not signed in</strong><div style="margin-top:8px;font-size:12px;color:var(--text-muted);">Sign in with Google to link your account for billing and profile.</div>`;
+      if (signinBtn) signinBtn.style.display = 'block';
+      if (signoutBtn) signoutBtn.style.display = 'none';
+      if (hint) hint.textContent = 'Required for subscription checkout and verifying an existing plan.';
+      return;
+    }
+
+    const name = profile.userName || [profile.userGivenName, profile.userFamilyName].filter(Boolean).join(' ') || 'Google account';
+    const email = profile.userEmail;
+    const picture = profile.userPicture;
+    const initial = (name || email || '?').charAt(0).toUpperCase();
+    const avatar = picture
+      ? `<img src="${escapeProfileHtml(picture)}" alt="" referrerpolicy="no-referrer" style="width:48px;height:48px;border-radius:50%;object-fit:cover;border:2px solid rgba(31,127,255,0.35);" onerror="this.style.display='none'">`
+      : `<div style="width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg,#05007f,#1f7fff);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;">${escapeProfileHtml(initial)}</div>`;
+
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;">
+        ${avatar}
+        <div style="min-width:0;">
+          <div style="font-weight:700;font-size:15px;">${escapeProfileHtml(name)}</div>
+          <div style="font-size:12px;color:var(--text-muted);word-break:break-all;">${escapeProfileHtml(email)}</div>
+        </div>
+      </div>
+    `;
+    if (signinBtn) signinBtn.style.display = 'none';
+    if (signoutBtn) signoutBtn.style.display = 'block';
+    if (hint) hint.textContent = 'This Google account is used for your Nimbus subscription.';
+  }
+
+  async function loadPopupProfile() {
+    const stored = await new Promise((resolve) => {
+      chrome.storage.local.get(['signedOut', 'userEmail', 'userName', 'userGivenName', 'userFamilyName', 'userPicture'], resolve);
+    });
+    if (stored.signedOut === true || !stored.userEmail) {
+      renderPopupProfile(null);
+      return;
+    }
+    renderPopupProfile(stored);
+  }
+
   if (settingsBtn) {
     settingsBtn.addEventListener('click', () => {
       document.body.classList.add('settings-open');
       settingsPage.style.display = 'flex';
       loadSettings();
+      loadPopupProfile();
       // Set logo in settings footer
       const settingsLogo = document.getElementById('settingsLogo');
       if (settingsLogo) {
@@ -4733,6 +4790,58 @@
   
   // Set up immediately if button exists
   setupManageSubscriptionButton();
+
+  // Profile tab: Sign in with Google (works in load-unpacked too — paywall is skipped in dev)
+  const popupSigninGoogleBtn = document.getElementById('popup-signin-google-btn');
+  if (popupSigninGoogleBtn) {
+    popupSigninGoogleBtn.addEventListener('click', () => {
+      popupSigninGoogleBtn.disabled = true;
+      popupSigninGoogleBtn.textContent = 'Opening Google...';
+      chrome.identity.getAuthToken({
+        interactive: true,
+        scopes: [
+          'https://www.googleapis.com/auth/userinfo.email',
+          'https://www.googleapis.com/auth/userinfo.profile'
+        ]
+      }, async (token) => {
+        popupSigninGoogleBtn.disabled = false;
+        popupSigninGoogleBtn.textContent = 'Sign in with Google';
+        if (chrome.runtime.lastError || !token) {
+          const msg = (chrome.runtime.lastError && chrome.runtime.lastError.message || '').toLowerCase();
+          if (!msg.includes('cancel')) {
+            showNotification('Sign-in failed. Please try again.', 'error');
+          }
+          return;
+        }
+        try {
+          const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (!res.ok) {
+            showNotification('Could not load Google profile. Try again.', 'error');
+            return;
+          }
+          const userInfo = await res.json();
+          if (!userInfo || !userInfo.email) {
+            showNotification('No email on that Google account.', 'error');
+            return;
+          }
+          await saveGoogleProfile(userInfo);
+          await loadPopupProfile();
+          showNotification('Signed in successfully!', 'success');
+        } catch (e) {
+          showNotification('Sign-in failed. Check your connection.', 'error');
+        }
+      });
+    });
+  }
+
+  const popupProfileSignoutBtn = document.getElementById('popup-profile-signout-btn');
+  if (popupProfileSignoutBtn) {
+    popupProfileSignoutBtn.addEventListener('click', async () => {
+      await performPopupSignOut('Sign out? You will need to sign in again to use premium features.');
+    });
+  }
 
   // Sign out in Subscription tab (Settings)
   const popupSubscriptionSignoutBtn = document.getElementById('popup-subscription-signout-btn');
