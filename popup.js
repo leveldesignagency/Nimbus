@@ -233,14 +233,18 @@
 
       if (!subscriptionId) {
         subscriptionActive = false;
-        chrome.storage.local.set({ subscriptionActive: false });
+        if (cachedActive !== false) {
+          chrome.storage.local.set({ subscriptionActive: false });
+        }
         return false;
       }
 
       // Check if expired locally
       if (expiry && new Date(expiry) < new Date()) {
         subscriptionActive = false;
-        chrome.storage.local.set({ subscriptionActive: false });
+        if (cachedActive !== false) {
+          chrome.storage.local.set({ subscriptionActive: false });
+        }
         // Only remove if truly expired - but keep subscriptionId/userEmail for manage subscription
         return false;
       }
@@ -255,7 +259,9 @@
 
         if (!response.ok) {
           subscriptionActive = false;
-          chrome.storage.local.set({ subscriptionActive: false });
+          if (cachedActive !== false) {
+            chrome.storage.local.set({ subscriptionActive: false });
+          }
           return false;
         }
 
@@ -263,18 +269,25 @@
         
         if (data.valid) {
           subscriptionActive = true;
-          // Update storage with latest info
-          await chrome.storage.local.remove(['signedOut']);
-          await chrome.storage.local.set({
-            subscriptionExpiry: data.expiryDate,
-            subscriptionId: subscriptionId,
-            subscriptionActive: true,
-            userEmail: userEmail || data.email || undefined,
-          });
+          // Only write storage when something actually changed (avoids reload loops)
+          const expiryChanged = data.expiryDate && data.expiryDate !== expiry;
+          const emailToStore = userEmail || data.email;
+          if (cachedActive !== true || expiryChanged || (emailToStore && emailToStore !== userEmail)) {
+            await chrome.storage.local.remove(['signedOut']);
+            const toSet = {
+              subscriptionExpiry: data.expiryDate || expiry,
+              subscriptionId: subscriptionId,
+              subscriptionActive: true,
+            };
+            if (emailToStore) toSet.userEmail = emailToStore;
+            await chrome.storage.local.set(toSet);
+          }
           return true;
         } else {
           subscriptionActive = false;
-          chrome.storage.local.set({ subscriptionActive: false });
+          if (cachedActive !== false) {
+            chrome.storage.local.set({ subscriptionActive: false });
+          }
           return false;
         }
       } catch (apiError) {
@@ -285,13 +298,14 @@
         }
         // Don't remove data on network/API errors - only set status to false
         subscriptionActive = false;
-        chrome.storage.local.set({ subscriptionActive: false });
+        if (cachedActive !== false) {
+          chrome.storage.local.set({ subscriptionActive: false });
+        }
         // DO NOT REMOVE subscriptionId or userEmail - keep them for manage subscription
         return false;
       }
     } catch (e) {
       subscriptionActive = false;
-      chrome.storage.local.set({ subscriptionActive: false });
       return false;
     }
   }
@@ -1516,25 +1530,44 @@
   setTimeout(checkPendingSearch, 1000);
   
   // Also listen for storage changes (in case popup is already open)
+  let subscriptionReloadScheduled = false;
+  function scheduleSubscriptionReload() {
+    // Debounce: never reload more than once per few seconds (breaks sign-in / verify loops)
+    if (subscriptionReloadScheduled) return;
+    subscriptionReloadScheduled = true;
+    chrome.storage.local.get(['_lastSubReloadAt'], (r) => {
+      const last = r._lastSubReloadAt || 0;
+      if (Date.now() - last < 4000) {
+        subscriptionReloadScheduled = false;
+        return;
+      }
+      chrome.storage.local.set({ _lastSubReloadAt: Date.now() }, () => {
+        setTimeout(() => location.reload(), 300);
+      });
+    });
+  }
+
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === 'local' && changes.pendingSearch) {
       setTimeout(() => {
         handlePendingSearch();
       }, 100); // Small delay to ensure storage is updated
     }
-    // Listen for subscription activation
-    if (areaName === 'local' && (changes.subscriptionId || changes.subscriptionActive)) {
-      // Reload popup when subscription is activated
-      setTimeout(() => {
-        location.reload();
-      }, 500);
+    // Only reload when subscription becomes ACTIVE (not on every false write / re-verify)
+    if (areaName === 'local' && changes.subscriptionActive) {
+      const becameActive =
+        changes.subscriptionActive.newValue === true &&
+        changes.subscriptionActive.oldValue !== true;
+      if (becameActive) {
+        scheduleSubscriptionReload();
+      }
     }
   });
   
   // Listen for subscription activation and applyPendingSearch (person/org/place from content script)
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg && msg.action === 'subscriptionActivated') {
-      setTimeout(() => location.reload(), 500);
+      scheduleSubscriptionReload();
     } else if (msg && msg.action === 'applyPendingSearch') {
       const run = () => {
         handlePendingSearch();
@@ -1711,9 +1744,9 @@
                 subscriptionActive: true,
                 userEmail: email,
               });
-              await new Promise(resolve => setTimeout(resolve, 100));
-              location.reload();
-              return;
+              // Continue into hub load below — do NOT reload (reload + storage listener caused infinite loops)
+              isActive = true;
+              subscriptionActive = true;
             }
           }
         } catch (e) {
@@ -1721,9 +1754,11 @@
         }
       }
       
-      // FORCE show payment screen - no valid subscription found
-      showUpgradePromptInPopup();
-      return; // Stop here - don't load anything else
+      if (!isActive) {
+        // FORCE show payment screen - no valid subscription found
+        showUpgradePromptInPopup();
+        return; // Stop here - don't load anything else
+      }
     }
     
     // Subscription active - load content normally
