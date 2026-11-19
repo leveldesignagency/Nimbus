@@ -470,12 +470,18 @@
         const data = await response.json();
         if (data.valid) {
           subscriptionActive = true;
-          // Update storage with latest info
-          chrome.storage.local.set({
-            subscriptionActive: true,
-            subscriptionExpiry: data.expiryDate,
-            subscriptionId: data.subscriptionId,
-          });
+          // Only write when values change — avoids noisy storage events / popup churn
+          const same =
+            storageResult.subscriptionActive === true &&
+            storageResult.subscriptionId === data.subscriptionId &&
+            storageResult.subscriptionExpiry === data.expiryDate;
+          if (!same) {
+            chrome.storage.local.set({
+              subscriptionActive: true,
+              subscriptionExpiry: data.expiryDate,
+              subscriptionId: data.subscriptionId,
+            });
+          }
           console.log('Nimbus: Subscription verified and active');
           return true;
         } else {

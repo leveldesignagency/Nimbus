@@ -232,12 +232,18 @@
           if (response.ok) {
             const data = await response.json();
             if (data.valid) {
-              // Save subscription ID for future checks
-              await chrome.storage.local.set({
-                subscriptionId: data.subscriptionId,
-                subscriptionExpiry: data.expiryDate,
-                subscriptionActive: true,
-              });
+              // Save subscription ID for future checks (only if changed)
+              const needsWrite =
+                cachedActive !== true ||
+                result.subscriptionId !== data.subscriptionId ||
+                result.subscriptionExpiry !== data.expiryDate;
+              if (needsWrite) {
+                await chrome.storage.local.set({
+                  subscriptionId: data.subscriptionId,
+                  subscriptionExpiry: data.expiryDate,
+                  subscriptionActive: true,
+                });
+              }
               subscriptionActive = true;
               return true;
             }
@@ -1572,15 +1578,9 @@
         handlePendingSearch();
       }, 100); // Small delay to ensure storage is updated
     }
-    // Only reload when subscription becomes ACTIVE (not on every false write / re-verify)
-    if (areaName === 'local' && changes.subscriptionActive) {
-      const becameActive =
-        changes.subscriptionActive.newValue === true &&
-        changes.subscriptionActive.oldValue !== true;
-      if (becameActive) {
-        scheduleSubscriptionReload();
-      }
-    }
+    // Intentionally NO location.reload() on subscriptionActive changes.
+    // Content script + checkSubscription write that key often; reloading here caused infinite refresh.
+    // Explicit reloads stay on: sign-in success, payment verify, and subscriptionActivated message.
   });
   
   // Listen for subscription activation and applyPendingSearch (person/org/place from content script)
@@ -1604,7 +1604,12 @@
   });
   
   // Also poll for subscription activation after a checkout (in case message/storage change missed)
-  chrome.storage.local.get(['tempSessionData'], async (result) => {
+  chrome.storage.local.get(['tempSessionData', 'subscriptionActive'], async (result) => {
+    // Stale checkout flag while already active: clear quietly, do not reload
+    if (result.tempSessionData && result.subscriptionActive === true) {
+      chrome.storage.local.remove(['tempSessionData']);
+      return;
+    }
     if (result.tempSessionData && result.tempSessionData.checkoutInitiated) {
       const timeSinceCheckout = Date.now() - result.tempSessionData.timestamp;
       // If checkout was initiated less than 5 minutes ago, poll for activation
@@ -1616,7 +1621,7 @@
           if (subData.subscriptionActive) {
             clearInterval(pollInterval);
             chrome.storage.local.remove(['tempSessionData']);
-            location.reload();
+            scheduleSubscriptionReload();
           }
         }, 2000); // Poll every 2 seconds
         
@@ -1624,6 +1629,8 @@
         setTimeout(() => {
           clearInterval(pollInterval);
         }, 5 * 60 * 1000);
+      } else {
+        chrome.storage.local.remove(['tempSessionData']);
       }
     }
   });
