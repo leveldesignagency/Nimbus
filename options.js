@@ -2,6 +2,116 @@
 
 const API_BASE_URL = 'https://nimbus-api-ten.vercel.app';
 
+const PROFILE_KEYS = [
+  'userEmail', 'userName', 'userGivenName', 'userFamilyName', 'userPicture', 'userGoogleId',
+  'subscriptionId', 'subscriptionExpiry', 'subscriptionActive',
+  'tempSessionData', 'pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt'
+];
+
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderAccountInfo(profile) {
+  const accountInfo = document.getElementById('account-info');
+  if (!accountInfo) return;
+
+  if (!profile || !profile.userEmail) {
+    accountInfo.innerHTML = `
+      <p class="profile-label">Google account</p>
+      <strong>Not signed in</strong>
+      <p class="hint" style="margin-top: 8px;">Open the Nimbus popup and use <em>Sign in with Google</em> to link your account.</p>
+    `;
+    return;
+  }
+
+  const name = profile.userName || [profile.userGivenName, profile.userFamilyName].filter(Boolean).join(' ') || 'Google account';
+  const email = profile.userEmail;
+  const picture = profile.userPicture;
+  const initial = (name || email || '?').charAt(0).toUpperCase();
+
+  const avatarHtml = picture
+    ? `<img class="profile-avatar" src="${escapeHtml(picture)}" alt="" referrerpolicy="no-referrer" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"><div class="profile-avatar-fallback" style="display:none;">${escapeHtml(initial)}</div>`
+    : `<div class="profile-avatar-fallback">${escapeHtml(initial)}</div>`;
+
+  accountInfo.innerHTML = `
+    <p class="profile-label">Signed in with Google</p>
+    <div class="profile-card">
+      ${avatarHtml}
+      <div class="profile-meta">
+        <p class="profile-name">${escapeHtml(name)}</p>
+        <p class="profile-email">${escapeHtml(email)}</p>
+      </div>
+    </div>
+  `;
+}
+
+async function refreshGoogleProfileIfPossible() {
+  return new Promise((resolve) => {
+    chrome.identity.getAuthToken({
+      interactive: false,
+      scopes: [
+        'https://www.googleapis.com/auth/userinfo.email',
+        'https://www.googleapis.com/auth/userinfo.profile'
+      ]
+    }, async (token) => {
+      if (chrome.runtime.lastError || !token) {
+        resolve(null);
+        return;
+      }
+      try {
+        const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!res.ok) {
+          resolve(null);
+          return;
+        }
+        const userInfo = await res.json();
+        if (!userInfo || !userInfo.email) {
+          resolve(null);
+          return;
+        }
+        const profile = {
+          userEmail: userInfo.email,
+          userName: userInfo.name || '',
+          userGivenName: userInfo.given_name || '',
+          userFamilyName: userInfo.family_name || '',
+          userPicture: userInfo.picture || '',
+          userGoogleId: userInfo.id || '',
+        };
+        await chrome.storage.local.remove(['signedOut']);
+        await chrome.storage.local.set(profile);
+        resolve(profile);
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  });
+}
+
+async function clearAccountAndSignOut() {
+  await chrome.storage.local.set({ signedOut: true });
+  await chrome.storage.local.remove(PROFILE_KEYS);
+  try {
+    await new Promise((resolve) => {
+      chrome.identity.getAuthToken({ interactive: false }, (token) => {
+        if (chrome.runtime.lastError || !token) {
+          resolve();
+          return;
+        }
+        chrome.identity.removeCachedAuthToken({ token }, () => resolve());
+      });
+    });
+  } catch (error) {
+    console.log('No OAuth token to revoke');
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const apiKeyInput = document.getElementById('apiKey');
   const styleSelect = document.getElementById('style');
@@ -13,65 +123,43 @@ document.addEventListener('DOMContentLoaded', () => {
   const resubscribeBtn = document.getElementById('resubscribe-btn');
   const refundBtn = document.getElementById('refund-btn');
   const subscriptionStatus = document.getElementById('subscription-status');
-  const accountSection = document.getElementById('account-section');
   const accountInfo = document.getElementById('account-info');
   const signoutBtn = document.getElementById('signout-btn');
-
   const useFreeAPICheckbox = document.getElementById('useFreeAPI');
-  
-  chrome.storage.local.get(['openaiKey','style','useFreeAPI', 'subscriptionId', 'subscriptionExpiry', 'userEmail'], (res) => {
+
+  chrome.storage.local.get([
+    'openaiKey', 'style', 'useFreeAPI',
+    'subscriptionId', 'subscriptionExpiry', 'userEmail',
+    'userName', 'userGivenName', 'userFamilyName', 'userPicture', 'userGoogleId', 'signedOut'
+  ], async (res) => {
     apiKeyInput.value = res.openaiKey || '';
     styleSelect.value = res.style || 'plain';
-    useFreeAPICheckbox.checked = res.useFreeAPI !== false; // Default to true
-    
-    // Load subscription info if available
+    useFreeAPICheckbox.checked = res.useFreeAPI !== false;
+
     if (res.subscriptionId || res.userEmail) {
       loadSubscriptionInfo(res.subscriptionId, res.userEmail, res.subscriptionExpiry);
     }
-    
-    // Load account info
-    if (res.userEmail) {
-      accountInfo.innerHTML = `<strong>Signed in as:</strong> ${res.userEmail}`;
+
+    if (res.signedOut === true || !res.userEmail) {
+      renderAccountInfo(null);
     } else {
-      accountInfo.innerHTML = '<strong>Not signed in</strong>';
+      renderAccountInfo(res);
+      // Refresh name/photo from Google when possible (covers older sign-ins that only stored email)
+      const refreshed = await refreshGoogleProfileIfPossible();
+      if (refreshed) renderAccountInfo(refreshed);
     }
   });
-  
-  // Handle sign out
+
   signoutBtn.addEventListener('click', async () => {
-    if (confirm('Are you sure you want to sign out? You will need to sign in again to use the extension.')) {
-      signoutBtn.disabled = true;
-      signoutBtn.textContent = 'Signing out...';
-      await chrome.storage.local.set({ signedOut: true });
-      await chrome.storage.local.remove([
-        'userEmail', 
-        'subscriptionId', 
-        'subscriptionExpiry', 
-        'subscriptionActive',
-        'tempSessionData',
-        'pendingCheckoutSessionId',
-        'pendingCheckoutEmail',
-        'checkoutInitiatedAt'
-      ]);
-      try {
-        await new Promise((resolve) => {
-          chrome.identity.getAuthToken({ interactive: false }, (token) => {
-            if (chrome.runtime.lastError || !token) {
-              resolve();
-              return;
-            }
-            chrome.identity.removeCachedAuthToken({ token }, () => resolve());
-          });
-        });
-      } catch (error) {
-        console.log('No OAuth token to revoke');
-      }
-      accountInfo.innerHTML = '<strong>Not signed in</strong>';
-      status.innerText = '✅ Signed out successfully';
-      status.style.color = '#10b981';
-      subscriptionSection.style.display = 'none';
-      setTimeout(() => location.reload(), 1000);
-    }
+    if (!confirm('Are you sure you want to sign out? You will need to sign in again to use the extension.')) return;
+    signoutBtn.disabled = true;
+    signoutBtn.textContent = 'Signing out...';
+    await clearAccountAndSignOut();
+    renderAccountInfo(null);
+    status.innerText = '✅ Signed out successfully';
+    status.style.color = '#10b981';
+    subscriptionSection.style.display = 'none';
+    setTimeout(() => location.reload(), 1000);
   });
 
   saveBtn.addEventListener('click', () => {
@@ -87,7 +175,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Load subscription information
   async function loadSubscriptionInfo(subscriptionId, email, expiryDate) {
     if (!subscriptionId && !email) {
       subscriptionSection.style.display = 'none';
@@ -97,7 +184,6 @@ document.addEventListener('DOMContentLoaded', () => {
     subscriptionSection.style.display = 'block';
 
     try {
-      // Verify subscription status
       const response = await fetch(`${API_BASE_URL}/api/verify-license`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -110,10 +196,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const expiry = new Date(data.expiryDate);
         const now = new Date();
         const daysRemaining = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
-        
-        // Check if subscription is cancelled (will end at period end)
         const isCancelled = data.status === 'active' && data.cancelAtPeriodEnd === true;
-        
+
         subscriptionInfo.innerHTML = `
           <strong>Status:</strong> ${isCancelled ? 'Active (Cancelling at period end)' : 'Active'}<br>
           <strong>Expires:</strong> ${expiry.toLocaleDateString()} (${daysRemaining} days remaining)<br>
@@ -121,7 +205,6 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
         subscriptionInfo.style.color = isCancelled ? '#f59e0b' : '#10b981';
 
-        // Show appropriate buttons
         if (isCancelled) {
           cancelBtn.style.display = 'none';
           resubscribeBtn.style.display = 'inline-block';
@@ -129,7 +212,6 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
           cancelBtn.style.display = 'inline-block';
           resubscribeBtn.style.display = 'none';
-          // Show refund button if within 7 days
           checkRefundEligibility(data.subscriptionId, email);
         }
       } else {
@@ -149,20 +231,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Check if user is eligible for refund (within 7 days)
   async function checkRefundEligibility(subscriptionId, email) {
     try {
-      // Show refund button - API will validate the 7-day window
       refundBtn.style.display = 'inline-block';
     } catch (error) {
       console.error('Error checking refund eligibility:', error);
     }
   }
 
-  // Handle cancel subscription
   cancelBtn.addEventListener('click', async () => {
     const reason = prompt('Please provide a reason for cancelling (optional):');
-    
+
     if (!confirm('Your subscription will be cancelled at the end of the current billing period. You will retain access until then. Continue?')) {
       return;
     }
@@ -189,8 +268,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (response.ok && data.success) {
           subscriptionStatus.innerHTML = `✅ Subscription will be cancelled at period end. You'll retain access until ${new Date(data.currentPeriodEnd * 1000).toLocaleDateString()}.`;
           subscriptionStatus.style.color = '#10b981';
-          
-          // Reload subscription info
+
           setTimeout(() => {
             loadSubscriptionInfo(res.subscriptionId, res.userEmail, null);
           }, 2000);
@@ -210,7 +288,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Handle resubscribe
   resubscribeBtn.addEventListener('click', async () => {
     if (!confirm('This will reactivate your subscription. Continue?')) {
       return;
@@ -223,14 +300,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       chrome.storage.local.get(['subscriptionId', 'userEmail'], async (res) => {
-        // Reactivate by removing cancel_at_period_end
         const response = await fetch(`${API_BASE_URL}/api/cancel-subscription`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             subscriptionId: res.subscriptionId,
             email: res.userEmail,
-            action: 'reactivate', // Special action to reactivate
+            action: 'reactivate',
           }),
         });
 
@@ -239,8 +315,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (response.ok && data.success) {
           subscriptionStatus.innerHTML = '✅ Subscription reactivated successfully!';
           subscriptionStatus.style.color = '#10b981';
-          
-          // Reload subscription info
+
           setTimeout(() => {
             loadSubscriptionInfo(res.subscriptionId, res.userEmail, null);
           }, 2000);
@@ -260,7 +335,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Handle refund request
   refundBtn.addEventListener('click', async () => {
     if (!confirm('Are you sure you want to request a refund? Your subscription will be cancelled and you will lose access immediately. This action cannot be undone.')) {
       return;
@@ -285,19 +359,16 @@ document.addEventListener('DOMContentLoaded', () => {
         const data = await response.json();
 
         if (response.ok && data.success) {
-          // Clear subscription from storage
           chrome.storage.local.remove(['subscriptionId', 'subscriptionExpiry', 'subscriptionActive'], () => {
             subscriptionStatus.innerHTML = `✅ Refund processed successfully! £${data.amount || 2.49} will be refunded to your original payment method.`;
             subscriptionStatus.style.color = '#10b981';
-            
-            // Update UI
+
             subscriptionInfo.innerHTML = '<strong>Status:</strong> Refunded & Cancelled';
             subscriptionInfo.style.color = '#dc2626';
             cancelBtn.style.display = 'none';
             resubscribeBtn.style.display = 'none';
             refundBtn.style.display = 'none';
-            
-            // Reload page after 3 seconds
+
             setTimeout(() => {
               location.reload();
             }, 3000);
@@ -318,42 +389,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Simple sign out button at bottom
   const simpleSignoutBtn = document.getElementById('simple-signout-btn');
   if (simpleSignoutBtn) {
     simpleSignoutBtn.addEventListener('click', async () => {
-      if (confirm('Sign out? You will need to sign in again to use the extension.')) {
-        simpleSignoutBtn.disabled = true;
-        simpleSignoutBtn.textContent = 'Signing out...';
-        await chrome.storage.local.set({ signedOut: true });
-        await chrome.storage.local.remove([
-          'userEmail', 
-          'subscriptionId', 
-          'subscriptionExpiry', 
-          'subscriptionActive',
-          'tempSessionData',
-          'pendingCheckoutSessionId',
-          'pendingCheckoutEmail',
-          'checkoutInitiatedAt'
-        ]);
-        try {
-          await new Promise((resolve) => {
-            chrome.identity.getAuthToken({ interactive: false }, (token) => {
-              if (chrome.runtime.lastError || !token) {
-                resolve();
-                return;
-              }
-              chrome.identity.removeCachedAuthToken({ token }, () => resolve());
-            });
-          });
-        } catch (error) {
-          console.log('No OAuth token to revoke');
-        }
-        status.innerText = '✅ Signed out successfully';
-        status.style.color = '#10b981';
-        setTimeout(() => location.reload(), 1000);
-      }
+      if (!confirm('Sign out? You will need to sign in again to use the extension.')) return;
+      simpleSignoutBtn.disabled = true;
+      simpleSignoutBtn.textContent = 'Signing out...';
+      await clearAccountAndSignOut();
+      status.innerText = '✅ Signed out successfully';
+      status.style.color = '#10b981';
+      setTimeout(() => location.reload(), 1000);
     });
   }
 });
-

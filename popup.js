@@ -22,11 +22,26 @@
   let subscriptionActive = false;
   let userEmail = null;
 
+  async function saveGoogleProfile(userInfo) {
+    if (!userInfo || !userInfo.email) return;
+    const profile = {
+      userEmail: userInfo.email,
+      userName: userInfo.name || '',
+      userGivenName: userInfo.given_name || '',
+      userFamilyName: userInfo.family_name || '',
+      userPicture: userInfo.picture || '',
+      userGoogleId: userInfo.id || '',
+    };
+    await chrome.storage.local.remove(['signedOut']);
+    await chrome.storage.local.set(profile);
+  }
+
   async function performPopupSignOut(confirmMessage) {
     if (confirmMessage && !confirm(confirmMessage)) return;
     await chrome.storage.local.set({ signedOut: true });
     await chrome.storage.local.remove([
-      'userEmail', 'subscriptionId', 'subscriptionExpiry', 'subscriptionActive',
+      'userEmail', 'userName', 'userGivenName', 'userFamilyName', 'userPicture', 'userGoogleId',
+      'subscriptionId', 'subscriptionExpiry', 'subscriptionActive',
       'tempSessionData', 'pendingCheckoutSessionId', 'pendingCheckoutEmail', 'checkoutInitiatedAt'
     ]);
     try {
@@ -329,8 +344,15 @@
       headerContent.style.display = 'none';
     }
     
-    // Get user email
+    // Get user email + profile
     const email = await getUserEmail();
+    const profileStore = await new Promise((resolve) => {
+      chrome.storage.local.get(['userName', 'userGivenName', 'userPicture'], resolve);
+    });
+    const displayName = profileStore.userName || profileStore.userGivenName || '';
+    const signedInLabel = displayName && email
+      ? `${displayName} · ${email}`
+      : (email || '');
     
     // Clear all loading states first - hide everything
     mainContent.innerHTML = '';
@@ -363,7 +385,7 @@
           <div style="font-size: 16px; color: #cbd5e1;">per year • Then £2.49/year</div>
         </div>
         
-        ${email ? `<p style="margin: 0 0 25px 0; color: #cbd5e1; font-size: 14px;">Signed in as: <strong style="color: #ffffff;">${email}</strong></p>` : ''}
+        ${signedInLabel ? `<p style="margin: 0 0 25px 0; color: #cbd5e1; font-size: 14px;">Signed in as: <strong style="color: #ffffff;" id="signed-in-as-label">${signedInLabel}</strong></p>` : ''}
         
         ${!email ? `
         <p style="margin: 0 0 12px 0; color: #e2e8f0; font-size: 14px; font-weight: 600;">Already have an account?</p>
@@ -416,7 +438,7 @@
         btn.addEventListener('click', () => {
           btn.disabled = true;
           btn.textContent = 'Opening...';
-          chrome.identity.getAuthToken({ interactive: true, scopes: ['https://www.googleapis.com/auth/userinfo.email'] }, async (token) => {
+          chrome.identity.getAuthToken({ interactive: true, scopes: ['https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile'] }, async (token) => {
             btn.disabled = false;
             btn.innerHTML = `Sign in with Google to verify`;
             if (chrome.runtime.lastError || !token) {
@@ -428,8 +450,7 @@
               if (res.ok) {
                 const userInfo = await res.json();
                 if (userInfo && userInfo.email) {
-                  await chrome.storage.local.remove(['signedOut']);
-                  await chrome.storage.local.set({ userEmail: userInfo.email });
+                  await saveGoogleProfile(userInfo);
                   showNotification('Account switched. Click "Verify Subscription" again.', 'success');
                   setTimeout(() => location.reload(), 500);
                 }
@@ -610,7 +631,7 @@
           
             chrome.identity.getAuthToken({ 
               interactive: true,
-              scopes: ['https://www.googleapis.com/auth/userinfo.email']
+              scopes: ['https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile']
             }, async (token) => {
               if (chrome.runtime.lastError) {
                 const error = chrome.runtime.lastError.message;
@@ -638,7 +659,7 @@
             
             signinBtn.innerHTML = 'Verifying...';
               
-              // Get email from Google
+              // Get email + profile from Google
               try {
                 const response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
                   headers: { 'Authorization': `Bearer ${token}` }
@@ -647,8 +668,7 @@
                 if (response.ok) {
                   const userInfo = await response.json();
                   if (userInfo.email) {
-                    await chrome.storage.local.remove(['signedOut']);
-                    await chrome.storage.local.set({ userEmail: userInfo.email });
+                    await saveGoogleProfile(userInfo);
                     showNotification('Signed in successfully!', 'success');
                   setTimeout(() => {
                     location.reload();
@@ -816,7 +836,7 @@
           signinDifferentBtn.textContent = 'Opening...';
           chrome.identity.getAuthToken({
             interactive: true,
-            scopes: ['https://www.googleapis.com/auth/userinfo.email'],
+            scopes: ['https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile'],
           }, async (token) => {
             signinDifferentBtn.disabled = false;
             signinDifferentBtn.textContent = 'Sign in with that account';
@@ -836,8 +856,7 @@
               if (res.ok) {
                 const userInfo = await res.json();
                 if (userInfo && userInfo.email) {
-                  await chrome.storage.local.remove(['signedOut']);
-                  await chrome.storage.local.set({ userEmail: userInfo.email });
+                  await saveGoogleProfile(userInfo);
                   showNotification('Switched account. Click "Verify Subscription" if this is the account you used to subscribe.', 'success');
                   setTimeout(() => location.reload(), 600);
                 } else {

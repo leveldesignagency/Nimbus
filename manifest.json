@@ -3,13 +3,14 @@
   "name": "Nimbus",
   "short_name": "Nimbus",
   "description": "Select any word, phrase, or name for instant definitions, translation, AI explanations, and in-browser tools for online learning.",
-  "version": "1.0.28",
+  "version": "1.0.29",
   "permissions": ["storage", "identity", "tabs"],
   "host_permissions": ["https://api.dictionaryapi.dev/*", "https://en.wiktionary.org/*", "https://libretranslate.de/*", "https://api.mymemory.translated.net/*", "https://en.wikipedia.org/*", "https://www.wikidata.org/*", "https://news.google.com/*", "https://nimbus-api-ten.vercel.app/*", "https://www.googleapis.com/*"],
   "oauth2": {
     "client_id": "910760921542-kn4l16sg0b25egp8aitr9rt23gmc4fdr.apps.googleusercontent.com",
     "scopes": [
-      "https://www.googleapis.com/auth/userinfo.email"
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/userinfo.profile"
     ]
   },
   "background": {
